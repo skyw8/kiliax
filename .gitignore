@@ -1,0 +1,12 @@
+node_modules
+dist
+target
+*.tsbuildinfo
+
+.DS_Store
+.env
+.env.*
+
+killiax.yaml
+
+tmp

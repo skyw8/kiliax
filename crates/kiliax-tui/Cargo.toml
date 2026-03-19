@@ -1,0 +1,8 @@
+[package]
+name = "kiliax-tui"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+kiliax-core = { path = "../kiliax-core" }
+
