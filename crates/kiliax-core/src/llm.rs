@@ -1,8 +1,11 @@
+use std::pin::Pin;
+
 use async_openai::{
     config::Config as OpenAIConfigTrait,
     error::OpenAIError,
     types::{
         ChatChoice, ChatCompletionMessageToolCall, ChatCompletionNamedToolChoice,
+        CreateChatCompletionStreamResponse,
         ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
         ChatCompletionRequestDeveloperMessage, ChatCompletionRequestDeveloperMessageContent,
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
@@ -17,6 +20,7 @@ use async_openai::{
 use reqwest::header::{HeaderMap, AUTHORIZATION};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use tokio_stream::{Stream, StreamExt};
 
 use crate::config::{Config, ConfigError, ResolvedModel};
 
@@ -97,6 +101,44 @@ impl LlmClient {
 
         let response: CreateChatCompletionResponse = self.client.chat().create(request).await?;
         chat_response_from_openai(response)
+    }
+
+    pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
+        let messages = req
+            .messages
+            .iter()
+            .map(to_openai_message)
+            .collect::<Result<Vec<_>, LlmError>>()?;
+
+        let mut builder = CreateChatCompletionRequestArgs::default();
+        builder.model(&self.route.model).messages(messages);
+
+        if !req.tools.is_empty() {
+            let tools: Vec<ChatCompletionTool> =
+                req.tools.into_iter().map(to_openai_tool).collect();
+            builder.tools(tools);
+            builder.tool_choice(to_openai_tool_choice(&req.tool_choice));
+        }
+
+        if let Some(parallel_tool_calls) = req.parallel_tool_calls {
+            builder.parallel_tool_calls(parallel_tool_calls);
+        }
+
+        if let Some(temperature) = req.temperature {
+            builder.temperature(temperature);
+        }
+
+        if let Some(max_completion_tokens) = req.max_completion_tokens {
+            builder.max_completion_tokens(max_completion_tokens);
+        }
+
+        let request = builder.build()?;
+
+        let stream = self.client.chat().create_stream(request).await?;
+        Ok(Box::pin(stream.map(|res| match res {
+            Ok(chunk) => Ok(chat_stream_chunk_from_openai(chunk)),
+            Err(err) => Err(err.into()),
+        })))
     }
 }
 
@@ -257,6 +299,41 @@ pub struct ChatResponse {
     pub usage: Option<CompletionUsage>,
 }
 
+pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatStreamChunk, LlmError>> + Send>>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCallDelta {
+    pub index: u32,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChatStreamChunk {
+    pub id: String,
+    pub created: u32,
+    pub model: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_delta: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCallDelta>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<FinishReason>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<CompletionUsage>,
+}
+
 fn to_openai_tool(tool: ToolDefinition) -> ChatCompletionTool {
     ChatCompletionTool {
         r#type: ChatCompletionToolType::Function,
@@ -375,6 +452,39 @@ fn chat_response_from_openai(resp: CreateChatCompletionResponse) -> Result<ChatR
         finish_reason,
         usage,
     })
+}
+
+fn chat_stream_chunk_from_openai(resp: CreateChatCompletionStreamResponse) -> ChatStreamChunk {
+    let mut content_delta = None;
+    let mut tool_calls = Vec::new();
+    let mut finish_reason = None;
+
+    if let Some(choice) = resp.choices.into_iter().next() {
+        content_delta = choice.delta.content;
+        finish_reason = choice.finish_reason;
+
+        if let Some(calls) = choice.delta.tool_calls {
+            tool_calls = calls
+                .into_iter()
+                .map(|c| ToolCallDelta {
+                    index: c.index,
+                    id: c.id,
+                    name: c.function.as_ref().and_then(|f| f.name.clone()),
+                    arguments: c.function.as_ref().and_then(|f| f.arguments.clone()),
+                })
+                .collect();
+        }
+    }
+
+    ChatStreamChunk {
+        id: resp.id,
+        created: resp.created,
+        model: resp.model,
+        content_delta,
+        tool_calls,
+        finish_reason,
+        usage: resp.usage,
+    }
 }
 
 #[cfg(test)]
