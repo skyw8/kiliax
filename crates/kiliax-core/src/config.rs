@@ -198,7 +198,7 @@ pub fn load_from_locations(cwd: &Path, home_dir: Option<&Path>) -> Result<Loaded
 }
 
 pub fn load_from_path(path: impl Into<PathBuf>) -> Result<LoadedConfig, ConfigError> {
-    let path = path.into();
+    let path: PathBuf = path.into();
     let text = fs::read_to_string(&path).map_err(|source| ConfigError::Read {
         path: path.clone(),
         source,
