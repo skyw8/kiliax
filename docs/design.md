@@ -101,7 +101,7 @@
 - skills 内容（可选，合并成一个 system message 的 markdown block）
 - 用户/助手/工具消息（对话历史）
 
-## 5. 工具系统（builtin / skills / MCP）
+## 6. 工具系统（builtin / skills / MCP）
 
 文档：`docs/tooling.md`
 
@@ -112,7 +112,7 @@
 - skills 发现：`discover_skills()`（`tools/skills.rs`）
 - MCP 外部工具：`McpHub`（`tools/mcp.rs`，stdio transport）
 
-### 5.1 安全与可控性（关键约束）
+### 6.1 安全与可控性（关键约束）
 
 - 文件类工具：
   - 路径必须在 `workspace_root` 内
@@ -123,18 +123,43 @@
 - MCP 工具命名空间：
   - 暴露给模型的名字是 `mcp__<server>__<tool>`（避免 `/`、`.` 等非法字符）
 
-## 6. 推荐的集成方式（执行闭环）
+## 7. AgentRuntime（执行闭环）
 
-当前 `kiliax-core` 已提供组成“闭环”的全部基础设施，并提供了可直接复用的执行器：
+代码：`crates/kiliax-core/src/runtime.rs`
+
+`AgentRuntime` 负责跑一个最小可用的 ReAct/tool-calling 闭环：
+
+- 调用 LLM（`chat()` / `chat_stream()`）
+- 收集 `tool_calls`
+- 用 `ToolEngine` 执行工具并回填 `Message::Tool`
+- 继续下一轮，直到不再产生 tool calls 或达到 `max_steps`
+
+流式版本 `run_stream()` 会以 `AgentEvent` 形式发出：assistant delta、tool call、tool result、done 等事件，便于 TUI 渲染。
+
+## 8. Session（持久化与恢复）
+
+代码：`crates/kiliax-core/src/session.rs`
+
+session 的目标是把一次 agent 运行的上下文（messages + 关键元信息）持久化到磁盘，以便崩溃后恢复/继续：
+
+- 默认 project 目录：`<workspace>/.killiax/sessions/<session_id>/`
+  - `session_id` 的目录名自带创建时间（UTC 时间戳前缀）
+- 存储结构（混合 JSONL + snapshot）：
+  - `events.jsonl`：append-only 事件日志（每行一个 JSON）
+  - `snapshot.json`：周期性 checkpoint（加速加载）
+  - `meta.json`：会话元信息（用于 list/展示）
+- checkpoint 策略：默认每 32 条事件写一次 `snapshot.json`（可通过 `FileSessionStore::with_checkpoint_every()` 调整）
+- 恢复方式：加载 `SessionState` 后，直接用 `state.messages` 作为下一次 `AgentRuntime` 的输入（可再追加新的 user message，并写入 events）
+
+示例：`crates/kiliax-core/examples/agent_loop.rs`（自动保存；支持 `--resume <session_id>`）。
 
 1) 读取配置，构造 `LlmClient`
 2) 选择 `AgentProfile`（plan/build）
 3) 创建 `ToolEngine`（可选接入 `McpHub`）
 4) 用 `PromptBuilder` 组装初始 messages
-5) 用 `AgentRuntime` 执行 ReAct/tool-calling 循环：
-   - `chat()` / `chat_stream()` 获取 assistant（包含 tool calls）
-   - `ToolEngine::execute_to_message()` 执行 tool calls，回填 `Message::Tool`
-   - 继续下一轮，直到不再产生 tool calls 或达到 `max_steps`
+5) （可选）创建 `FileSessionStore` + `SessionState`
+6) 运行过程中把 `AssistantMessage/ToolResult/Finish/Error` 追加写入 `events.jsonl`（并按策略 checkpoint）
+7) 用 `AgentRuntime` 执行 ReAct/tool-calling 循环
 
 后续可以在 `kiliax-tui` 中把上述闭环做成交互式 TUI，并加入：
 

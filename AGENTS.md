@@ -17,7 +17,7 @@ prompt caching
 
 ### crates/kiliax-core
 
-核心库：配置、LLM(OpenAI-compatible)、agents、tools、runtime。
+核心库：配置、LLM(OpenAI-compatible)、agents、prompt、tools、runtime、session。
 
 - `crates/kiliax-core/Cargo.toml`: core 依赖（`async-openai`、MCP client 等）
 - `crates/kiliax-core/prompts/`: agent 提示词（markdown，编译期 `include_str!`）
@@ -34,6 +34,7 @@ prompt caching
 - `crates/kiliax-core/src/agents.rs`: `AgentProfile`（plan/build）及其可用工具集合与权限模型
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（组装 system 前缀：agent prompt + tools 规范 + workspace root + skills + 对话消息）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 执行闭环：LLM→tool_calls→执行→回填→继续）
+- `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`
   - `builtin.rs`: 内置工具 `read/write/shell` 的 schema + 执行（路径约束、shell argv allowlist）
@@ -51,4 +52,5 @@ TUI crate（ratatui）入口占位，后续承载交互式 UI 与 runtime 事件
 ## ATTENTION
 
 - 修改完代码后，更新AGENTS.md中的arch部分，只用说明这些核心代码部分
+- 优先遵循最佳实践，不用考虑兼容性，遗留代码大胆重构
 - 不要修改TODO.md

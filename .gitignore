@@ -8,5 +8,6 @@ target
 .env.*
 
 killiax.yaml
+.killiax/sessions
 
 tmp
