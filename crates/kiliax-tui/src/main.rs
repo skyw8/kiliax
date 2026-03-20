@@ -1,5 +1,6 @@
 mod app;
 mod highlight;
+mod history;
 mod input;
 mod markdown;
 mod terminal;
@@ -79,6 +80,13 @@ async fn main() -> Result<()> {
     > = None;
 
     loop {
+        if app.flush_requested {
+            let width = terminal.full_width();
+            let lines = app.flush_transcript_to_history(width as usize);
+            terminal.queue_history_lines(lines);
+            app.flush_requested = false;
+        }
+
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         if app.should_quit {
             break;

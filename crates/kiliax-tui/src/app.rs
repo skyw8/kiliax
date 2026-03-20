@@ -33,6 +33,7 @@ pub struct App {
     pub should_quit: bool,
     pub running: bool,
     pub status: Option<String>,
+    pub flush_requested: bool,
 
     profile: AgentProfile,
     runtime: AgentRuntime,
@@ -63,6 +64,7 @@ impl App {
             should_quit: false,
             running: false,
             status: None,
+            flush_requested: false,
             profile,
             runtime,
             options,
@@ -206,6 +208,7 @@ impl App {
                     out.steps, out.finish_reason
                 ));
                 self.streaming_assistant = None;
+                self.flush_requested = true;
             }
         }
         Ok(())
@@ -225,6 +228,46 @@ impl App {
         self.running = false;
         self.status = Some("error".to_string());
         self.streaming_assistant = None;
+        self.flush_requested = true;
         Ok(())
+    }
+
+    pub fn flush_transcript_to_history(&mut self, width: usize) -> Vec<Line<'static>> {
+        use ratatui::style::Stylize;
+        use ratatui::style::{Color, Style};
+        use ratatui::text::Span;
+
+        let mut out: Vec<Line<'static>> = Vec::new();
+
+        for (idx, entry) in self.transcript.iter_mut().enumerate() {
+            if idx > 0 {
+                out.push(Line::from(""));
+            }
+
+            let (label, color) = match entry.role {
+                ChatRole::User => ("User", Color::Green),
+                ChatRole::Assistant => ("Assistant", Color::Cyan),
+                ChatRole::Tool => ("Tool", Color::Yellow),
+                ChatRole::Info => ("Info", Color::Magenta),
+            };
+
+            let header = Line::from(vec![Span::styled(
+                format!("{label}:"),
+                Style::default().fg(color).bold(),
+            )]);
+
+            let body = entry
+                .rendered
+                .get_or_insert_with(|| crate::markdown::render_markdown_lines(&entry.content));
+
+            out.extend(crate::wrap::wrap_lines(
+                std::slice::from_ref(&header),
+                width,
+            ));
+            out.extend(crate::wrap::wrap_lines(body, width));
+        }
+
+        self.transcript.clear();
+        out
     }
 }

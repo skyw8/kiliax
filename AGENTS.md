@@ -54,7 +54,8 @@ TUI 交互式对话界面（ratatui + crossterm）：消息流式输出 + 底部
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect → ratatui spans）
 - `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行
 - `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）
-- `crates/kiliax-tui/src/terminal.rs`: 终端模式管理（raw mode + alternate screen + bracketed paste）
+- `crates/kiliax-tui/src/terminal.rs`: inline 终端模式 + viewport backend（raw mode + bracketed paste；仅重绘底部 viewport）
+- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（scroll region），把对话写入终端 scrollback
 
 ## ATTENTION
 
