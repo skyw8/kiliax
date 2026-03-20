@@ -43,3 +43,4 @@ TUI
 - 不提供额外的滚动条，用户使用终端自带的滚动
 - 使用ratatui+Crossterm，参考/home/skywo/github/codex/codex-rs/tui，UI可以借鉴复制
 - 先实现对话界面，代码高亮，markdown语法高亮
+- 快捷键：↑/↓ 切换历史 prompt，Ctrl+C 清空当前输入，Ctrl+D/Esc 退出

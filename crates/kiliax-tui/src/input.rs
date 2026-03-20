@@ -21,6 +21,11 @@ impl InputLine {
         self.cursor
     }
 
+    pub fn set_text(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+        self.cursor = self.text.chars().count();
+    }
+
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;

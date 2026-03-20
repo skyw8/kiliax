@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -11,23 +11,20 @@ use crate::wrap::wrap_lines;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let [chat_area, input_area] = Layout::default()
+    let [chat_area, input_area, info_area] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
         .areas(area);
 
-    let chat_inner_width = chat_area.width.saturating_sub(2) as usize;
-    let chat_inner_height = chat_area.height.saturating_sub(2) as usize;
-
+    let chat_inner_width = chat_area.width as usize;
+    let chat_inner_height = chat_area.height as usize;
     let wrapped = render_chat_tail(app, chat_inner_width, chat_inner_height);
-
-    let chat_title = match app.status.as_deref() {
-        Some(status) if !status.is_empty() => format!("Chat ({status})"),
-        _ => "Chat".to_string(),
-    };
-
-    let chat = Paragraph::new(Text::from(wrapped))
-        .block(Block::default().borders(Borders::ALL).title(chat_title));
+    frame.render_widget(Clear, chat_area);
+    let chat = Paragraph::new(Text::from(wrapped));
     frame.render_widget(chat, chat_area);
 
     let prompt = Span::styled("> ", Style::default().fg(Color::Green).bold());
@@ -39,18 +36,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let (visible, cursor_x) = input_view(app.input.text(), app.input.cursor(), input_inner_width);
     let input = Line::from(vec![prompt, Span::raw(visible)]);
-    let input_title = if app.running {
-        "Input (running…)"
-    } else {
-        "Input (Enter to send)"
-    };
     let input = Paragraph::new(Text::from(input))
-        .block(Block::default().borders(Borders::ALL).title(input_title));
+        .block(Block::default().borders(Borders::ALL));
     frame.render_widget(input, input_area);
 
     let cursor_x = input_area.x + 1 + prompt_width + cursor_x as u16;
     let cursor_y = input_area.y + 1;
     frame.set_cursor_position((cursor_x, cursor_y));
+
+    let info = info_text(app);
+    frame.render_widget(Clear, info_area);
+    let info = Paragraph::new(info).wrap(Wrap { trim: true });
+    frame.render_widget(info, info_area);
 }
 
 fn render_chat_tail(app: &mut App, width: usize, height: usize) -> Vec<Line<'static>> {
@@ -103,6 +100,51 @@ fn render_chat_tail(app: &mut App, width: usize, height: usize) -> Vec<Line<'sta
 
     out_rev.reverse();
     out_rev
+}
+
+fn info_text(app: &App) -> Text<'_> {
+    use ratatui::style::Color;
+
+    let status = app
+        .status
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let status = if status.is_empty() {
+        Span::styled("idle".to_string(), Style::default().fg(Color::DarkGray))
+    } else if status.starts_with("error") {
+        Span::styled(status, Style::default().fg(Color::LightRed).bold())
+    } else if status.starts_with("done") {
+        Span::styled("done".to_string(), Style::default().fg(Color::LightGreen).bold())
+    } else if status.starts_with("step ") {
+        Span::styled(status, Style::default().fg(Color::LightYellow))
+    } else if status.starts_with("running") {
+        Span::styled("running".to_string(), Style::default().fg(Color::LightYellow))
+    } else {
+        Span::styled(status, Style::default().fg(Color::DarkGray))
+    };
+
+    let header = Line::from(vec![
+        Span::styled("Session ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            app.session_id(),
+            Style::default().fg(Color::Magenta).bold(),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(app.agent_name(), Style::default().fg(Color::Cyan)),
+        Span::styled("  ", Style::default()),
+        Span::styled(app.model_id(), Style::default().fg(Color::DarkGray)),
+    ]);
+
+    let keys = Line::from(vec![
+        status,
+        Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Ctrl+C clear", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Ctrl+D/Esc quit", Style::default().fg(Color::DarkGray)),
+    ]);
+
+    Text::from(vec![header, keys])
 }
 
 fn input_view(text: &str, cursor: usize, max_width: usize) -> (String, usize) {

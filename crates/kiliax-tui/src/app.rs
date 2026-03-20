@@ -37,11 +37,16 @@ pub struct App {
 
     profile: AgentProfile,
     runtime: AgentRuntime,
+    model_id: String,
     options: AgentRuntimeOptions,
     messages: Vec<Message>,
     store: FileSessionStore,
     session: SessionState,
     streaming_assistant: Option<usize>,
+
+    prompt_history: Vec<String>,
+    history_index: Option<usize>,
+    history_draft: String,
 }
 
 impl App {
@@ -52,14 +57,17 @@ impl App {
         store: FileSessionStore,
         session: SessionState,
         messages: Vec<Message>,
-        intro: String,
     ) -> Self {
+        let model_id = runtime.llm().route().model_id();
+        let prompt_history: Vec<String> = messages
+            .iter()
+            .filter_map(|msg| match msg {
+                Message::User { content } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
         Self {
-            transcript: vec![ChatEntry {
-                role: ChatRole::Info,
-                content: intro,
-                rendered: None,
-            }],
+            transcript: Vec::new(),
             input: InputLine::default(),
             should_quit: false,
             running: false,
@@ -67,17 +75,58 @@ impl App {
             flush_requested: false,
             profile,
             runtime,
+            model_id,
             options,
             messages,
             store,
             session,
             streaming_assistant: None,
+            prompt_history,
+            history_index: None,
+            history_draft: String::new(),
         }
+    }
+
+    pub fn session_id(&self) -> &str {
+        self.session.meta.id.as_str()
+    }
+
+    pub fn agent_name(&self) -> &str {
+        self.profile.name
+    }
+
+    pub fn model_id(&self) -> &str {
+        &self.model_id
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
         if self.running && key.code == KeyCode::Enter {
             return None;
+        }
+
+        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('c')
+        {
+            self.input.clear();
+            self.reset_history_nav();
+            return None;
+        }
+
+        match key.code {
+            KeyCode::Up => {
+                self.history_prev();
+                return None;
+            }
+            KeyCode::Down => {
+                self.history_next();
+                return None;
+            }
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete => {
+                if self.history_index.is_some() {
+                    self.reset_history_nav();
+                }
+            }
+            _ => {}
         }
 
         match self.input.handle_key(key) {
@@ -92,7 +141,16 @@ impl App {
         None
     }
 
+    pub fn handle_paste(&mut self, text: &str) {
+        if self.history_index.is_some() {
+            self.reset_history_nav();
+        }
+        self.input.insert_str(text);
+    }
+
     pub async fn submit_user_message(&mut self, text: String) -> Result<()> {
+        self.prompt_history.push(text.clone());
+        self.reset_history_nav();
         self.transcript.push(ChatEntry {
             role: ChatRole::User,
             content: text.clone(),
@@ -269,5 +327,48 @@ impl App {
 
         self.transcript.clear();
         out
+    }
+
+    fn reset_history_nav(&mut self) {
+        self.history_index = None;
+        self.history_draft.clear();
+    }
+
+    fn history_prev(&mut self) {
+        if self.prompt_history.is_empty() {
+            return;
+        }
+
+        let idx = match self.history_index {
+            Some(idx) => idx.saturating_sub(1),
+            None => {
+                self.history_draft = self.input.text().to_string();
+                self.prompt_history.len().saturating_sub(1)
+            }
+        };
+
+        self.history_index = Some(idx);
+        if let Some(text) = self.prompt_history.get(idx).cloned() {
+            self.input.set_text(text);
+        }
+    }
+
+    fn history_next(&mut self) {
+        let Some(idx) = self.history_index else {
+            return;
+        };
+
+        let next = idx.saturating_add(1);
+        if next < self.prompt_history.len() {
+            self.history_index = Some(next);
+            if let Some(text) = self.prompt_history.get(next).cloned() {
+                self.input.set_text(text);
+            }
+            return;
+        }
+
+        self.history_index = None;
+        let draft = std::mem::take(&mut self.history_draft);
+        self.input.set_text(draft);
     }
 }

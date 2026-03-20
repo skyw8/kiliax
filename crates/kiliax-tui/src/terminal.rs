@@ -90,9 +90,10 @@ fn compute_viewport(full_size: Size) -> Rect {
         return Rect::new(0, 0, full_size.width, height);
     }
 
-    let desired = height.saturating_mul(2) / 3;
-    let min_height = 8u16.min(height.saturating_sub(1));
-    let viewport_height = desired.clamp(min_height, height.saturating_sub(1));
+    let max_height = height.saturating_sub(1);
+    let min_height = 6u16.min(max_height);
+    let desired = 10u16.min(max_height);
+    let viewport_height = desired.max(min_height);
     let y = height.saturating_sub(viewport_height);
 
     Rect::new(0, y, full_size.width, viewport_height)

@@ -47,14 +47,14 @@ prompt caching
 TUI 交互式对话界面（ratatui + crossterm）：消息流式输出 + 底部固定输入行；不做额外滚动条（仅显示尾部内容，历史可用终端滚动查看）。
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
-- `crates/kiliax-tui/src/main.rs`: 入口；加载 config + 组装 PromptBuilder/Session；事件循环（键盘输入 + AgentRuntime 流）
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（transcript/messages/session）；提交用户消息、启动 `AgentRuntime::run_stream`、处理 `AgentEvent`
-- `crates/kiliax-tui/src/ui.rs`: 聊天区域尾部渲染 + 底部输入行；宽字符 cursor 与按宽度换行
+- `crates/kiliax-tui/src/main.rs`: 入口；支持 `--resume <id>`；创建/恢复 session；事件循环（键盘输入 + AgentRuntime 流）；退出清屏并打印恢复命令
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（transcript/messages/session/prompt history）；提交用户消息、启动 `run_stream`、处理 `AgentEvent`；↑/↓ 历史与 Ctrl+C 清空输入
+- `crates/kiliax-tui/src/ui.rs`: 无边框聊天区 + 仅输入框有边框；输入框下方固定 info（session/model/status/快捷键）；宽字符 cursor 与按宽度换行
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect → ratatui spans）
 - `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行
-- `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）
-- `crates/kiliax-tui/src/terminal.rs`: inline 终端模式 + viewport backend（raw mode + bracketed paste；仅重绘底部 viewport）
+- `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；支持整行替换（历史回填）
+- `crates/kiliax-tui/src/terminal.rs`: inline 终端模式 + viewport backend（raw mode + bracketed paste；仅重绘底部短 viewport）
 - `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（scroll region），把对话写入终端 scrollback
 
 ## ATTENTION
