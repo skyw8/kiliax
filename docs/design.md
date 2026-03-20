@@ -89,6 +89,18 @@
 
 注意：tools 是否“暴露给模型”与执行侧权限是两层控制；即使某个工具被暴露，执行仍会二次检查权限。
 
+## 5. PromptBuilder（提示词组装）
+
+代码：`crates/kiliax-core/src/prompt.rs`
+
+`PromptBuilder` 负责把多个“稳定前缀”与对话消息组装为最终传给 LLM 的 `Vec<Message>`，以便后续做 token efficient / prompt caching：
+
+- agent 固定提示词（来自 `AgentProfile.developer_prompt`，最终以 system message 发送以保证兼容性）
+- 共享的工具使用规范提示词（`crates/kiliax-core/prompts/tools.md`）
+- workspace root 上下文
+- skills 内容（可选，合并成一个 system message 的 markdown block）
+- 用户/助手/工具消息（对话历史）
+
 ## 5. 工具系统（builtin / skills / MCP）
 
 文档：`docs/tooling.md`
@@ -113,18 +125,19 @@
 
 ## 6. 推荐的集成方式（执行闭环）
 
-当前 `kiliax-core` 已提供组成“闭环”的全部基础设施：
+当前 `kiliax-core` 已提供组成“闭环”的全部基础设施，并提供了可直接复用的执行器：
 
 1) 读取配置，构造 `LlmClient`
 2) 选择 `AgentProfile`（plan/build）
 3) 创建 `ToolEngine`（可选接入 `McpHub`）
-4) 用 `llm.chat()` / `llm.chat_stream()` 获取 assistant（包含 tool calls）
-5) 用 `ToolEngine::execute_to_message()` 执行 tool calls，回填 `Message::Tool`
-6) 继续下一轮对话，直到不再产生 tool calls
+4) 用 `PromptBuilder` 组装初始 messages
+5) 用 `AgentRuntime` 执行 ReAct/tool-calling 循环：
+   - `chat()` / `chat_stream()` 获取 assistant（包含 tool calls）
+   - `ToolEngine::execute_to_message()` 执行 tool calls，回填 `Message::Tool`
+   - 继续下一轮，直到不再产生 tool calls 或达到 `max_steps`
 
 后续可以在 `kiliax-tui` 中把上述闭环做成交互式 TUI，并加入：
 
 - subagents / delegation
 - prompt caching（对固定 developer prompt、稳定系统上下文做缓存）
 - 更细粒度的权限与审计（尤其是 shell / write）
-

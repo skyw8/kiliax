@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::llm::{Message, ToolCall};
+use crate::llm::{Message, ToolCall, ToolDefinition};
 use crate::tools::{builtin, mcp::McpHub, Permissions, ToolError};
 
 #[derive(Clone)]
@@ -24,6 +24,13 @@ impl ToolEngine {
 
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    pub async fn extra_tool_definitions(&self) -> Vec<ToolDefinition> {
+        match &self.mcp {
+            Some(hub) => hub.tool_definitions().await,
+            None => Vec::new(),
+        }
     }
 
     pub async fn execute(&self, perms: &Permissions, call: &ToolCall) -> Result<String, ToolError> {
