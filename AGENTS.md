@@ -15,19 +15,6 @@ prompt caching
 
 ## arch
 
-### repo root
-
-- `Cargo.toml`: workspace 定义（成员 crates、公共依赖版本等）
-- `Cargo.lock`: cargo 依赖锁定文件
-- `README.md`: 最小使用说明（当前主要是 examples 入口）
-- `TODO.md`: 需求/待办清单（**不要修改**）
-- `killiax.example.yaml`: 配置示例（providers、default_model 等）
-- `killiax.yaml`: 本地配置（已在 `.gitignore` 中忽略；可能包含密钥）
-- `crates/`: Rust workspace 成员 crate
-- `docs/`: 设计与模块说明文档
-- `target/`: Rust 构建产物（自动生成）
-- `tmp/`: 临时目录（自动生成/调试用）
-
 ### crates/kiliax-core
 
 核心库：配置、LLM(OpenAI-compatible)、agents、tools、runtime。
@@ -61,11 +48,7 @@ TUI crate（ratatui）入口占位，后续承载交互式 UI 与 runtime 事件
 - `crates/kiliax-tui/Cargo.toml`: 依赖 `kiliax-core`
 - `crates/kiliax-tui/src/main.rs`: 入口（当前为 stub）
 
-### docs
-
-- `docs/design.md`: 总体设计与模块边界（config/llm/agents/tools/prompt/runtime）
-- `docs/tooling.md`: 工具系统设计（builtin tools、skills、MCP、执行闭环）
-
 ## ATTENTION
 
+- 修改完代码后，更新AGENTS.md中的arch部分，只用说明这些核心代码部分
 - 不要修改TODO.md
