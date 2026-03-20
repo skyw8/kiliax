@@ -98,7 +98,7 @@
 - agent 固定提示词（来自 `AgentProfile.developer_prompt`，最终以 system message 发送以保证兼容性）
 - 共享的工具使用规范提示词（`crates/kiliax-core/prompts/tools.md`）
 - workspace root 上下文
-- skills 内容（可选，合并成一个 system message 的 markdown block）
+- skills 元信息（可选，以 `<skills_instructions>` system message 注入：列出可用 skills + 使用规则；不内嵌 `SKILL.md` 正文，按需用 `read` 打开）
 - 用户/助手/工具消息（对话历史）
 
 ## 6. 工具系统（builtin / skills / MCP）
@@ -115,8 +115,8 @@
 ### 6.1 安全与可控性（关键约束）
 
 - 文件类工具：
-  - 路径必须在 `workspace_root` 内
-  - 禁止 `..`
+  - `write`：路径必须在 `workspace_root` 内；禁止 `..`
+  - `read`：路径必须在 `workspace_root` 内或允许的 skills roots 内；禁止 `..`
 - shell 工具：
   - plan agent 使用 allowlist（argv 前缀匹配）
   - build agent 允许全部（后续可再收紧）

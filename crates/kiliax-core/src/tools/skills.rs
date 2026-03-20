@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -31,7 +32,7 @@ pub enum SkillError {
 }
 
 pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> {
-    let mut out = Vec::new();
+    let mut out: BTreeMap<String, Skill> = BTreeMap::new();
 
     for root in skill_roots(workspace_root) {
         if !root.is_dir() {
@@ -43,12 +44,15 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
             if !path.is_dir() {
                 continue;
             }
+            let id = entry.file_name().to_string_lossy().to_string();
+            if out.contains_key(&id) {
+                continue;
+            }
             let md = path.join("SKILL.md");
             if !md.is_file() {
                 continue;
             }
             let raw = std::fs::read_to_string(&md)?;
-            let id = entry.file_name().to_string_lossy().to_string();
 
             let parsed = parse_skill_markdown(&md, &raw)?;
             let mut name = parsed
@@ -74,17 +78,20 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
                 .map(|s| s.to_string())
                 .or_else(|| infer_description_from_markdown(&parsed.content));
 
-            out.push(Skill {
+            out.insert(
+                id.clone(),
+                Skill {
                 id,
                 name,
                 path: md,
                 description,
                 content: parsed.content,
-            });
+            },
+            );
         }
     }
 
-    Ok(out)
+    Ok(out.into_values().collect())
 }
 
 pub fn skill_roots(workspace_root: &Path) -> Vec<PathBuf> {

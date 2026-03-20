@@ -14,16 +14,16 @@
   - `tools::builtin`：内置 `read` / `write` / `shell` 的 schema + 执行逻辑。
   - `tools::mcp`：通过 MCP（stdio transport）接入外部工具，并转换为 `ToolDefinition`。
   - `tools::engine::ToolEngine`：统一路由与执行入口，输出 `Message::Tool` 回填给模型。
-  - `tools::skills`：发现 skills（目录扫描），提供内容以便后续注入提示词或工具集。
+  - `tools::skills`：发现 skills（目录扫描）并解析元信息（`name/description`）；用于 PromptBuilder 渲染 `<skills_instructions>`（默认不把 `SKILL.md` 正文注入 prompt）。
 
 ## tools：read / write / shell
 
 内置工具位于 `crates/kiliax-core/src/tools/builtin.rs`：
 
 - `read`
-  - 输入：`{ "path": "relative/path" }`
+  - 输入：`{ "path": "relative/path" }`（或 skills 目录下文件的绝对路径）
   - 输出：文件内容（UTF-8）
-  - 约束：必须在 `workspace_root` 内，禁止 `..`
+  - 约束：必须在 `workspace_root` 内或允许的 skills roots 内（例如 `~/.killiax/skills`），禁止 `..`
 - `write`
   - 输入：`{ "path": "...", "content": "...", "create_dirs": false }`
   - 输出：`ok`
@@ -91,7 +91,7 @@ skills 发现位于 `crates/kiliax-core/src/tools/skills.rs`：
   - `name/description`：来自 front matter（或从 markdown 的标题/首段推断）
   - `content`：已剥离 front matter 的 markdown 正文
 - skills 可用于：
-  - 注入到 agent 的 prompt（developer/system）
+  - 注入到 agent 的 prompt（`<skills_instructions>`：仅列出可用 skills 元信息与使用规则；`SKILL.md` 正文按需 `read`）
   - 作为“工具集/策略”的配置来源（启用哪些 MCP servers、哪些工具）
 
 ## 典型执行闭环（tool calling）

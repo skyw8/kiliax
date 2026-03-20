@@ -5,20 +5,16 @@ use crate::llm::Message;
 use crate::tools::skills::Skill;
 
 const TOOLS_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools.md"));
+const SKILLS_INSTRUCTIONS_OPEN_TAG: &str = "<skills_instructions>";
+const SKILLS_INSTRUCTIONS_CLOSE_TAG: &str = "</skills_instructions>";
 
 #[derive(Debug, Clone, Default)]
 pub struct PromptBuilder {
     workspace_root: Option<PathBuf>,
     agent_prompt: Option<String>,
     include_tools_prompt: bool,
-    skills: Vec<SkillSnippet>,
+    skills: Vec<Skill>,
     messages: Vec<Message>,
-}
-
-#[derive(Debug, Clone)]
-struct SkillSnippet {
-    name: String,
-    markdown: String,
 }
 
 impl PromptBuilder {
@@ -51,16 +47,9 @@ impl PromptBuilder {
         self
     }
 
-    pub fn add_skill_markdown(mut self, name: impl Into<String>, markdown: impl Into<String>) -> Self {
-        self.skills.push(SkillSnippet {
-            name: name.into(),
-            markdown: markdown.into(),
-        });
+    pub fn add_skill(mut self, skill: Skill) -> Self {
+        self.skills.push(skill);
         self
-    }
-
-    pub fn add_skill(self, skill: Skill) -> Self {
-        self.add_skill_markdown(skill.name, skill.content)
     }
 
     pub fn add_skills<I>(mut self, skills: I) -> Self
@@ -110,16 +99,14 @@ impl PromptBuilder {
         if let Some(root) = self.workspace_root {
             out.push(Message::System {
                 content: format!(
-                    "Workspace root: {}\nAll file paths must be relative to this workspace root.",
+                    "Workspace root: {}\nFor read/write tools, prefer paths relative to this workspace root (no `..`).\nSkill source files may live outside the workspace; use the exact `SKILL.md` paths listed in the skills section when needed.",
                     root.display()
                 ),
             });
         }
 
-        if !self.skills.is_empty() {
-            out.push(Message::System {
-                content: render_skills_block(&self.skills),
-            });
+        if let Some(skills) = render_skills_section(&self.skills) {
+            out.push(Message::System { content: skills });
         }
 
         out.extend(self.messages);
@@ -127,19 +114,62 @@ impl PromptBuilder {
     }
 }
 
-fn render_skills_block(skills: &[SkillSnippet]) -> String {
-    let mut s = String::new();
-    s.push_str("# Skills\n");
-
-    for skill in skills {
-        s.push_str("\n## ");
-        s.push_str(skill.name.trim());
-        s.push('\n');
-        s.push_str(skill.markdown.trim());
-        s.push('\n');
+fn render_skills_section(skills: &[Skill]) -> Option<String> {
+    if skills.is_empty() {
+        return None;
     }
 
-    s
+    let mut skills: Vec<&Skill> = skills.iter().collect();
+    skills.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("## Skills".to_string());
+    lines.push("A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.".to_string());
+    lines.push("### Available skills".to_string());
+
+    let mut last_id: Option<&str> = None;
+    for skill in skills {
+        if last_id == Some(skill.id.as_str()) {
+            continue;
+        }
+        last_id = Some(skill.id.as_str());
+        let path_str = skill.path.to_string_lossy().replace('\\', "/");
+        let name = skill.name.trim();
+        let description = skill
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("No description.");
+        lines.push(format!("- {name}: {description} (file: {path_str})"));
+    }
+
+    lines.push("### How to use skills".to_string());
+    lines.push(
+        r###"- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
+- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
+- How to use a skill (progressive disclosure):
+  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
+  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.
+  3) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
+  4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
+  5) If `assets/` or templates exist, reuse them instead of recreating from scratch.
+- Coordination and sequencing:
+  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+- Context hygiene:
+  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
+  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###
+            .to_string(),
+    );
+
+    let body = lines.join("\n");
+    Some(format!(
+        "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n{body}\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
+    ))
 }
 
 pub fn workspace_relative_path<'a>(workspace_root: &'a Path, path: &'a Path) -> Option<&'a Path> {
@@ -183,7 +213,7 @@ mod tests {
             .build();
 
         let has_skills = msgs.iter().any(|m| {
-            matches!(m, Message::System { content } if content.contains("# Skills") && content.contains("## demo"))
+            matches!(m, Message::System { content } if content.contains(SKILLS_INSTRUCTIONS_OPEN_TAG) && content.contains("### Available skills") && content.contains("- demo: desc (file: skills/demo/SKILL.md)"))
         });
         assert!(has_skills);
     }

@@ -14,11 +14,13 @@ pub const TOOL_SHELL: &str = "shell";
 pub fn read_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_READ.to_string(),
-        description: Some("Read a UTF-8 text file from the workspace.".to_string()),
+        description: Some(
+            "Read a UTF-8 text file from the workspace or from the skills directories.".to_string(),
+        ),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Path relative to workspace root." }
+                "path": { "type": "string", "description": "Path relative to workspace root, or an absolute path within an allowed skills directory." }
             },
             "required": ["path"],
             "additionalProperties": false
@@ -89,7 +91,7 @@ async fn execute_read(
         return Err(ToolError::PermissionDenied(TOOL_READ.to_string()));
     }
     let args: ReadArgs = parse_args(call, TOOL_READ)?;
-    let path = resolve_workspace_path(workspace_root, &args.path)?;
+    let path = resolve_read_path(workspace_root, &args.path)?;
     Ok(tokio::fs::read_to_string(path).await?)
 }
 
@@ -207,3 +209,38 @@ fn resolve_workspace_path(root: &Path, path: &str) -> Result<PathBuf, ToolError>
     Ok(candidate)
 }
 
+fn resolve_read_path(workspace_root: &Path, path: &str) -> Result<PathBuf, ToolError> {
+    let input = Path::new(path);
+    let candidate = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        workspace_root.join(input)
+    };
+
+    for c in candidate.components() {
+        if matches!(c, Component::ParentDir) {
+            return Err(ToolError::InvalidPath {
+                path: path.to_string(),
+                reason: "path must not contain `..`".to_string(),
+            });
+        }
+    }
+
+    if candidate.starts_with(workspace_root) {
+        return Ok(candidate);
+    }
+
+    for root in crate::tools::skills::skill_roots(workspace_root) {
+        if candidate.starts_with(&root) {
+            return Ok(candidate);
+        }
+    }
+
+    Err(ToolError::InvalidPath {
+        path: path.to_string(),
+        reason: format!(
+            "path must be within workspace root {} or skills roots",
+            workspace_root.display()
+        ),
+    })
+}
