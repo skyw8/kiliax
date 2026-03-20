@@ -168,7 +168,9 @@ mod tests {
     #[test]
     fn renders_skills_as_system_message() {
         let skill = Skill {
+            id: "demo".to_string(),
             name: "demo".to_string(),
+            description: Some("desc".to_string()),
             path: PathBuf::from("skills/demo/SKILL.md"),
             content: "hello".to_string(),
         };

@@ -37,3 +37,6 @@ build agent可读可写、可执行
 
 工具模块
 skills、tools(read,write,shell)、mcp
+
+TUI
+消息流式输出 + 底部固定输入行

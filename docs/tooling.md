@@ -74,7 +74,23 @@ skills 发现位于 `crates/kiliax-core/src/tools/skills.rs`：
   - `<workspace>/skills/*/SKILL.md`
   - `<workspace>/.killiax/skills/*/SKILL.md`
   - `~/.killiax/skills/*/SKILL.md`
-- 目前 `Skill { name, path, content }` 仅做“发现与读取”，后续可用于：
+- `SKILL.md` 支持可选的 YAML front matter（推荐），用于提供元信息：
+  - `name`：显示名
+  - `description`：简短描述
+  - 例如：
+    ```md
+    ---
+    name: My Skill
+    description: What this skill is for.
+    ---
+    # My Skill
+    ...
+    ```
+- `discover_skills()` 返回的结构包含：
+  - `id`：目录名（稳定标识）
+  - `name/description`：来自 front matter（或从 markdown 的标题/首段推断）
+  - `content`：已剥离 front matter 的 markdown 正文
+- skills 可用于：
   - 注入到 agent 的 prompt（developer/system）
   - 作为“工具集/策略”的配置来源（启用哪些 MCP servers、哪些工具）
 
@@ -87,4 +103,3 @@ skills 发现位于 `crates/kiliax-core/src/tools/skills.rs`：
 3) 对每个 `ToolCall`：
    - `ToolEngine::execute_to_message(&profile.permissions, &call)` 生成 `Message::Tool`
 4) 把 assistant/tool 消息追加回 `messages`，继续下一轮 `chat()` / `chat_stream()`
-

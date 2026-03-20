@@ -40,7 +40,7 @@ prompt caching
   - `builtin.rs`: 内置工具 `read/write/shell` 的 schema + 执行（路径约束、shell argv allowlist）
   - `engine.rs`: 工具路由与统一执行（builtin vs MCP），以及 MCP 工具 definitions 注入
   - `mcp.rs`: MCP stdio hub（连接 server、列出 tools、`mcp__<server>__<tool>` 命名空间、调用工具）
-  - `skills.rs`: skills 发现（扫描 `skills/*/SKILL.md`、`.killiax/skills`、`~/.killiax/skills`）
+  - `skills.rs`: skills 发现（扫描 roots；解析 `SKILL.md` YAML front matter 的 `name/description`；剥离 front matter 得到正文）
 
 ### crates/kiliax-tui
 
