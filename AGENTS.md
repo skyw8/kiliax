@@ -44,10 +44,17 @@ prompt caching
 
 ### crates/kiliax-tui
 
-TUI crate（ratatui）入口占位，后续承载交互式 UI 与 runtime 事件渲染。
+TUI 交互式对话界面（ratatui + crossterm）：消息流式输出 + 底部固定输入行；不做额外滚动条（仅显示尾部内容，历史可用终端滚动查看）。
 
-- `crates/kiliax-tui/Cargo.toml`: 依赖 `kiliax-core`
-- `crates/kiliax-tui/src/main.rs`: 入口（当前为 stub）
+- `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
+- `crates/kiliax-tui/src/main.rs`: 入口；加载 config + 组装 PromptBuilder/Session；事件循环（键盘输入 + AgentRuntime 流）
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（transcript/messages/session）；提交用户消息、启动 `AgentRuntime::run_stream`、处理 `AgentEvent`
+- `crates/kiliax-tui/src/ui.rs`: 聊天区域尾部渲染 + 底部输入行；宽字符 cursor 与按宽度换行
+- `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮
+- `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect → ratatui spans）
+- `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行
+- `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）
+- `crates/kiliax-tui/src/terminal.rs`: 终端模式管理（raw mode + alternate screen + bracketed paste）
 
 ## ATTENTION
 
