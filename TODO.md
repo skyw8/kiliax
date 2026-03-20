@@ -39,4 +39,7 @@ build agent可读可写、可执行
 skills、tools(read,write,shell)、mcp
 
 TUI
-消息流式输出 + 底部固定输入行
+- 消息流式输出 + 底部固定输入行
+- 不提供额外的滚动条，用户使用终端自带的滚动
+- 使用ratatui+Crossterm，参考/home/skywo/github/codex/codex-rs/tui，UI可以借鉴复制
+- 先实现对话界面，代码高亮，markdown语法高亮
