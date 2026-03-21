@@ -59,3 +59,16 @@ TUI细节修改
 - 用户输入时开始计时，计时显示在输入框上方，任务完成后，最后使用一个分割线记录总时间（灰色），参考codex
 - 编辑少量代码时，像codex一样diff显示。创建文件写入或编辑大量代码时仅显示概要信息和文件路径。
 - 省略User Assistant显示，用户输入被之前输入框的灰色背景包裹即可
+
+token统计
+
+tools
+- 并行阅读多文件
+- grep检索
+- 先参考codex opencode
+
+thinking适配问题
+- 似乎moonshot_cn/kimi-k2-turbo-preview不显示
+
+硬编码问题
+- max steps
