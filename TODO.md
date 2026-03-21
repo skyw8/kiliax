@@ -51,7 +51,11 @@ TUI
 - 对话框UI仿照codex，并且添加自动换行的逻辑，换行时对话框跟随变大
 - 以上设计均参考codex的TUI实现，/home/skywo/github/codex/codex-rs/tui
 
-关于工具调用，thinking内容的折叠
-- 默认折叠这些内容
-- 使用ctrl+o展开这些内容，能够查看
-- 省略User Assistant显示
+TUI细节修改
+- 添加计时，工具调用、思考过程都计时显示，最后输出完毕之后显示总计时
+- 思考部分使用codex样式的灰色斜体，参考codex /home/skywo/github/codex/codex-rs/tui
+- 默认折叠工具调用，显示概要信息即可，参考codex
+- 调用工具时旁边显示计时
+- 用户输入时开始计时，计时显示在输入框上方，任务完成后，最后使用一个分割线记录总时间（灰色），参考codex
+- 编辑少量代码时，像codex一样diff显示。创建文件写入或编辑大量代码时仅显示概要信息和文件路径。
+- 省略User Assistant显示，用户输入被之前输入框的灰色背景包裹即可
