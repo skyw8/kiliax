@@ -10,7 +10,7 @@ mod ui;
 mod wrap;
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode};
 use crossterm::{cursor::MoveTo, execute, terminal::Clear, terminal::ClearType};
 use futures_util::StreamExt;
 use kiliax_core::{
@@ -140,14 +140,9 @@ async fn main() -> Result<()> {
 
                     match event? {
                         Event::Key(key) => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL)
-                                && matches!(key.code, KeyCode::Char('d'))
-                            {
-                                app.should_quit = true;
-                                continue;
-                            }
                             if key.code == KeyCode::Esc {
-                                app.should_quit = true;
+                                app.interrupt_run();
+                                agent_stream = None;
                                 continue;
                             }
                             let _ = app.handle_key(key);
@@ -194,12 +189,6 @@ async fn main() -> Result<()> {
 
                     match event? {
                         Event::Key(key) => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL)
-                                && matches!(key.code, KeyCode::Char('d'))
-                            {
-                                app.should_quit = true;
-                                continue;
-                            }
                             if key.code == KeyCode::Esc {
                                 app.should_quit = true;
                                 continue;

@@ -208,7 +208,7 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         status,
         Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
         Span::styled("  Ctrl+C clear", Style::default().fg(Color::DarkGray)),
-        Span::styled("  Ctrl+D/Esc quit", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Esc stop/quit", Style::default().fg(Color::DarkGray)),
     ]);
     frame.render_widget(Paragraph::new(Text::from(vec![model, keys])), area);
 }

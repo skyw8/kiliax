@@ -18,6 +18,9 @@ pub enum AgentRuntimeError {
     #[error(transparent)]
     Tool(#[from] ToolError),
 
+    #[error("cancelled")]
+    Cancelled,
+
     #[error("max steps exceeded: {max_steps}")]
     MaxSteps { max_steps: usize },
 }
@@ -180,6 +183,9 @@ impl AgentRuntime {
 
                 match drive_stream_step(step, stream, &tx).await {
                     Ok(step_out) => {
+                        if tx.is_closed() {
+                            return;
+                        }
                         messages.push(step_out.assistant.clone());
                         let _ = tx
                             .send(Ok(AgentEvent::AssistantMessage {
@@ -202,6 +208,9 @@ impl AgentRuntime {
                         }
 
                         for call in step_out.tool_calls {
+                            if tx.is_closed() {
+                                return;
+                            }
                             let _ = tx.send(Ok(AgentEvent::ToolCall { call: call.clone() })).await;
 
                             match tools.execute_to_message(&profile.permissions, &call).await {
@@ -307,12 +316,23 @@ async fn drive_stream_step(
     let mut tool_calls: BTreeMap<u32, ToolCallBuf> = BTreeMap::new();
     let mut finish_reason = None;
 
-    while let Some(item) = stream.next().await {
+    loop {
+        let item = tokio::select! {
+            _ = tx.closed() => {
+                return Err(AgentRuntimeError::Cancelled);
+            }
+            item = stream.next() => item,
+        };
+        let Some(item) = item else {
+            break;
+        };
         let chunk = item?;
 
         if let Some(delta) = chunk.content_delta {
             assistant_content.push_str(&delta);
-            let _ = tx.send(Ok(AgentEvent::AssistantDelta { delta })).await;
+            if tx.send(Ok(AgentEvent::AssistantDelta { delta })).await.is_err() {
+                return Err(AgentRuntimeError::Cancelled);
+            }
         }
 
         if !chunk.tool_calls.is_empty() {

@@ -33,7 +33,7 @@ prompt caching
 - `crates/kiliax-core/src/llm.rs`: 基于 `async-openai` 的 OpenAI-compatible 客户端封装；消息/工具定义；非流式与流式接口
 - `crates/kiliax-core/src/agents.rs`: `AgentProfile`（plan/build）及其可用工具集合与权限模型
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（组装 system 前缀：agent prompt + tools 规范 + workspace root + `<skills_instructions>` skills 列表 + 对话消息）
-- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 执行闭环：LLM→tool_calls→执行→回填→继续）
+- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 执行闭环：LLM→tool_calls→执行→回填→继续；流式 run 支持取消）
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`

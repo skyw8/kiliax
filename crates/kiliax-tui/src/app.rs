@@ -165,6 +165,17 @@ impl App {
         &self.model_id
     }
 
+    pub fn interrupt_run(&mut self) {
+        if let Some(stream) = self.assistant_stream.as_mut() {
+            self.pending_history_lines.extend(stream.finalize_and_drain());
+            self.pending_history_lines.push(Line::from(""));
+        }
+        self.assistant_stream = None;
+        self.running = false;
+        self.status = Some("interrupted".to_string());
+        self.messages = self.session.messages.clone();
+    }
+
     pub fn drain_history_lines(&mut self) -> Vec<Line<'static>> {
         std::mem::take(&mut self.pending_history_lines)
     }
