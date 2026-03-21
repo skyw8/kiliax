@@ -17,6 +17,10 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 pub const DIVIDER_MARKER_PREFIX: &str = "\u{001f}kiliax_divider:";
+pub const USER_MESSAGE_MARKER_PREFIX: &str = "\u{001f}kiliax_user_message:";
+
+const USER_MESSAGE_PREFIX_COLS: usize = 2; // "› "
+const USER_MESSAGE_RIGHT_MARGIN_COLS: usize = 1;
 
 pub fn insert_history_lines(
     lines: &[Line<'static>],
@@ -81,13 +85,28 @@ pub fn insert_history_lines(
 fn expand_special_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
     let mut out = Vec::with_capacity(lines.len());
     for line in lines {
+        if let Some(content) = parse_user_message_marker(line) {
+            out.extend(render_user_message_block(&content, width));
+            continue;
+        }
         if let Some(ms) = parse_divider_marker(line) {
-            out.push(render_divider_line(Duration::from_millis(ms), width));
+            out.extend(render_divider_block(Duration::from_millis(ms), width));
             continue;
         }
         out.push(line.clone());
     }
     out
+}
+
+fn parse_user_message_marker(line: &Line<'static>) -> Option<String> {
+    let text = line
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    let payload = text.strip_prefix(USER_MESSAGE_MARKER_PREFIX)?;
+    serde_json::from_str::<String>(payload).ok()
 }
 
 fn parse_divider_marker(line: &Line<'static>) -> Option<u64> {
@@ -99,6 +118,10 @@ fn parse_divider_marker(line: &Line<'static>) -> Option<u64> {
         .join("");
     text.strip_prefix(DIVIDER_MARKER_PREFIX)
         .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+fn render_divider_block(elapsed: Duration, width: usize) -> Vec<Line<'static>> {
+    vec![Line::from(""), render_divider_line(elapsed, width), Line::from("")]
 }
 
 fn render_divider_line(elapsed: Duration, width: usize) -> Line<'static> {
@@ -117,6 +140,45 @@ fn render_divider_line(elapsed: Duration, width: usize) -> Line<'static> {
     let mut line = Line::from(Span::from(text));
     line.style = Style::default().dim();
     line
+}
+
+fn render_user_message_block(content: &str, width: usize) -> Vec<Line<'static>> {
+    let bubble = crate::style::composer_background_style();
+
+    let wrap_width = width
+        .saturating_sub(USER_MESSAGE_PREFIX_COLS + USER_MESSAGE_RIGHT_MARGIN_COLS)
+        .max(1);
+    let rendered = crate::markdown::render_markdown_lines(content);
+    let wrapped = crate::wrap::wrap_lines(&rendered, wrap_width);
+
+    let mut out = Vec::with_capacity(wrapped.len().saturating_add(2));
+
+    let mut top = Line::from("");
+    top.style = bubble;
+    out.push(top);
+
+    for (idx, line) in wrapped.into_iter().enumerate() {
+        let prefix: Span<'static> = if idx == 0 {
+            Span::from("› ").bold().dim()
+        } else {
+            Span::from("  ")
+        };
+
+        let mut spans = Vec::with_capacity(line.spans.len().saturating_add(1));
+        spans.push(prefix);
+        spans.extend(line.spans.into_iter());
+
+        let mut line_out = Line::from(spans);
+        line_out.style = line.style.patch(bubble);
+        line_out.alignment = line.alignment;
+        out.push(line_out);
+    }
+
+    let mut bottom = Line::from("");
+    bottom.style = bubble;
+    out.push(bottom);
+
+    out
 }
 
 fn fmt_elapsed_compact(elapsed: Duration) -> String {

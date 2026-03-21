@@ -99,7 +99,19 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
 
     if let Some((tool, elapsed)) = app.active_tool_elapsed() {
         spans.push(Span::from(" · ").dim());
-        spans.push(Span::from(tool).dim());
+        let (name, rest) = match tool.split_once(' ') {
+            Some((name, rest)) => (name.to_string(), rest.to_string()),
+            None => (tool, String::new()),
+        };
+        let name_style = match name.as_str() {
+            "read" | "write" | "shell" => Style::default().fg(Color::Cyan).bold(),
+            _ => Style::default().bold(),
+        };
+        spans.push(Span::styled(name, name_style));
+        if !rest.is_empty() {
+            spans.push(Span::from(" "));
+            spans.push(Span::from(rest).dim());
+        }
         spans.push(Span::from(" ").dim());
         spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
     } else if let Some((step, elapsed)) = app.step_elapsed() {

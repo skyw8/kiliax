@@ -211,7 +211,6 @@ impl App {
     pub fn interrupt_run(&mut self) {
         if let Some(stream) = self.assistant_stream.as_mut() {
             self.pending_history_lines.extend(stream.finalize_and_drain());
-            self.pending_history_lines.push(Line::from(""));
         }
         self.assistant_stream = None;
         self.running = false;
@@ -347,7 +346,6 @@ impl App {
                             self.pending_history_lines
                                 .extend(stream.finalize_and_drain());
                         }
-                        self.pending_history_lines.push(Line::from(""));
                     }
                     self.assistant_stream = None;
 
@@ -355,7 +353,6 @@ impl App {
                     {
                         self.pending_history_lines
                             .push(render_thinking_line(step, started_at.elapsed()));
-                        self.pending_history_lines.push(Line::from(""));
                     }
                     self.step_started_at = None;
                 }
@@ -502,13 +499,12 @@ impl App {
 }
 
 fn render_user_message_lines(content: &str) -> Vec<Line<'static>> {
-    let bubble = crate::style::composer_background_style();
-    let mut out = render_markdown_lines(content);
-    for line in out.iter_mut() {
-        line.style = line.style.patch(bubble);
-    }
-    out.push(Line::from(""));
-    out
+    let payload = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_string());
+    vec![Line::from(Span::from(format!(
+        "{}{}",
+        crate::history::USER_MESSAGE_MARKER_PREFIX,
+        payload
+    )))]
 }
 
 fn fmt_duration_compact(duration: Duration) -> String {
@@ -540,6 +536,20 @@ fn render_thinking_line(step: usize, duration: Duration) -> Line<'static> {
     ])
 }
 
+#[derive(Debug, Clone)]
+struct ToolSummary {
+    tool: String,
+    rest: String,
+}
+
+fn tool_name_span(tool: &str) -> Span<'static> {
+    let style = match tool {
+        "read" | "write" | "shell" => Style::default().fg(Color::Cyan).bold(),
+        _ => Style::default().bold(),
+    };
+    Span::styled(tool.to_string(), style)
+}
+
 fn render_tool_result_fallback_lines(
     tool_call_id: &str,
     elapsed: Option<Duration>,
@@ -563,7 +573,6 @@ fn render_tool_result_fallback_lines(
             Span::styled(truncate_one_line(content, 120), summary_style),
         ]));
     }
-    out.push(Line::from(""));
     out
 }
 
@@ -579,10 +588,11 @@ fn render_tool_result_lines(
     let duration = elapsed.map(fmt_duration_compact);
     let (summary, detail) = summarize_tool_result(pending, tool_content);
 
-    let mut header = vec![
-        Span::from("• ").dim(),
-        Span::from(summary).bold(),
-    ];
+    let mut header = vec![Span::from("• ").dim(), tool_name_span(&summary.tool)];
+    if !summary.rest.is_empty() {
+        header.push(Span::from(" "));
+        header.push(Span::from(summary.rest));
+    }
     if let Some(duration) = duration {
         header.push(Span::from(" "));
         header.push(Span::styled(format!("({duration})"), Style::default().dim()));
@@ -595,7 +605,6 @@ fn render_tool_result_lines(
             Span::styled(detail, Style::default().dim()),
         ]));
     }
-    out.push(Line::from(""));
     out
 }
 
@@ -608,10 +617,11 @@ fn render_write_tool_result_lines(
     let (summary, detail) = summarize_tool_result(pending, tool_content);
     let parsed = serde_json::from_str::<WriteToolOutput>(tool_content).ok();
 
-    let mut header = vec![
-        Span::from("• ").dim(),
-        Span::from(summary).bold(),
-    ];
+    let mut header = vec![Span::from("• ").dim(), tool_name_span(&summary.tool)];
+    if !summary.rest.is_empty() {
+        header.push(Span::from(" "));
+        header.push(Span::from(summary.rest));
+    }
     if let Some(duration) = duration {
         header.push(Span::from(" "));
         header.push(Span::styled(format!("({duration})"), Style::default().dim()));
@@ -629,7 +639,6 @@ fn render_write_tool_result_lines(
         out.extend(render_diff_block(&diff));
     }
 
-    out.push(Line::from(""));
     out
 }
 
@@ -683,15 +692,12 @@ fn truncate_one_line(text: &str, max_chars: usize) -> String {
 }
 
 fn render_error_lines(text: &str) -> Vec<Line<'static>> {
-    vec![
-        Line::from(vec![
-            Span::from("• ").dim(),
-            Span::styled("error", Style::default().fg(Color::LightRed).bold()),
-            Span::from(": "),
-            Span::from(text.to_string()),
-        ]),
-        Line::from(""),
-    ]
+    vec![Line::from(vec![
+        Span::from("• ").dim(),
+        Span::styled("error", Style::default().fg(Color::LightRed).bold()),
+        Span::from(": "),
+        Span::from(text.to_string()),
+    ])]
 }
 
 #[derive(Debug, Deserialize)]
@@ -732,12 +738,15 @@ fn classify_tool_call(call: &kiliax_core::llm::ToolCall) -> PendingToolCallKind 
     }
 }
 
-fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (String, Option<String>) {
+fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (ToolSummary, Option<String>) {
     match &pending.kind {
         PendingToolCallKind::Read { path } => {
             let line_count = tool_content.lines().count();
             (
-                format!("read {path}"),
+                ToolSummary {
+                    tool: "read".to_string(),
+                    rest: path.clone(),
+                },
                 Some(format!("{line_count} lines")),
             )
         }
@@ -758,7 +767,13 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Stri
                 detail.push_str(&format!(" (+{added}/-{removed})"));
             }
 
-            (format!("write {path}"), Some(detail))
+            (
+                ToolSummary {
+                    tool: "write".to_string(),
+                    rest: path.clone(),
+                },
+                Some(detail),
+            )
         }
         PendingToolCallKind::Shell { argv, cwd } => {
             let cmd = argv.join(" ");
@@ -779,12 +794,18 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Stri
                 detail.push_str(&format!("cwd {cwd}"));
             }
             (
-                format!("shell {cmd}"),
+                ToolSummary {
+                    tool: "shell".to_string(),
+                    rest: cmd,
+                },
                 if detail.is_empty() { None } else { Some(detail) },
             )
         }
         PendingToolCallKind::Other => (
-            pending.name.clone(),
+            ToolSummary {
+                tool: pending.name.clone(),
+                rest: String::new(),
+            },
             Some(truncate_one_line(&pending.arguments, 120)),
         ),
     }
