@@ -12,7 +12,7 @@ const COMPOSER_PAD_TOP: u16 = 1;
 const COMPOSER_PAD_BOTTOM: u16 = 1;
 const COMPOSER_PAD_RIGHT: u16 = 1;
 const MIN_COMPOSER_HEIGHT: u16 = 3;
-const FOOTER_HEIGHT: u16 = 1;
+const FOOTER_HEIGHT: u16 = 2;
 
 pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
     desired_composer_height(app, width).saturating_add(FOOTER_HEIGHT)
@@ -198,12 +198,17 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let indent = " ".repeat(LIVE_PREFIX_COLS as usize);
-    let line = Line::from(vec![
+    let model = Line::from(vec![
+        Span::styled(indent.clone(), Style::default()),
+        Span::from("model: ").dim(),
+        Span::from(app.model_id().to_string()).cyan(),
+    ]);
+    let keys = Line::from(vec![
         Span::styled(indent, Style::default()),
         status,
         Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
         Span::styled("  Ctrl+C clear", Style::default().fg(Color::DarkGray)),
         Span::styled("  Ctrl+D/Esc quit", Style::default().fg(Color::DarkGray)),
     ]);
-    frame.render_widget(Paragraph::new(Text::from(line)), area);
+    frame.render_widget(Paragraph::new(Text::from(vec![model, keys])), area);
 }

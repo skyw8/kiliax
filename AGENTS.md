@@ -47,9 +47,9 @@ prompt caching
 TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 codex）+ 终端 scrollback 历史；启动先插入 header（版本/模型/cwd），输入框从 header 之后开始并随输出自动下推；输入框支持自动换行与动态高度。
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
-- `crates/kiliax-tui/src/main.rs`: 入口；支持 `--resume <id>`；启动插入 header；事件循环（键盘输入 + AgentRuntime 流）；退出清空 viewport 并打印恢复命令
+- `crates/kiliax-tui/src/main.rs`: 入口；支持 `--resume <id>`；启动插入 header；事件循环（键盘输入 + AgentRuntime 流）；退出清屏并打印恢复命令
 - `crates/kiliax-tui/src/app.rs`: `App` 状态（messages/session/prompt history + pending history lines）；AssistantDelta 通过 MarkdownStreamCollector 按换行增量提交到 scrollback；↑/↓ 历史与 Ctrl+C 清空输入
-- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；底部 footer（status/快捷键）
+- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；底部 footer（model/status/快捷键）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式（从终端默认背景色推导，类似 codex 的 user message 背景）
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮

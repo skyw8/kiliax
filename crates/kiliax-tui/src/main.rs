@@ -11,6 +11,7 @@ mod wrap;
 
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
+use crossterm::{cursor::MoveTo, execute, terminal::Clear, terminal::ClearType};
 use futures_util::StreamExt;
 use kiliax_core::{
     agents::AgentProfile,
@@ -237,7 +238,9 @@ async fn main() -> Result<()> {
     drop(terminal);
     drop(guard);
 
-    println!("\nResume: cargo run -p kiliax-tui -- --resume {session_id}");
+    // Clear the full screen after restoring terminal modes to avoid leaving stale UI behind.
+    execute!(std::io::stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+    println!("Resume: cargo run -p kiliax-tui -- --resume {session_id}");
 
     Ok(())
 }
