@@ -11,6 +11,7 @@ use kiliax_core::{
 };
 
 use crate::input::{InputAction, InputLine};
+use crate::markdown::render_markdown_lines;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatRole {
@@ -20,20 +21,90 @@ pub enum ChatRole {
     Info,
 }
 
-#[derive(Debug, Clone)]
-pub struct ChatEntry {
-    pub role: ChatRole,
-    pub content: String,
-    pub rendered: Option<Vec<Line<'static>>>,
+#[derive(Debug, Default, Clone)]
+struct MarkdownStreamCollector {
+    buffer: String,
+    committed_line_count: usize,
+}
+
+impl MarkdownStreamCollector {
+    fn clear(&mut self) {
+        self.buffer.clear();
+        self.committed_line_count = 0;
+    }
+
+    fn push_delta(&mut self, delta: &str) {
+        self.buffer.push_str(delta);
+    }
+
+    fn set_text(&mut self, text: &str) {
+        self.buffer.clear();
+        self.buffer.push_str(text);
+    }
+
+    fn commit_complete_lines(&mut self) -> Vec<Line<'static>> {
+        let Some(last_newline_idx) = self.buffer.rfind('\n') else {
+            return Vec::new();
+        };
+        let source = &self.buffer[..=last_newline_idx];
+        let mut rendered = render_markdown_lines(source);
+        trim_trailing_blank_lines(&mut rendered);
+
+        if self.committed_line_count >= rendered.len() {
+            return Vec::new();
+        }
+
+        let out = rendered[self.committed_line_count..].to_vec();
+        self.committed_line_count = rendered.len();
+        out
+    }
+
+    fn finalize_and_drain(&mut self) -> Vec<Line<'static>> {
+        if self.buffer.is_empty() {
+            self.clear();
+            return Vec::new();
+        }
+
+        let mut source = self.buffer.clone();
+        if !source.ends_with('\n') {
+            source.push('\n');
+        }
+        let mut rendered = render_markdown_lines(&source);
+        trim_trailing_blank_lines(&mut rendered);
+
+        let out = if self.committed_line_count >= rendered.len() {
+            Vec::new()
+        } else {
+            rendered[self.committed_line_count..].to_vec()
+        };
+
+        self.clear();
+        out
+    }
+}
+
+fn trim_trailing_blank_lines(lines: &mut Vec<Line<'static>>) {
+    while lines.last().is_some_and(|line| line_is_blank(line)) {
+        lines.pop();
+    }
+}
+
+fn line_is_blank(line: &Line<'static>) -> bool {
+    let text: String = line
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    text.trim().is_empty()
 }
 
 pub struct App {
-    pub transcript: Vec<ChatEntry>,
     pub input: InputLine,
     pub should_quit: bool,
     pub running: bool,
     pub status: Option<String>,
-    pub flush_requested: bool,
+    pending_history_lines: Vec<Line<'static>>,
 
     profile: AgentProfile,
     runtime: AgentRuntime,
@@ -42,7 +113,7 @@ pub struct App {
     messages: Vec<Message>,
     store: FileSessionStore,
     session: SessionState,
-    streaming_assistant: Option<usize>,
+    assistant_stream: Option<MarkdownStreamCollector>,
 
     prompt_history: Vec<String>,
     history_index: Option<usize>,
@@ -67,12 +138,11 @@ impl App {
             })
             .collect();
         Self {
-            transcript: Vec::new(),
             input: InputLine::default(),
             should_quit: false,
             running: false,
             status: None,
-            flush_requested: false,
+            pending_history_lines: Vec::new(),
             profile,
             runtime,
             model_id,
@@ -80,7 +150,7 @@ impl App {
             messages,
             store,
             session,
-            streaming_assistant: None,
+            assistant_stream: None,
             prompt_history,
             history_index: None,
             history_draft: String::new(),
@@ -91,12 +161,12 @@ impl App {
         self.session.meta.id.as_str()
     }
 
-    pub fn agent_name(&self) -> &str {
-        self.profile.name
-    }
-
     pub fn model_id(&self) -> &str {
         &self.model_id
+    }
+
+    pub fn drain_history_lines(&mut self) -> Vec<Line<'static>> {
+        std::mem::take(&mut self.pending_history_lines)
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
@@ -104,7 +174,9 @@ impl App {
             return None;
         }
 
-        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+        if key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('c')
         {
             self.input.clear();
@@ -151,11 +223,8 @@ impl App {
     pub async fn submit_user_message(&mut self, text: String) -> Result<()> {
         self.prompt_history.push(text.clone());
         self.reset_history_nav();
-        self.transcript.push(ChatEntry {
-            role: ChatRole::User,
-            content: text.clone(),
-            rendered: None,
-        });
+        self.pending_history_lines
+            .extend(render_entry_lines(ChatRole::User, &text));
 
         let msg = Message::User { content: text };
         self.messages.push(msg.clone());
@@ -168,7 +237,7 @@ impl App {
     ) -> Result<ReceiverStream<Result<AgentEvent, AgentRuntimeError>>> {
         self.running = true;
         self.status = Some("running".to_string());
-        self.streaming_assistant = None;
+        self.assistant_stream = None;
         Ok(self
             .runtime
             .run_stream(&self.profile, self.messages.clone(), self.options.clone())
@@ -179,26 +248,21 @@ impl App {
         match event {
             AgentEvent::StepStart { step } => {
                 self.status = Some(format!("step {step}"));
-                self.streaming_assistant = None;
+                self.assistant_stream = None;
             }
             AgentEvent::AssistantDelta { delta } => {
-                let idx = match self.streaming_assistant {
-                    Some(idx) => idx,
-                    None => {
-                        self.transcript.push(ChatEntry {
-                            role: ChatRole::Assistant,
-                            content: String::new(),
-                            rendered: None,
-                        });
-                        let idx = self.transcript.len().saturating_sub(1);
-                        self.streaming_assistant = Some(idx);
-                        idx
-                    }
-                };
+                if self.assistant_stream.is_none() {
+                    self.pending_history_lines
+                        .push(render_role_header(ChatRole::Assistant));
+                    self.assistant_stream = Some(MarkdownStreamCollector::default());
+                }
 
-                if let Some(entry) = self.transcript.get_mut(idx) {
-                    entry.content.push_str(&delta);
-                    entry.rendered = None;
+                if let Some(stream) = self.assistant_stream.as_mut() {
+                    stream.push_delta(&delta);
+                    if delta.contains('\n') {
+                        self.pending_history_lines
+                            .extend(stream.commit_complete_lines());
+                    }
                 }
             }
             AgentEvent::AssistantMessage { message } => {
@@ -208,28 +272,31 @@ impl App {
 
                 if let Message::Assistant { content, .. } = message {
                     let content = content.unwrap_or_default();
-                    if let Some(idx) = self.streaming_assistant {
-                        if let Some(entry) = self.transcript.get_mut(idx) {
-                            if !content.is_empty() {
-                                entry.content = content;
-                                entry.rendered = None;
-                            }
-                        }
-                    } else if !content.is_empty() {
-                        self.transcript.push(ChatEntry {
-                            role: ChatRole::Assistant,
-                            content,
-                            rendered: None,
-                        });
+                    if content.is_empty() {
+                        self.assistant_stream = None;
+                        return Ok(());
                     }
+
+                    if self.assistant_stream.is_none() {
+                        self.pending_history_lines
+                            .push(render_role_header(ChatRole::Assistant));
+                        self.assistant_stream = Some(MarkdownStreamCollector::default());
+                    }
+
+                    if let Some(stream) = self.assistant_stream.as_mut() {
+                        stream.set_text(&content);
+                        self.pending_history_lines
+                            .extend(stream.finalize_and_drain());
+                    }
+                    self.pending_history_lines.push(Line::from(""));
+                    self.assistant_stream = None;
                 }
             }
             AgentEvent::ToolCall { call } => {
-                self.transcript.push(ChatEntry {
-                    role: ChatRole::Tool,
-                    content: format!("`{}` `{}`", call.name, call.arguments),
-                    rendered: None,
-                });
+                self.pending_history_lines.extend(render_entry_lines(
+                    ChatRole::Tool,
+                    &format!("`{}` `{}`", call.name, call.arguments),
+                ));
             }
             AgentEvent::ToolResult { message } => {
                 self.store
@@ -241,13 +308,10 @@ impl App {
                     content,
                 } = message
                 {
-                    self.transcript.push(ChatEntry {
-                        role: ChatRole::Tool,
-                        content: format!(
-                            "`tool_result` `{tool_call_id}`\n\n```text\n{content}\n```"
-                        ),
-                        rendered: None,
-                    });
+                    self.pending_history_lines.extend(render_entry_lines(
+                        ChatRole::Tool,
+                        &format!("`tool_result` `{tool_call_id}`\n\n```text\n{content}\n```"),
+                    ));
                 }
             }
             AgentEvent::StepEnd { .. } => {}
@@ -265,8 +329,7 @@ impl App {
                     "done (steps={}, reason={:?})",
                     out.steps, out.finish_reason
                 ));
-                self.streaming_assistant = None;
-                self.flush_requested = true;
+                self.assistant_stream = None;
             }
         }
         Ok(())
@@ -278,55 +341,14 @@ impl App {
             .store
             .record_error(&mut self.session, text.clone())
             .await;
-        self.transcript.push(ChatEntry {
-            role: ChatRole::Info,
-            content: format!("error: {text}"),
-            rendered: None,
-        });
+        self.pending_history_lines.extend(render_entry_lines(
+            ChatRole::Info,
+            &format!("error: {text}"),
+        ));
         self.running = false;
         self.status = Some("error".to_string());
-        self.streaming_assistant = None;
-        self.flush_requested = true;
+        self.assistant_stream = None;
         Ok(())
-    }
-
-    pub fn flush_transcript_to_history(&mut self, width: usize) -> Vec<Line<'static>> {
-        use ratatui::style::Stylize;
-        use ratatui::style::{Color, Style};
-        use ratatui::text::Span;
-
-        let mut out: Vec<Line<'static>> = Vec::new();
-
-        for (idx, entry) in self.transcript.iter_mut().enumerate() {
-            if idx > 0 {
-                out.push(Line::from(""));
-            }
-
-            let (label, color) = match entry.role {
-                ChatRole::User => ("User", Color::Green),
-                ChatRole::Assistant => ("Assistant", Color::Cyan),
-                ChatRole::Tool => ("Tool", Color::Yellow),
-                ChatRole::Info => ("Info", Color::Magenta),
-            };
-
-            let header = Line::from(vec![Span::styled(
-                format!("{label}:"),
-                Style::default().fg(color).bold(),
-            )]);
-
-            let body = entry
-                .rendered
-                .get_or_insert_with(|| crate::markdown::render_markdown_lines(&entry.content));
-
-            out.extend(crate::wrap::wrap_lines(
-                std::slice::from_ref(&header),
-                width,
-            ));
-            out.extend(crate::wrap::wrap_lines(body, width));
-        }
-
-        self.transcript.clear();
-        out
     }
 
     fn reset_history_nav(&mut self) {
@@ -371,4 +393,30 @@ impl App {
         let draft = std::mem::take(&mut self.history_draft);
         self.input.set_text(draft);
     }
+}
+
+fn render_entry_lines(role: ChatRole, content: &str) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    out.push(render_role_header(role));
+    out.extend(render_markdown_lines(content));
+    out.push(Line::from(""));
+    out
+}
+
+fn render_role_header(role: ChatRole) -> Line<'static> {
+    use ratatui::style::Stylize;
+    use ratatui::style::{Color, Style};
+    use ratatui::text::Span;
+
+    let (label, color) = match role {
+        ChatRole::User => ("User", Color::Green),
+        ChatRole::Assistant => ("Assistant", Color::Cyan),
+        ChatRole::Tool => ("Tool", Color::Yellow),
+        ChatRole::Info => ("Info", Color::Magenta),
+    };
+
+    Line::from(vec![Span::styled(
+        format!("{label}:"),
+        Style::default().fg(color).bold(),
+    )])
 }

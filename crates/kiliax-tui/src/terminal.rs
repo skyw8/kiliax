@@ -2,6 +2,7 @@ use std::io::{self, Stdout, Write};
 
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
+use crossterm::terminal::ScrollUp;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
 use ratatui::buffer::Cell;
@@ -20,22 +21,69 @@ pub struct TerminalState {
 }
 
 impl TerminalState {
-    pub fn full_width(&self) -> u16 {
-        self.full_size.width
+    pub fn screen_size(&mut self) -> anyhow::Result<Size> {
+        self.full_size = self.terminal.backend().full_size()?;
+        Ok(self.full_size)
     }
 
     pub fn queue_history_lines(&mut self, lines: Vec<ratatui::text::Line<'static>>) {
         self.pending_history_lines.extend(lines);
     }
 
-    pub fn draw(&mut self, draw_fn: impl FnOnce(&mut ratatui::Frame)) -> anyhow::Result<()> {
+    pub fn draw(
+        &mut self,
+        viewport_height: u16,
+        draw_fn: impl FnOnce(&mut ratatui::Frame),
+    ) -> anyhow::Result<()> {
         self.full_size = self.terminal.backend().full_size()?;
-        self.viewport = compute_viewport(self.full_size);
-        self.terminal.backend_mut().set_viewport(self.viewport);
+        let screen_height = self.full_size.height.max(1);
+        let desired_height = viewport_height.clamp(1, screen_height);
+
+        let mut next_viewport = self.viewport;
+        next_viewport.x = 0;
+        next_viewport.width = self.full_size.width;
+        next_viewport.height = desired_height;
+
+        // If expanding the viewport would exceed the screen, scroll the terminal up to make room.
+        if next_viewport.y.saturating_add(next_viewport.height) > screen_height {
+            let overflow = next_viewport
+                .y
+                .saturating_add(next_viewport.height)
+                .saturating_sub(screen_height);
+            if overflow > 0 {
+                execute!(io::stdout(), ScrollUp(overflow))?;
+                next_viewport.y = next_viewport.y.saturating_sub(overflow);
+            }
+        }
+
+        // Clamp the viewport to the screen.
+        if next_viewport.y >= screen_height {
+            next_viewport.y = screen_height.saturating_sub(1);
+        }
+        if next_viewport.y.saturating_add(next_viewport.height) > screen_height {
+            next_viewport.y = screen_height.saturating_sub(next_viewport.height);
+        }
+
+        if next_viewport != self.viewport {
+            // Clear the old viewport area to prevent stale UI artifacts.
+            self.terminal.backend_mut().set_viewport(self.viewport);
+            self.terminal.clear()?;
+
+            self.viewport = next_viewport;
+            self.terminal.backend_mut().set_viewport(self.viewport);
+            self.terminal.clear()?;
+        } else {
+            self.terminal.backend_mut().set_viewport(self.viewport);
+        }
 
         if !self.pending_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.pending_history_lines);
-            history::insert_history_lines(&lines, self.viewport, self.full_size)?;
+            let before = self.viewport;
+            history::insert_history_lines(&lines, &mut self.viewport, self.full_size)?;
+            if self.viewport != before {
+                self.terminal.backend_mut().set_viewport(self.viewport);
+                self.terminal.clear()?;
+            }
         }
 
         self.terminal.draw(draw_fn)?;
@@ -50,10 +98,16 @@ pub fn init() -> anyhow::Result<(TerminalGuard, TerminalState)> {
     let backend = CrosstermBackend::new(io::stdout());
     let viewport_backend = ViewportBackend::new(backend);
     let mut terminal = Terminal::new(viewport_backend)?;
-    terminal.clear()?;
 
     let full_size = terminal.backend().full_size()?;
-    let viewport = compute_viewport(full_size);
+    let (_, cursor_y) = crossterm::cursor::position().unwrap_or((0, 0));
+    let viewport_y = cursor_y.min(full_size.height.saturating_sub(1));
+    let viewport = Rect::new(
+        0,
+        viewport_y,
+        full_size.width,
+        1.min(full_size.height.max(1)),
+    );
     terminal.backend_mut().set_viewport(viewport);
     terminal.clear()?;
 
@@ -82,21 +136,6 @@ impl Drop for TerminalGuard {
 struct Viewport {
     origin: Position,
     size: Size,
-}
-
-fn compute_viewport(full_size: Size) -> Rect {
-    let height = full_size.height;
-    if height <= 1 {
-        return Rect::new(0, 0, full_size.width, height);
-    }
-
-    let max_height = height.saturating_sub(1);
-    let min_height = 6u16.min(max_height);
-    let desired = 10u16.min(max_height);
-    let viewport_height = desired.max(min_height);
-    let y = height.saturating_sub(viewport_height);
-
-    Rect::new(0, y, full_size.width, viewport_height)
 }
 
 pub struct ViewportBackend<B>

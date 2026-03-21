@@ -1,4 +1,5 @@
 mod app;
+mod header;
 mod highlight;
 mod history;
 mod input;
@@ -9,7 +10,6 @@ mod wrap;
 
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
-use crossterm::{cursor::MoveTo, execute, terminal::Clear, terminal::ClearType};
 use futures_util::StreamExt;
 use kiliax_core::{
     agents::AgentProfile,
@@ -51,13 +51,14 @@ async fn main() -> Result<()> {
     }
 
     let loaded = config::load()?;
-    let model_override = resumed
-        .as_ref()
-        .and_then(|s| s.meta.model_id.as_deref());
+    let model_override = resumed.as_ref().and_then(|s| s.meta.model_id.as_deref());
     let llm = LlmClient::from_config(&loaded.config, model_override)?;
     let runtime = kiliax_core::runtime::AgentRuntime::new(llm, ToolEngine::new(&workspace_root));
 
-    let profile = match (profile_override, resumed.as_ref().map(|s| s.meta.agent.as_str())) {
+    let profile = match (
+        profile_override,
+        resumed.as_ref().map(|s| s.meta.agent.as_str()),
+    ) {
         (Some("plan"), _) => AgentProfile::plan(),
         (Some("build"), _) => AgentProfile::build(),
         (None, Some("plan")) => AgentProfile::plan(),
@@ -71,7 +72,8 @@ async fn main() -> Result<()> {
             (session, messages)
         }
         None => {
-            let mut builder = PromptBuilder::for_agent(&profile).with_workspace_root(&workspace_root);
+            let mut builder =
+                PromptBuilder::for_agent(&profile).with_workspace_root(&workspace_root);
             if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
                 builder = builder.add_skills(skills);
             }
@@ -97,6 +99,11 @@ async fn main() -> Result<()> {
     let (guard, mut terminal) = terminal::init()?;
 
     let mut app = App::new(profile, runtime, options, store, session, messages);
+    terminal.queue_history_lines(header::startup_lines(
+        env!("CARGO_PKG_VERSION"),
+        app.model_id(),
+        &workspace_root,
+    ));
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(33));
     let mut agent_stream: Option<
@@ -106,14 +113,14 @@ async fn main() -> Result<()> {
     > = None;
 
     loop {
-        if app.flush_requested {
-            let width = terminal.full_width();
-            let lines = app.flush_transcript_to_history(width as usize);
-            terminal.queue_history_lines(lines);
-            app.flush_requested = false;
+        let history_lines = app.drain_history_lines();
+        if !history_lines.is_empty() {
+            terminal.queue_history_lines(history_lines);
         }
 
-        terminal.draw(|frame| ui::draw(frame, &mut app))?;
+        let width = terminal.screen_size()?.width;
+        let viewport_height = ui::desired_viewport_height(&app, width);
+        terminal.draw(viewport_height, |frame| ui::draw(frame, &mut app))?;
         if app.should_quit {
             break;
         }
@@ -206,20 +213,25 @@ async fn main() -> Result<()> {
         }
     }
 
-    if !app.transcript.is_empty() {
-        let width = terminal.full_width();
-        let lines = app.flush_transcript_to_history(width as usize);
-        terminal.queue_history_lines(lines);
-        terminal.draw(|_| {})?;
+    let history_lines = app.drain_history_lines();
+    if !history_lines.is_empty() {
+        terminal.queue_history_lines(history_lines);
+        let width = terminal.screen_size()?.width;
+        let viewport_height = ui::desired_viewport_height(&app, width);
+        terminal.draw(viewport_height, |frame| ui::draw(frame, &mut app))?;
     }
 
     let session_id = app.session_id().to_string();
 
+    // Clear the viewport so the shell output isn't interleaved with the composer UI.
+    terminal.draw(1, |frame| {
+        frame.render_widget(ratatui::widgets::Clear, frame.area())
+    })?;
+
     drop(terminal);
     drop(guard);
 
-    execute!(std::io::stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
-    println!("Resume: cargo run -p kiliax-tui -- --resume {session_id}");
+    println!("\nResume: cargo run -p kiliax-tui -- --resume {session_id}");
 
     Ok(())
 }
