@@ -89,8 +89,12 @@ fn expand_special_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'stat
             out.extend(render_user_message_block(&content, width));
             continue;
         }
-        if let Some(ms) = parse_divider_marker(line) {
-            out.extend(render_divider_block(Duration::from_millis(ms), width));
+        if let Some(marker) = parse_divider_marker(line) {
+            out.extend(render_divider_block(
+                Duration::from_millis(marker.ms),
+                marker.output_tokens,
+                width,
+            ));
             continue;
         }
         out.push(line.clone());
@@ -109,23 +113,41 @@ fn parse_user_message_marker(line: &Line<'static>) -> Option<String> {
     serde_json::from_str::<String>(payload).ok()
 }
 
-fn parse_divider_marker(line: &Line<'static>) -> Option<u64> {
+#[derive(Debug, Clone, Copy)]
+struct DividerMarker {
+    ms: u64,
+    output_tokens: Option<u64>,
+}
+
+fn parse_divider_marker(line: &Line<'static>) -> Option<DividerMarker> {
     let text = line
         .spans
         .iter()
         .map(|s| s.content.as_ref())
         .collect::<Vec<_>>()
         .join("");
-    text.strip_prefix(DIVIDER_MARKER_PREFIX)
-        .and_then(|s| s.trim().parse::<u64>().ok())
+    let payload = text.strip_prefix(DIVIDER_MARKER_PREFIX)?;
+    let mut parts = payload.trim().splitn(2, ',');
+    let ms = parts.next()?.trim().parse::<u64>().ok()?;
+    let output_tokens = parts
+        .next()
+        .and_then(|rest| rest.trim().parse::<u64>().ok());
+    Some(DividerMarker { ms, output_tokens })
 }
 
-fn render_divider_block(elapsed: Duration, width: usize) -> Vec<Line<'static>> {
-    vec![Line::from(""), render_divider_line(elapsed, width), Line::from("")]
+fn render_divider_block(elapsed: Duration, output_tokens: Option<u64>, width: usize) -> Vec<Line<'static>> {
+    vec![
+        Line::from(""),
+        render_divider_line(elapsed, output_tokens, width),
+        Line::from(""),
+    ]
 }
 
-fn render_divider_line(elapsed: Duration, width: usize) -> Line<'static> {
-    let label = format!("Worked for {}", fmt_elapsed_compact(elapsed));
+fn render_divider_line(elapsed: Duration, output_tokens: Option<u64>, width: usize) -> Line<'static> {
+    let mut label = format!("Worked for {}", fmt_elapsed_compact(elapsed));
+    if let Some(output_tokens) = output_tokens {
+        label.push_str(&format!(" · {output_tokens} tok"));
+    }
     let mut text = format!("─ {label} ─");
     let mut text_width = text.width();
 

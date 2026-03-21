@@ -97,6 +97,9 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::from("—").dim());
     }
 
+    spans.push(Span::from(" · ").dim());
+    spans.push(Span::from(format!("{} tok", app.turn_output_tokens())).dim());
+
     if let Some((tool, elapsed)) = app.active_tool_elapsed() {
         spans.push(Span::from(" · ").dim());
         let (name, rest) = match tool.split_once(' ') {
@@ -119,6 +122,8 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::from(format!("thinking (step {step})")).dim());
         spans.push(Span::from(" ").dim());
         spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
+        spans.push(Span::from(" · ").dim());
+        spans.push(Span::from(format!("{} tok", app.step_output_tokens())).dim());
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

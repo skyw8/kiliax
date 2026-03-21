@@ -98,6 +98,69 @@ fn line_is_blank(line: &Line<'static>) -> bool {
     text.trim().is_empty()
 }
 
+#[derive(Debug, Default, Clone)]
+struct OutputTokenCounter {
+    tokens: u64,
+    carry_bytes: usize,
+}
+
+impl OutputTokenCounter {
+    fn reset(&mut self) {
+        self.tokens = 0;
+        self.carry_bytes = 0;
+    }
+
+    fn estimate(&self) -> u64 {
+        self.tokens + ((self.carry_bytes + 3) / 4) as u64
+    }
+
+    fn finish_segment(&mut self) {
+        if self.carry_bytes > 0 {
+            self.tokens += ((self.carry_bytes + 3) / 4) as u64;
+            self.carry_bytes = 0;
+        }
+    }
+
+    fn push_str(&mut self, text: &str) {
+        for ch in text.chars() {
+            if is_cjk_like(ch) {
+                self.finish_segment();
+                self.tokens += 1;
+                continue;
+            }
+
+            if ch.is_whitespace() {
+                self.finish_segment();
+                continue;
+            }
+
+            if ch.is_ascii() {
+                self.carry_bytes = self.carry_bytes.saturating_add(1);
+                continue;
+            }
+
+            // For non-ASCII, non-CJK characters (e.g. emoji), fall back to 1 char ≈ 1 token.
+            self.finish_segment();
+            self.tokens += 1;
+        }
+    }
+}
+
+fn is_cjk_like(ch: char) -> bool {
+    matches!(ch as u32,
+        0x3400..=0x4DBF | // CJK Unified Ideographs Extension A
+        0x4E00..=0x9FFF | // CJK Unified Ideographs
+        0x20000..=0x2A6DF | // CJK Unified Ideographs Extension B
+        0x2A700..=0x2B73F | // CJK Unified Ideographs Extension C
+        0x2B740..=0x2B81F | // CJK Unified Ideographs Extension D
+        0x2B820..=0x2CEAF | // CJK Unified Ideographs Extension E
+        0x2CEB0..=0x2EBEF | // CJK Unified Ideographs Extension F
+        0x3040..=0x309F | // Hiragana
+        0x30A0..=0x30FF | // Katakana
+        0xAC00..=0xD7AF   // Hangul Syllables
+    )
+}
+
 #[derive(Debug, Clone)]
 struct PendingToolCall {
     name: String,
@@ -138,6 +201,10 @@ pub struct App {
     step_started_at: Option<Instant>,
     current_step: Option<usize>,
     pending_tool_calls: HashMap<String, PendingToolCall>,
+
+    turn_output_tokens: OutputTokenCounter,
+    step_output_tokens: OutputTokenCounter,
+    saw_delta_in_step: bool,
 }
 
 impl App {
@@ -178,6 +245,9 @@ impl App {
             step_started_at: None,
             current_step: None,
             pending_tool_calls: HashMap::new(),
+            turn_output_tokens: OutputTokenCounter::default(),
+            step_output_tokens: OutputTokenCounter::default(),
+            saw_delta_in_step: false,
         }
     }
 
@@ -200,6 +270,14 @@ impl App {
         }
     }
 
+    pub fn turn_output_tokens(&self) -> u64 {
+        self.turn_output_tokens.estimate()
+    }
+
+    pub fn step_output_tokens(&self) -> u64 {
+        self.step_output_tokens.estimate()
+    }
+
     pub fn active_tool_elapsed(&self) -> Option<(String, Duration)> {
         let pending = self
             .pending_tool_calls
@@ -220,6 +298,9 @@ impl App {
         self.step_started_at = None;
         self.current_step = None;
         self.pending_tool_calls.clear();
+        self.turn_output_tokens.reset();
+        self.step_output_tokens.reset();
+        self.saw_delta_in_step = false;
     }
 
     pub fn drain_history_lines(&mut self) -> Vec<Line<'static>> {
@@ -299,6 +380,9 @@ impl App {
         self.step_started_at = None;
         self.current_step = None;
         self.pending_tool_calls.clear();
+        self.turn_output_tokens.reset();
+        self.step_output_tokens.reset();
+        self.saw_delta_in_step = false;
         Ok(self
             .runtime
             .run_stream(&self.profile, self.messages.clone(), self.options.clone())
@@ -312,8 +396,14 @@ impl App {
                 self.assistant_stream = None;
                 self.step_started_at = Some(Instant::now());
                 self.current_step = Some(step);
+                self.step_output_tokens.reset();
+                self.saw_delta_in_step = false;
             }
             AgentEvent::AssistantDelta { delta } => {
+                self.turn_output_tokens.push_str(&delta);
+                self.step_output_tokens.push_str(&delta);
+                self.saw_delta_in_step = true;
+
                 if self.assistant_stream.is_none() {
                     self.assistant_stream = Some(MarkdownStreamCollector::default());
                 }
@@ -337,6 +427,13 @@ impl App {
                 } = message
                 {
                     let content = content.unwrap_or_default();
+                    if !self.saw_delta_in_step && !content.is_empty() {
+                        self.turn_output_tokens.push_str(&content);
+                        self.step_output_tokens.push_str(&content);
+                    }
+                    self.turn_output_tokens.finish_segment();
+                    self.step_output_tokens.finish_segment();
+
                     if !content.is_empty() {
                         if self.assistant_stream.is_none() {
                             self.assistant_stream = Some(MarkdownStreamCollector::default());
@@ -360,6 +457,10 @@ impl App {
             AgentEvent::ToolCall { call } => {
                 let started_at = Instant::now();
                 let kind = classify_tool_call(&call);
+                self.turn_output_tokens.push_str(&call.name);
+                self.turn_output_tokens.push_str(" ");
+                self.turn_output_tokens.push_str(&call.arguments);
+                self.turn_output_tokens.finish_segment();
                 self.pending_tool_calls.insert(
                     call.id.clone(),
                     PendingToolCall {
@@ -422,8 +523,10 @@ impl App {
                 self.assistant_stream = None;
 
                 if let Some(started_at) = self.turn_started_at.take() {
+                    self.turn_output_tokens.finish_segment();
+                    let output_tokens = self.turn_output_tokens.estimate();
                     self.pending_history_lines
-                        .push(turn_divider_marker(started_at.elapsed()));
+                        .push(turn_divider_marker(started_at.elapsed(), output_tokens));
                 }
                 self.step_started_at = None;
                 self.current_step = None;
@@ -442,8 +545,10 @@ impl App {
         self.pending_history_lines
             .extend(render_error_lines(&text));
         if let Some(started_at) = self.turn_started_at.take() {
+            self.turn_output_tokens.finish_segment();
+            let output_tokens = self.turn_output_tokens.estimate();
             self.pending_history_lines
-                .push(turn_divider_marker(started_at.elapsed()));
+                .push(turn_divider_marker(started_at.elapsed(), output_tokens));
         }
         self.running = false;
         self.status = Some("error".to_string());
@@ -516,11 +621,12 @@ fn fmt_duration_compact(duration: Duration) -> String {
     }
 }
 
-fn turn_divider_marker(elapsed: Duration) -> Line<'static> {
+fn turn_divider_marker(elapsed: Duration, output_tokens: u64) -> Line<'static> {
     Line::from(Span::from(format!(
-        "{}{}",
+        "{}{},{}",
         crate::history::DIVIDER_MARKER_PREFIX,
-        elapsed.as_millis()
+        elapsed.as_millis(),
+        output_tokens
     )))
 }
 
