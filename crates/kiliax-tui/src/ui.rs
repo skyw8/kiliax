@@ -13,9 +13,13 @@ const COMPOSER_PAD_BOTTOM: u16 = 1;
 const COMPOSER_PAD_RIGHT: u16 = 1;
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 const FOOTER_HEIGHT: u16 = 2;
+const STATUS_HEIGHT: u16 = 1;
 
 pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
-    desired_composer_height(app, width).saturating_add(FOOTER_HEIGHT)
+    let status_height = if app.running { STATUS_HEIGHT } else { 0 };
+    desired_composer_height(app, width)
+        .saturating_add(status_height)
+        .saturating_add(FOOTER_HEIGHT)
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
@@ -33,12 +37,25 @@ pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(footer_height)]).areas(area)
     };
 
+    let (status_area, composer_area) = split_status_and_composer(app, composer_area);
+    if !status_area.is_empty() {
+        draw_status_line(frame, app, status_area);
+    }
     draw_composer(frame, app, composer_area);
     if !footer_area.is_empty() {
         draw_footer(frame, app, footer_area);
     }
 
     frame.render_widget(Block::default().style(composer_style), composer_area);
+}
+
+fn split_status_and_composer(app: &App, area: Rect) -> (Rect, Rect) {
+    if !app.running || area.height <= STATUS_HEIGHT {
+        return (Rect::ZERO, area);
+    }
+    let [status, composer] =
+        Layout::vertical([Constraint::Length(STATUS_HEIGHT), Constraint::Min(1)]).areas(area);
+    (status, composer)
 }
 
 fn desired_composer_height(app: &App, width: u16) -> u16 {
@@ -50,6 +67,49 @@ fn desired_composer_height(app: &App, width: u16) -> u16 {
 
 fn inner_text_width(width: u16) -> u16 {
     width.saturating_sub(LIVE_PREFIX_COLS + COMPOSER_PAD_RIGHT)
+}
+
+fn fmt_duration_compact(duration: std::time::Duration) -> String {
+    let ms = duration.as_millis() as u64;
+    if ms >= 60_000 {
+        let secs = ms / 1_000;
+        let minutes = secs / 60;
+        let seconds = secs % 60;
+        format!("{minutes}m{seconds:02}s")
+    } else if ms >= 1_000 {
+        format!("{:.1}s", ms as f64 / 1_000.0)
+    } else {
+        format!("{ms}ms")
+    }
+}
+
+fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
+    if area.is_empty() {
+        return;
+    }
+
+    let indent = " ".repeat(LIVE_PREFIX_COLS as usize);
+    let mut spans = vec![Span::styled(indent, Style::default()), Span::from("working ").dim()];
+
+    if let Some(elapsed) = app.turn_elapsed() {
+        spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
+    } else {
+        spans.push(Span::from("—").dim());
+    }
+
+    if let Some((tool, elapsed)) = app.active_tool_elapsed() {
+        spans.push(Span::from(" · ").dim());
+        spans.push(Span::from(tool).dim());
+        spans.push(Span::from(" ").dim());
+        spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
+    } else if let Some((step, elapsed)) = app.step_elapsed() {
+        spans.push(Span::from(" · ").dim());
+        spans.push(Span::from(format!("thinking (step {step})")).dim());
+        spans.push(Span::from(" ").dim());
+        spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {

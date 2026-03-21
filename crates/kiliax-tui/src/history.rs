@@ -1,15 +1,22 @@
 use std::fmt;
 use std::io;
 use std::io::Write;
+use std::time::Duration;
 
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::{Attribute, Color as CColor, Print, SetAttribute, SetForegroundColor};
+use crossterm::style::SetBackgroundColor;
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::Command;
 use ratatui::layout::{Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
+
+pub const DIVIDER_MARKER_PREFIX: &str = "\u{001f}kiliax_divider:";
 
 pub fn insert_history_lines(
     lines: &[Line<'static>],
@@ -26,7 +33,8 @@ pub fn insert_history_lines(
 
     let mut out = io::stdout();
 
-    let wrapped = crate::wrap::wrap_lines(lines, full_size.width as usize);
+    let expanded = expand_special_lines(lines, full_size.width as usize);
+    let wrapped = crate::wrap::wrap_lines(&expanded, full_size.width as usize);
     let wrapped_rows = wrapped.len().min(u16::MAX as usize) as u16;
 
     // If the viewport is not at the bottom of the screen, scroll the lower region down to make
@@ -60,6 +68,7 @@ pub fn insert_history_lines(
 
     for line in wrapped {
         queue!(out, Print("\r\n"))?;
+        apply_style(&mut out, line.style)?;
         queue!(out, Clear(ClearType::UntilNewLine))?;
         write_spans(&mut out, line.spans.iter(), line.style)?;
     }
@@ -67,6 +76,84 @@ pub fn insert_history_lines(
     queue!(out, ResetScrollRegion)?;
     out.flush()?;
     Ok(())
+}
+
+fn expand_special_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let Some(ms) = parse_divider_marker(line) {
+            out.push(render_divider_line(Duration::from_millis(ms), width));
+            continue;
+        }
+        out.push(line.clone());
+    }
+    out
+}
+
+fn parse_divider_marker(line: &Line<'static>) -> Option<u64> {
+    let text = line
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    text.strip_prefix(DIVIDER_MARKER_PREFIX)
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+fn render_divider_line(elapsed: Duration, width: usize) -> Line<'static> {
+    let label = format!("Worked for {}", fmt_elapsed_compact(elapsed));
+    let mut text = format!("─ {label} ─");
+    let mut text_width = text.width();
+
+    if text_width > width {
+        text = take_prefix_by_width(&text, width);
+        text_width = text.width();
+    }
+    if text_width < width {
+        text.push_str(&"─".repeat(width - text_width));
+    }
+
+    let mut line = Line::from(Span::from(text));
+    line.style = Style::default().dim();
+    line
+}
+
+fn fmt_elapsed_compact(elapsed: Duration) -> String {
+    let ms = elapsed.as_millis() as u64;
+    if ms >= 60_000 {
+        let secs = ms / 1_000;
+        let minutes = secs / 60;
+        let seconds = secs % 60;
+        format!("{minutes}m{seconds:02}s")
+    } else if ms >= 1_000 {
+        format!("{:.1}s", ms as f64 / 1_000.0)
+    } else {
+        format!("{ms}ms")
+    }
+}
+
+fn take_prefix_by_width(input: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut seen = 0usize;
+    for ch in input.chars() {
+        let w = ch.width().unwrap_or(0);
+        if seen + w > width {
+            break;
+        }
+        out.push(ch);
+        seen += w;
+        if seen == width {
+            break;
+        }
+    }
+    if out.is_empty() {
+        out.push(' ');
+    }
+    out
 }
 
 fn write_spans<'a, I>(w: &mut impl Write, spans: I, line_style: Style) -> io::Result<()>
@@ -81,7 +168,8 @@ where
     queue!(
         w,
         SetAttribute(Attribute::Reset),
-        SetForegroundColor(CColor::Reset)
+        SetForegroundColor(CColor::Reset),
+        SetBackgroundColor(CColor::Reset)
     )?;
     Ok(())
 }
@@ -90,11 +178,15 @@ fn apply_style(w: &mut impl Write, style: Style) -> io::Result<()> {
     queue!(
         w,
         SetAttribute(Attribute::Reset),
-        SetForegroundColor(CColor::Reset)
+        SetForegroundColor(CColor::Reset),
+        SetBackgroundColor(CColor::Reset)
     )?;
 
     if let Some(color) = style.fg {
         queue!(w, SetForegroundColor(to_crossterm_color(color)))?;
+    }
+    if let Some(color) = style.bg {
+        queue!(w, SetBackgroundColor(to_crossterm_color(color)))?;
     }
 
     let modifiers = style.add_modifier - style.sub_modifier;

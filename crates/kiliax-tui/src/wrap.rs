@@ -18,7 +18,10 @@ pub fn wrap_lines(lines: &[Line<'static>], max_width: usize) -> Vec<Line<'static
 
 fn wrap_line(line: &Line<'static>, max_width: usize) -> Vec<Line<'static>> {
     if line.spans.is_empty() {
-        return vec![Line::from("")];
+        let mut blank = Line::from("");
+        blank.style = line.style;
+        blank.alignment = line.alignment;
+        return vec![blank];
     }
 
     let mut out: Vec<Line<'static>> = Vec::new();
@@ -32,7 +35,10 @@ fn wrap_line(line: &Line<'static>, max_width: usize) -> Vec<Line<'static>> {
             .filter(|(_, s)| !s.is_empty())
             .map(|(style, s)| Span::styled(s, style))
             .collect();
-        out.push(Line::from(spans));
+        let mut line_out = Line::from(spans);
+        line_out.style = line.style;
+        line_out.alignment = line.alignment;
+        out.push(line_out);
     };
 
     for span in &line.spans {

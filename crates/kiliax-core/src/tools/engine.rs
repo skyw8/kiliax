@@ -134,7 +134,9 @@ mod tests {
         };
 
         let out = engine.execute(&build_permissions(), &call).await.unwrap();
-        assert_eq!(out, "ok");
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(parsed.get("path").and_then(|v| v.as_str()), Some("a.txt"));
         let s = tokio::fs::read_to_string(tmp.path().join("a.txt"))
             .await
             .unwrap();
