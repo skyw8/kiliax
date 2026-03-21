@@ -18,7 +18,7 @@ pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
     desired_composer_height(app, width).saturating_add(FOOTER_HEIGHT)
 }
 
-pub fn draw(frame: &mut Frame, app: &mut App) {
+pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
     let area = frame.area();
     frame.render_widget(Clear, area);
 
@@ -37,6 +37,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if !footer_area.is_empty() {
         draw_footer(frame, app, footer_area);
     }
+
+    frame.render_widget(Block::default().style(composer_style), composer_area);
 }
 
 fn desired_composer_height(app: &App, width: u16) -> u16 {
@@ -54,8 +56,6 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.is_empty() {
         return;
     }
-
-    frame.render_widget(Block::default(), area);
 
     let textarea = textarea_rect(area);
     if textarea.is_empty() {

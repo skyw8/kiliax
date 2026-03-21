@@ -4,6 +4,7 @@ mod highlight;
 mod history;
 mod input;
 mod markdown;
+mod style;
 mod terminal;
 mod ui;
 mod wrap;
@@ -97,6 +98,7 @@ async fn main() -> Result<()> {
     };
 
     let (guard, mut terminal) = terminal::init()?;
+    let composer_style = style::composer_background_style();
 
     let mut app = App::new(profile, runtime, options, store, session, messages);
     terminal.queue_history_lines(header::startup_lines(
@@ -120,7 +122,9 @@ async fn main() -> Result<()> {
 
         let width = terminal.screen_size()?.width;
         let viewport_height = ui::desired_viewport_height(&app, width);
-        terminal.draw(viewport_height, |frame| ui::draw(frame, &mut app))?;
+        terminal.draw(viewport_height, |frame| {
+            ui::draw(frame, &mut app, composer_style)
+        })?;
         if app.should_quit {
             break;
         }
@@ -218,7 +222,9 @@ async fn main() -> Result<()> {
         terminal.queue_history_lines(history_lines);
         let width = terminal.screen_size()?.width;
         let viewport_height = ui::desired_viewport_height(&app, width);
-        terminal.draw(viewport_height, |frame| ui::draw(frame, &mut app))?;
+        terminal.draw(viewport_height, |frame| {
+            ui::draw(frame, &mut app, composer_style)
+        })?;
     }
 
     let session_id = app.session_id().to_string();
