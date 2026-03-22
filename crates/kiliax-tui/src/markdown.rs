@@ -70,6 +70,62 @@ pub fn render_markdown_lines(input: &str) -> Vec<Line<'static>> {
     writer.lines
 }
 
+#[cfg(test)]
+mod tests {
+    use super::render_markdown_lines;
+
+    fn to_plain_lines(rendered: Vec<ratatui::text::Line<'static>>) -> Vec<String> {
+        rendered
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|s| s.content.as_ref().to_string())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn renders_sample_greeting_without_extra_blank_lines() {
+        let input = "\
+Hello! I'm the build agent, ready to help you implement changes in the repository.
+
+What would you like me to work on? I can:
+
+- Read and write files
+
+- Run build and test commands
+
+- Make incremental changes to the codebase
+
+Just let me know what changes you'd like to make!
+";
+
+        let lines = to_plain_lines(render_markdown_lines(input));
+        assert!(
+            !lines.iter().any(|l| l.trim().is_empty()),
+            "expected compact rendering without blank lines, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn rendered_lines_never_contain_newline_characters() {
+        let input = "a\nb\n- c\n";
+        let rendered = render_markdown_lines(input);
+        for line in rendered {
+            for span in line.spans {
+                let s = span.content.as_ref();
+                assert!(
+                    !s.contains('\n') && !s.contains('\r'),
+                    "span contains newline characters: {s:?}"
+                );
+            }
+        }
+    }
+}
+
 struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,

@@ -3,7 +3,7 @@ use std::io;
 use std::io::Write;
 use std::time::Duration;
 
-use crossterm::cursor::MoveTo;
+use crossterm::cursor::{MoveTo, MoveToColumn};
 use crossterm::queue;
 use crossterm::style::{Attribute, Color as CColor, Print, SetAttribute, SetForegroundColor};
 use crossterm::style::SetBackgroundColor;
@@ -71,7 +71,9 @@ pub fn insert_history_lines(
     queue!(out, SetScrollRegion(1..viewport_top), MoveTo(0, cursor_row))?;
 
     for line in wrapped {
-        queue!(out, Print("\r\n"))?;
+        // Use a single LF and an explicit cursor move to avoid terminals/PTYs that remap CR to NL
+        // (which would otherwise double-space the output when printing "\r\n").
+        queue!(out, Print("\n"), MoveToColumn(0))?;
         apply_style(&mut out, line.style)?;
         queue!(out, Clear(ClearType::UntilNewLine))?;
         write_spans(&mut out, line.spans.iter(), line.style)?;
