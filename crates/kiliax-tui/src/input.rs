@@ -128,3 +128,68 @@ fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
         .map(|(idx, _)| idx)
         .unwrap_or_else(|| s.len())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_move_and_submit_roundtrip() {
+        let mut input = InputLine::default();
+        input.insert_str("hi");
+        assert_eq!(input.text(), "hi");
+        assert_eq!(input.cursor(), 2);
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(input.cursor(), 1);
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        assert_eq!(input.text(), "h!i");
+        assert_eq!(input.cursor(), 2);
+
+        let action = input.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let InputAction::Submit(text) = action else {
+            panic!("expected submit action");
+        };
+        assert_eq!(text, "h!i");
+        assert_eq!(input.text(), "");
+        assert_eq!(input.cursor(), 0);
+    }
+
+    #[test]
+    fn ctrl_u_clears_input() {
+        let mut input = InputLine::default();
+        input.set_text("abc");
+        assert_eq!(input.text(), "abc");
+        assert_eq!(input.cursor(), 3);
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(input.text(), "");
+        assert_eq!(input.cursor(), 0);
+    }
+
+    #[test]
+    fn unicode_backspace_and_delete_are_char_based() {
+        let mut input = InputLine::default();
+        input.set_text("你a");
+        assert_eq!(input.cursor(), 2);
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(input.text(), "你");
+        assert_eq!(input.cursor(), 1);
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(input.text(), "");
+        assert_eq!(input.cursor(), 0);
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(input.text(), "");
+        assert_eq!(input.cursor(), 0);
+
+        input.set_text("你a");
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        assert_eq!(input.text(), "a");
+        assert_eq!(input.cursor(), 0);
+    }
+}

@@ -359,3 +359,77 @@ fn to_crossterm_color(color: Color) -> CColor {
         Color::Indexed(i) => CColor::AnsiValue(i),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    fn plain(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn user_message_marker_roundtrip() {
+        let content = "Hello\nWorld";
+        let payload = serde_json::to_string(content).unwrap();
+        let line = Line::from(Span::from(format!("{USER_MESSAGE_MARKER_PREFIX}{payload}")));
+        assert_eq!(parse_user_message_marker(&line), Some(content.to_string()));
+    }
+
+    #[test]
+    fn divider_marker_parses_ms_and_optional_tokens() {
+        let line = Line::from(Span::from(format!("{DIVIDER_MARKER_PREFIX}123,456")));
+        let marker = parse_divider_marker(&line).unwrap();
+        assert_eq!(marker.ms, 123);
+        assert_eq!(marker.output_tokens, Some(456));
+
+        let line = Line::from(Span::from(format!("{DIVIDER_MARKER_PREFIX}789")));
+        let marker = parse_divider_marker(&line).unwrap();
+        assert_eq!(marker.ms, 789);
+        assert_eq!(marker.output_tokens, None);
+    }
+
+    #[test]
+    fn user_message_block_has_padding_prefixes_and_composer_style() {
+        let bubble = crate::style::composer_background_style();
+        let block = render_user_message_block("hello world", 8);
+
+        assert!(block.len() >= 4, "expected wrapped block, got {block:?}");
+
+        // top + bottom padding
+        assert_eq!(plain(&block[0]), "");
+        assert_eq!(plain(block.last().unwrap()), "");
+        assert_eq!(block[0].style.bg, bubble.bg);
+        assert_eq!(block.last().unwrap().style.bg, bubble.bg);
+
+        // first content line uses arrow prefix, subsequent lines use spaces
+        assert_eq!(block[1].spans[0].content.as_ref(), "› ");
+        for line in block.iter().skip(2).take(block.len().saturating_sub(3)) {
+            assert_eq!(line.spans[0].content.as_ref(), "  ");
+        }
+
+        for line in &block {
+            assert_eq!(line.style.bg, bubble.bg);
+        }
+    }
+
+    #[test]
+    fn divider_line_is_exact_width_and_dimmed() {
+        let line = render_divider_line(Duration::from_millis(1234), Some(99), 20);
+        assert_eq!(plain(&line).width(), 20);
+        let modifiers = line.style.add_modifier - line.style.sub_modifier;
+        assert!(modifiers.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn take_prefix_by_width_never_returns_empty_for_nonzero_width() {
+        assert_eq!(take_prefix_by_width("你", 0), "");
+        assert_eq!(take_prefix_by_width("你", 1), " ");
+        assert_eq!(take_prefix_by_width("你", 2), "你");
+    }
+}

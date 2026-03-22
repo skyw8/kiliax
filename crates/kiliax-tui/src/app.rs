@@ -1163,3 +1163,157 @@ struct WriteToolOutput {
     #[serde(default)]
     removed_lines: Option<usize>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kiliax_core::config::ResolvedModel;
+    use kiliax_core::llm::LlmClient;
+    use kiliax_core::tools::ToolEngine;
+    use ratatui::style::Modifier;
+
+    fn plain(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn soft_wrap_prefers_whitespace_boundaries() {
+        assert_eq!(soft_wrap_split_idx("hello world", 5), Some(5));
+        assert_eq!(soft_wrap_split_idx("a", 1), None);
+        assert_eq!(soft_wrap_split_idx("a", 0), None);
+
+        // Wide characters (e.g. CJK) should wrap by display width.
+        let idx = soft_wrap_split_idx("你好啊", 3).unwrap();
+        assert_eq!(&"你好啊"[..idx], "你");
+    }
+
+    #[test]
+    fn thinking_stream_wraps_and_styles_lines() {
+        let mut stream = ThinkingStreamCollector::default();
+        let out = stream.push_delta("hello world", 5);
+        assert_eq!(out.len(), 1);
+        assert_eq!(plain(&out[0]), "hello");
+
+        let modifiers = out[0].style.add_modifier - out[0].style.sub_modifier;
+        assert!(modifiers.contains(Modifier::DIM));
+        assert!(modifiers.contains(Modifier::ITALIC));
+
+        let out = stream.finalize_and_drain(5);
+        assert_eq!(out.len(), 1);
+        assert_eq!(plain(&out[0]), "world");
+    }
+
+    #[test]
+    fn thinking_stream_ignores_blank_output() {
+        let mut stream = ThinkingStreamCollector::default();
+        let out = stream.push_delta("   \n\n", 80);
+        assert!(out.is_empty());
+        let out = stream.finalize_and_drain(80);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn markdown_stream_commits_complete_lines_and_trims_leading_newlines() {
+        let mut stream = MarkdownStreamCollector::default();
+        stream.push_delta("\n\nHello\nWorld");
+
+        let out = stream.commit_complete_lines();
+        assert_eq!(out.len(), 1);
+        assert_eq!(plain(&out[0]), "Hello");
+
+        let out = stream.finalize_and_drain();
+        assert_eq!(out.len(), 1);
+        assert_eq!(plain(&out[0]), "World");
+    }
+
+    #[test]
+    fn output_token_counter_is_reasonable_for_ascii_and_cjk() {
+        let mut counter = OutputTokenCounter::default();
+        counter.push_str("abcd");
+        assert_eq!(counter.estimate(), 1);
+
+        counter.push_str(" efgh");
+        assert_eq!(counter.estimate(), 2);
+
+        counter.finish_segment();
+        assert_eq!(counter.estimate(), 2);
+
+        counter.push_str("你");
+        counter.push_str("🙂");
+        assert_eq!(counter.estimate(), 4);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn app_does_not_interleave_thinking_after_assistant_output_begins() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let store = FileSessionStore::new(tmp.path());
+        let messages = vec![Message::User {
+            content: "hi".to_string(),
+        }];
+        let session = store
+            .create(
+                "build",
+                Some("p/m".to_string()),
+                None,
+                None,
+                messages.clone(),
+            )
+            .await
+            .unwrap();
+
+        let llm = LlmClient::new(ResolvedModel {
+            provider: "p".to_string(),
+            model: "m".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key: None,
+        });
+        let tools = ToolEngine::new(tmp.path());
+        let runtime = AgentRuntime::new(llm, tools);
+
+        let mut app = App::new(
+            AgentProfile::build(),
+            runtime,
+            AgentRuntimeOptions::default(),
+            store,
+            session,
+            messages,
+        );
+        app.set_screen_width(40);
+
+        app.handle_agent_event(AgentEvent::StepStart { step: 1 })
+            .await
+            .unwrap();
+        app.handle_agent_event(AgentEvent::AssistantThinkingDelta {
+            delta: "plan".to_string(),
+        })
+        .await
+        .unwrap();
+        app.handle_agent_event(AgentEvent::AssistantDelta {
+            delta: "Hello\n".to_string(),
+        })
+        .await
+        .unwrap();
+        app.handle_agent_event(AgentEvent::AssistantThinkingDelta {
+            delta: "SHOULD_BE_IGNORED\n".to_string(),
+        })
+        .await
+        .unwrap();
+
+        let lines = app.drain_history_lines();
+        let plain_lines: Vec<String> = lines.iter().map(plain).collect();
+
+        assert_eq!(plain_lines.len(), 3);
+        assert_eq!(plain_lines[0], "• Thinking (step 1)");
+        assert_eq!(plain_lines[1], "plan");
+        assert_eq!(plain_lines[2], "Hello");
+
+        let modifiers = lines[1].style.add_modifier - lines[1].style.sub_modifier;
+        assert!(modifiers.contains(Modifier::DIM));
+        assert!(modifiers.contains(Modifier::ITALIC));
+    }
+}

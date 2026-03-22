@@ -33,11 +33,11 @@ minimal
   - `stream_chat.rs`: 流式 chat 示例（展示 delta 与 tool_call delta 合并）
   - `agent_loop.rs`: AgentRuntime + PromptBuilder 的闭环示例（流式输出 + 自动执行工具）
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
-- `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、`<provider>/<model>` 路由；agent 运行参数（`runtime`/`agents.*`）
+- `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、`<provider>/<model>` 路由；agent 运行参数（`runtime`/`agents.*`）；包含 config 优先级/resolve_model 单元测试
 - `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；流式通过 `byot` 解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`
 - `crates/kiliax-core/src/agents.rs`: `AgentProfile`（plan/build）及其可用工具集合与权限模型
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（组装 system 前缀：agent prompt + tools 规范 + workspace root + `<skills_instructions>` skills 列表 + 对话消息）
-- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；流式 run 支持取消）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`
+- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；流式 run 支持取消）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`；包含流式 delta/thinking/tool_call 合并与默认 id 等单元测试
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`
@@ -52,17 +52,17 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
 - `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流）；每帧同步终端宽度到 `App` 供 thinking 软换行流式渲染
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；`AssistantThinkingDelta` 灰色斜体输出，按终端宽度软换行逐行流式；正文开始后关闭/忽略 thinking 以避免混入正文；正文去掉多余前导空行；StepStart 先写入 Thinking 行再流式插入 AssistantDelta；统计输出 token 并用于 status/divider；工具调用折叠与 write diff 渲染）
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；`AssistantThinkingDelta` 灰色斜体输出，按终端宽度软换行逐行流式；正文开始后关闭/忽略 thinking 以避免混入正文；正文去掉多余前导空行；StepStart 先写入 Thinking 行再流式插入 AssistantDelta；统计输出 token 并用于 status/divider；工具调用折叠与 write diff 渲染）；包含 stream collector/不交织约束等单元测试
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；输入框上方状态行显示计时 + token（当前 tool/step）；底部 footer（model/status/快捷键）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式与 diff 行背景（从终端默认背景色推导，类似 codex）
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect → ratatui spans）
-- `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行
-- `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；支持整行替换（历史回填）
+- `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行（含宽字符/样式保持单元测试）
+- `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；支持整行替换（历史回填）；包含 Unicode/快捷键单元测试
 - `crates/kiliax-tui/src/custom_terminal.rs`: TUI 用到的自定义终端命令（scroll region、wraparound 开关、RI 等 ANSI 序列封装）
 - `crates/kiliax-tui/src/terminal.rs`: inline viewport backend（viewport 可下推/可伸缩；raw mode + bracketed paste）；仅重绘 viewport；跳过绘制终端右下角单元格以规避部分终端的滚屏/空行问题；每帧用 Synchronized Update 包裹所有写入（同一 backend writer）以减少 tearing
-- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致的灰底样式并保留上下 padding；支持 fg/bg/italic 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\\r\\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\\r/\\n`；必要时清理 continuation rows 以避免残留/空行；相关 ANSI 命令封装在 `custom_terminal`）
+- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致的灰底样式并保留上下 padding；支持 fg/bg/italic 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\\r\\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\\r/\\n`；必要时清理 continuation rows 以避免残留/空行；相关 ANSI 命令封装在 `custom_terminal`）；包含 marker 解析/user bubble/divider 展开单元测试
 
 ## constraints
 

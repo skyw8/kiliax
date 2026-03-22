@@ -489,4 +489,105 @@ mod tests {
         assert_eq!(tool_calls[0].arguments, "{\"path\":\"README.md\"}");
         assert_eq!(out.finish_reason, Some(FinishReason::Stop));
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_forwards_thinking_deltas_in_order() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+
+        let chunks = vec![
+            Ok(ChatStreamChunk {
+                id: "chat_1".to_string(),
+                created: 0,
+                model: "m".to_string(),
+                content_delta: Some("Hello ".to_string()),
+                thinking_delta: Some("t1".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: None,
+                usage: None,
+            }),
+            Ok(ChatStreamChunk {
+                id: "chat_1".to_string(),
+                created: 0,
+                model: "m".to_string(),
+                content_delta: Some("world".to_string()),
+                thinking_delta: Some("t2".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: Some(FinishReason::Stop),
+                usage: None,
+            }),
+        ];
+
+        let stream = tokio_stream::iter(chunks);
+        let out = drive_stream_step(0, stream, &tx).await.unwrap();
+        drop(tx);
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            let event = event.unwrap();
+            match event {
+                AgentEvent::AssistantThinkingDelta { delta } => events.push(("thinking", delta)),
+                AgentEvent::AssistantDelta { delta } => events.push(("content", delta)),
+                _ => {}
+            }
+        }
+
+        assert_eq!(
+            events,
+            vec![
+                ("thinking", "t1".to_string()),
+                ("content", "Hello ".to_string()),
+                ("thinking", "t2".to_string()),
+                ("content", "world".to_string()),
+            ]
+        );
+
+        let Message::Assistant {
+            content,
+            tool_calls,
+        } = out.assistant
+        else {
+            panic!("expected assistant message");
+        };
+        assert_eq!(content.unwrap(), "Hello world");
+        assert!(tool_calls.is_empty());
+        assert_eq!(out.finish_reason, Some(FinishReason::Stop));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_generates_tool_call_id_and_unknown_name_when_missing() {
+        let (tx, _rx) =
+            tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+
+        let chunks = vec![Ok(ChatStreamChunk {
+            id: "chat_1".to_string(),
+            created: 0,
+            model: "m".to_string(),
+            content_delta: None,
+            thinking_delta: None,
+            tool_calls: vec![ToolCallDelta {
+                index: 1,
+                id: None,
+                name: None,
+                arguments: Some("{\"x\":1}".to_string()),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+        })];
+
+        let stream = tokio_stream::iter(chunks);
+        let out = drive_stream_step(0, stream, &tx).await.unwrap();
+
+        let Message::Assistant {
+            content,
+            tool_calls,
+        } = out.assistant
+        else {
+            panic!("expected assistant message");
+        };
+        assert!(content.is_none());
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_step1_1");
+        assert_eq!(tool_calls[0].name, "unknown");
+        assert_eq!(tool_calls[0].arguments, "{\"x\":1}");
+    }
 }

@@ -443,4 +443,64 @@ mod tests {
         assert_eq!(resolved.model, "kimi-k2-turbo-preview");
         assert_eq!(resolved.base_url, "https://api.moonshot.cn/v1");
     }
+
+    #[test]
+    fn resolve_model_requires_qualified_id_with_multiple_providers() {
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            "p1".to_string(),
+            ProviderConfig {
+                base_url: "https://example.com/v1".to_string(),
+                api_key: None,
+                models: Vec::new(),
+            },
+        );
+        providers.insert(
+            "p2".to_string(),
+            ProviderConfig {
+                base_url: "https://example.com/v1".to_string(),
+                api_key: None,
+                models: Vec::new(),
+            },
+        );
+
+        let cfg = Config {
+            default_model: None,
+            providers,
+            ..Default::default()
+        };
+
+        let err = cfg.resolve_model("m").unwrap_err();
+        let ConfigError::Invalid(msg) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(msg.contains("`<provider>/<model>`"));
+    }
+
+    #[test]
+    fn resolve_model_accepts_qualified_entries_in_models_list() {
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            "p".to_string(),
+            ProviderConfig {
+                base_url: "https://example.com/v1".to_string(),
+                api_key: None,
+                models: vec!["p/m".to_string()],
+            },
+        );
+
+        let cfg = Config {
+            default_model: None,
+            providers,
+            ..Default::default()
+        };
+
+        let resolved = cfg.resolve_model("m").unwrap();
+        assert_eq!(resolved.provider, "p");
+        assert_eq!(resolved.model, "m");
+
+        let resolved = cfg.resolve_model("p/m").unwrap();
+        assert_eq!(resolved.provider, "p");
+        assert_eq!(resolved.model, "m");
+    }
 }
