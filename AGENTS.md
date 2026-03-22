@@ -65,7 +65,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 ## constraints
 
-### TUI UI
+### TUI
 
 后续修改必须保持一致
 - user bubble：历史区渲染需与输入框风格一致（灰底 + 上下 padding）
