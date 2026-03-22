@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use tokio_stream::{Stream, StreamExt};
 
-use crate::agents::AgentProfile;
+use crate::agents::{AgentKind, AgentProfile};
 use async_openai::types::FinishReason;
 
 use crate::llm::{
@@ -46,13 +46,38 @@ pub struct AgentRuntimeOptions {
 impl Default for AgentRuntimeOptions {
     fn default() -> Self {
         Self {
-            max_steps: 16,
+            max_steps: 8,
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             tool_error_mode: ToolErrorMode::ToolMessage,
             temperature: None,
             max_completion_tokens: None,
         }
+    }
+}
+
+impl AgentRuntimeOptions {
+    /// Build runtime options from `killiax.yaml`.
+    ///
+    /// Precedence:
+    /// 1) `runtime.*` (global defaults)
+    /// 2) `agents.<kind>.*` (per-agent overrides)
+    pub fn from_config(profile: &AgentProfile, config: &crate::config::Config) -> Self {
+        let mut options = Self::default();
+
+        if let Some(max_steps) = config.runtime.max_steps {
+            options.max_steps = max_steps;
+        }
+
+        let agent_cfg = match profile.kind {
+            AgentKind::Plan => &config.agents.plan,
+            AgentKind::Build => &config.agents.build,
+        };
+        if let Some(max_steps) = agent_cfg.max_steps {
+            options.max_steps = max_steps;
+        }
+
+        options
     }
 }
 
@@ -145,8 +170,10 @@ impl AgentRuntime {
         profile: &AgentProfile,
         mut messages: Vec<Message>,
         options: AgentRuntimeOptions,
-    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<AgentEvent, AgentRuntimeError>>, AgentRuntimeError>
-    {
+    ) -> Result<
+        tokio_stream::wrappers::ReceiverStream<Result<AgentEvent, AgentRuntimeError>>,
+        AgentRuntimeError,
+    > {
         use tokio_stream::wrappers::ReceiverStream;
 
         let tool_defs = self.tool_definitions(profile).await;
@@ -194,9 +221,7 @@ impl AgentRuntime {
                             .await;
 
                         if step_out.tool_calls.is_empty() {
-                            let _ = tx
-                                .send(Ok(AgentEvent::StepEnd { step: step + 1 }))
-                                .await;
+                            let _ = tx.send(Ok(AgentEvent::StepEnd { step: step + 1 })).await;
                             let _ = tx
                                 .send(Ok(AgentEvent::Done(AgentRunOutput {
                                     steps: step + 1,
@@ -211,7 +236,9 @@ impl AgentRuntime {
                             if tx.is_closed() {
                                 return;
                             }
-                            let _ = tx.send(Ok(AgentEvent::ToolCall { call: call.clone() })).await;
+                            let _ = tx
+                                .send(Ok(AgentEvent::ToolCall { call: call.clone() }))
+                                .await;
 
                             match tools.execute_to_message(&profile.permissions, &call).await {
                                 Ok(tool_msg) => {
@@ -330,7 +357,11 @@ async fn drive_stream_step(
 
         if let Some(delta) = chunk.content_delta {
             assistant_content.push_str(&delta);
-            if tx.send(Ok(AgentEvent::AssistantDelta { delta })).await.is_err() {
+            if tx
+                .send(Ok(AgentEvent::AssistantDelta { delta }))
+                .await
+                .is_err()
+            {
                 return Err(AgentRuntimeError::Cancelled);
             }
         }
@@ -431,7 +462,11 @@ mod tests {
 
         assert_eq!(deltas, vec!["Hello ".to_string(), "world".to_string()]);
 
-        let Message::Assistant { content, tool_calls } = out.assistant else {
+        let Message::Assistant {
+            content,
+            tool_calls,
+        } = out.assistant
+        else {
             panic!("expected assistant message");
         };
         assert_eq!(content.unwrap(), "Hello world");

@@ -12,6 +12,13 @@ cargo run -p kiliax-core --example stream_chat
 cargo run -p kiliax-core --example agent_loop
 ```
 
+## config
+
+See `killiax.example.yaml`.
+
+- `runtime.max_steps`: default max steps for all agents
+- `agents.plan.max_steps` / `agents.build.max_steps`: per-agent overrides
+
 ## tui
 
 ```bash

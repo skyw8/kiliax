@@ -93,22 +93,12 @@ async fn main() -> Result<()> {
         }
     };
 
-    let options = AgentRuntimeOptions {
-        max_steps: 8,
-        ..Default::default()
-    };
+    let options = AgentRuntimeOptions::from_config(&profile, &loaded.config);
 
     let (guard, mut terminal) = terminal::init()?;
     let composer_style = style::composer_background_style();
 
-    let mut app = App::new(
-        profile,
-        runtime,
-        options,
-        store,
-        session,
-        messages,
-    );
+    let mut app = App::new(profile, runtime, options, store, session, messages);
     terminal.queue_history_lines(header::startup_lines(
         env!("CARGO_PKG_VERSION"),
         app.model_id(),

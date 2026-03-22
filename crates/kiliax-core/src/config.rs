@@ -7,12 +7,36 @@ use serde::{Deserialize, Serialize};
 const CONFIG_FILENAME: &str = "killiax.yaml";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AgentRuntimeConfig {
+    /// Maximum number of ReAct steps in a single run.
+    #[serde(default, alias = "maxSteps", alias = "max-steps")]
+    pub max_steps: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AgentsConfig {
+    #[serde(default)]
+    pub plan: AgentRuntimeConfig,
+
+    #[serde(default)]
+    pub build: AgentRuntimeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Config {
     #[serde(default)]
     pub default_model: Option<String>,
 
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
+
+    /// Default agent runtime options applied to all agents.
+    #[serde(default)]
+    pub runtime: AgentRuntimeConfig,
+
+    /// Per-agent runtime overrides (applied after `runtime`).
+    #[serde(default)]
+    pub agents: AgentsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,30 +87,31 @@ impl Config {
             ));
         }
 
-        let (provider_name, model_name) =
-            match split_qualified_model_id(model_id).map_err(ConfigError::Invalid)? {
-                Some((provider, model)) => (provider, model),
-                None => {
-                    let provider = self
-                        .providers
-                        .keys()
-                        .next()
-                        .map(|s| s.as_str())
-                        .ok_or_else(|| {
-                            ConfigError::Invalid(
-                                "providers is required and must not be empty".to_string(),
-                            )
-                        })?;
+        let (provider_name, model_name) = match split_qualified_model_id(model_id)
+            .map_err(ConfigError::Invalid)?
+        {
+            Some((provider, model)) => (provider, model),
+            None => {
+                let provider = self
+                    .providers
+                    .keys()
+                    .next()
+                    .map(|s| s.as_str())
+                    .ok_or_else(|| {
+                        ConfigError::Invalid(
+                            "providers is required and must not be empty".to_string(),
+                        )
+                    })?;
 
-                    if self.providers.len() != 1 {
-                        return Err(ConfigError::Invalid(
+                if self.providers.len() != 1 {
+                    return Err(ConfigError::Invalid(
                             "model id must be `<provider>/<model>` when multiple providers are configured".to_string(),
                         ));
-                    }
-
-                    (provider, model_id)
                 }
-            };
+
+                (provider, model_id)
+            }
+        };
 
         let provider = self.providers.get(provider_name).ok_or_else(|| {
             ConfigError::Invalid(format!("provider {provider_name:?} not found in providers"))
@@ -94,7 +119,10 @@ impl Config {
 
         if !provider.models.is_empty() {
             let qualified = format!("{provider_name}/{model_name}");
-            let ok = provider.models.iter().any(|m| m == model_name || m == &qualified);
+            let ok = provider
+                .models
+                .iter()
+                .any(|m| m == model_name || m == &qualified);
             if !ok {
                 return Err(ConfigError::Invalid(format!(
                     "model {qualified:?} not found in provider {provider_name:?} models"
@@ -118,6 +146,12 @@ struct ConfigFile {
 
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
+
+    #[serde(default)]
+    pub runtime: AgentRuntimeConfig,
+
+    #[serde(default)]
+    pub agents: AgentsConfig,
 
     // Shorthand for single-provider config:
     //
@@ -144,10 +178,16 @@ pub enum ConfigError {
     NotFound { paths: Vec<PathBuf> },
 
     #[error("failed to read config file {path}: {source}")]
-    Read { path: PathBuf, source: std::io::Error },
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 
     #[error("failed to parse YAML config file {path}: {source}")]
-    Parse { path: PathBuf, source: serde_yaml::Error },
+    Parse {
+        path: PathBuf,
+        source: serde_yaml::Error,
+    },
 
     #[error("invalid config: {0}")]
     Invalid(String),
@@ -189,7 +229,10 @@ pub fn load() -> Result<LoadedConfig, ConfigError> {
     load_from_locations(&cwd, home_dir.as_deref())
 }
 
-pub fn load_from_locations(cwd: &Path, home_dir: Option<&Path>) -> Result<LoadedConfig, ConfigError> {
+pub fn load_from_locations(
+    cwd: &Path,
+    home_dir: Option<&Path>,
+) -> Result<LoadedConfig, ConfigError> {
     let paths = candidate_paths(cwd, home_dir);
     let Some(path) = paths.iter().find(|p| p.is_file()).cloned() else {
         return Err(ConfigError::NotFound { paths });
@@ -216,6 +259,8 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
     let ConfigFile {
         default_model,
         mut providers,
+        runtime,
+        agents,
         provider,
     } = file;
 
@@ -232,6 +277,8 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
     Ok(Config {
         default_model,
         providers,
+        runtime,
+        agents,
     })
 }
 
@@ -269,6 +316,20 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
     }
     if let Some(default_model) = &config.default_model {
         config.resolve_model(default_model)?;
+    }
+
+    validate_agent_runtime_config("runtime", &config.runtime)?;
+    validate_agent_runtime_config("agents.plan", &config.agents.plan)?;
+    validate_agent_runtime_config("agents.build", &config.agents.build)?;
+
+    Ok(())
+}
+
+fn validate_agent_runtime_config(label: &str, cfg: &AgentRuntimeConfig) -> Result<(), ConfigError> {
+    if cfg.max_steps.is_some_and(|v| v == 0) {
+        return Err(ConfigError::Invalid(format!(
+            "{label}.max_steps must be greater than 0"
+        )));
     }
     Ok(())
 }
@@ -372,6 +433,7 @@ mod tests {
         let cfg = Config {
             default_model: None,
             providers,
+            ..Default::default()
         };
 
         let resolved = cfg

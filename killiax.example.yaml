@@ -1,6 +1,18 @@
 # Model id format: <provider>/<model>
 default_model: moonshot_cn/kimi-k2-turbo-preview
 
+# Agent runtime options (optional).
+runtime:
+  # Maximum number of ReAct steps in a single run.
+  max_steps: 8
+
+# Per-agent overrides (optional, applied after `runtime`).
+agents:
+  plan:
+    max_steps: 16
+  build:
+    max_steps: 8
+
 providers:
   moonshot_cn:
     base_url: https://api.moonshot.cn/v1

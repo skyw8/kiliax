@@ -77,7 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (s.messages.clone(), s)
         }
         None => {
-            let mut builder = PromptBuilder::for_agent(&profile).with_workspace_root(&workspace_root);
+            let mut builder =
+                PromptBuilder::for_agent(&profile).with_workspace_root(&workspace_root);
             if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
                 builder = builder.add_skills(skills);
             }
@@ -85,22 +86,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let s = store
                 .create(
-                profile.name.to_string(),
-                Some(runtime.llm().route().model_id()),
-                Some(loaded.path.display().to_string()),
-                Some(workspace_root.display().to_string()),
-                msgs.clone(),
-            )
-            .await?;
+                    profile.name.to_string(),
+                    Some(runtime.llm().route().model_id()),
+                    Some(loaded.path.display().to_string()),
+                    Some(workspace_root.display().to_string()),
+                    msgs.clone(),
+                )
+                .await?;
             eprintln!("Session: {}", s.meta.id);
             (msgs, s)
         }
     };
 
-    let options = AgentRuntimeOptions {
-        max_steps: 8,
-        ..Default::default()
-    };
+    let options = AgentRuntimeOptions::from_config(&profile, &loaded.config);
 
     let mut stream = runtime.run_stream(&profile, messages, options).await?;
     let mut stdout = io::stdout();
