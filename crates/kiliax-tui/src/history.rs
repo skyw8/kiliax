@@ -1,4 +1,3 @@
-use std::fmt;
 use std::io;
 use std::time::Duration;
 
@@ -7,13 +6,16 @@ use crossterm::queue;
 use crossterm::style::{Attribute, Color as CColor, Print, SetAttribute, SetForegroundColor};
 use crossterm::style::SetBackgroundColor;
 use crossterm::terminal::{Clear, ClearType};
-use crossterm::Command;
 use ratatui::layout::{Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
+
+use crate::custom_terminal::{
+    DisableWraparound, EnableWraparound, ResetScrollRegion, ReverseIndex, SetScrollRegion,
+};
 
 pub const DIVIDER_MARKER_PREFIX: &str = "\u{001f}kiliax_divider:";
 pub const USER_MESSAGE_MARKER_PREFIX: &str = "\u{001f}kiliax_user_message:";
@@ -56,7 +58,7 @@ pub fn insert_history_lines(
             )?;
             for _ in 0..scroll_amount {
                 // Reverse Index (RI): ESC M
-                queue!(out, Print("\x1bM"))?;
+                queue!(out, ReverseIndex)?;
             }
             queue!(out, ResetScrollRegion)?;
             viewport.y = viewport.y.saturating_add(scroll_amount);
@@ -71,7 +73,7 @@ pub fn insert_history_lines(
 
     // Disable wraparound while writing history lines. This avoids terminals (notably xterm.js) that
     // auto-wrap when output lands in the last column, which can manifest as extra blank lines.
-    queue!(out, Print("\x1b[?7l"))?;
+    queue!(out, DisableWraparound)?;
 
     queue!(out, SetScrollRegion(1..viewport_top), MoveTo(0, cursor_top))?;
 
@@ -101,7 +103,7 @@ pub fn insert_history_lines(
         write_spans(out, line.spans.iter(), line.style)?;
     }
 
-    queue!(out, ResetScrollRegion, Print("\x1b[?7h"))?;
+    queue!(out, ResetScrollRegion, EnableWraparound)?;
     out.flush()?;
     Ok(())
 }
@@ -355,49 +357,5 @@ fn to_crossterm_color(color: Color) -> CColor {
         Color::White => CColor::White,
         Color::Rgb(r, g, b) => CColor::Rgb { r, g, b },
         Color::Indexed(i) => CColor::AnsiValue(i),
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SetScrollRegion(pub std::ops::Range<u16>);
-
-impl Command for SetScrollRegion {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b[{};{}r", self.0.start, self.0.end)
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "SetScrollRegion requires ANSI support",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResetScrollRegion;
-
-impl Command for ResetScrollRegion {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b[r")
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "ResetScrollRegion requires ANSI support",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
     }
 }

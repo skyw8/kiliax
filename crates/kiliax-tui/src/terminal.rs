@@ -1,7 +1,9 @@
 use std::io::{self, Stdout, Write};
 
+use crossterm::{ExecutableCommand, QueueableCommand};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use crossterm::terminal::ScrollUp;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
@@ -35,60 +37,79 @@ impl TerminalState {
         viewport_height: u16,
         draw_fn: impl FnOnce(&mut ratatui::Frame),
     ) -> anyhow::Result<()> {
-        self.full_size = self.terminal.backend_mut().refresh_full_size()?;
-        let screen_height = self.full_size.height.max(1);
-        let desired_height = viewport_height.clamp(1, screen_height);
-
-        let mut next_viewport = self.viewport;
-        next_viewport.x = 0;
-        next_viewport.width = self.full_size.width;
-        next_viewport.height = desired_height;
-
-        // If expanding the viewport would exceed the screen, scroll the terminal up to make room.
-        if next_viewport.y.saturating_add(next_viewport.height) > screen_height {
-            let overflow = next_viewport
-                .y
-                .saturating_add(next_viewport.height)
-                .saturating_sub(screen_height);
-            if overflow > 0 {
-                execute!(io::stdout(), ScrollUp(overflow))?;
-                next_viewport.y = next_viewport.y.saturating_sub(overflow);
-            }
-        }
-
-        // Clamp the viewport to the screen.
-        if next_viewport.y >= screen_height {
-            next_viewport.y = screen_height.saturating_sub(1);
-        }
-        if next_viewport.y.saturating_add(next_viewport.height) > screen_height {
-            next_viewport.y = screen_height.saturating_sub(next_viewport.height);
-        }
-
-        if next_viewport != self.viewport {
-            // Clear the old viewport area to prevent stale UI artifacts.
-            self.terminal.backend_mut().set_viewport(self.viewport);
-            self.terminal.clear()?;
-
-            self.viewport = next_viewport;
-            self.terminal.backend_mut().set_viewport(self.viewport);
-            self.terminal.clear()?;
-        } else {
-            self.terminal.backend_mut().set_viewport(self.viewport);
-        }
-
-        if !self.pending_history_lines.is_empty() {
-            let lines = std::mem::take(&mut self.pending_history_lines);
-            let before = self.viewport;
+        {
             let backend = self.terminal.backend_mut();
-            history::insert_history_lines(backend, &lines, &mut self.viewport, self.full_size)?;
-            if self.viewport != before {
+            backend.queue(BeginSynchronizedUpdate)?;
+        }
+
+        let result = (|| {
+            self.full_size = self.terminal.backend_mut().refresh_full_size()?;
+            let screen_height = self.full_size.height.max(1);
+            let desired_height = viewport_height.clamp(1, screen_height);
+
+            let mut next_viewport = self.viewport;
+            next_viewport.x = 0;
+            next_viewport.width = self.full_size.width;
+            next_viewport.height = desired_height;
+
+            // If expanding the viewport would exceed the screen, scroll the terminal up to make room.
+            if next_viewport.y.saturating_add(next_viewport.height) > screen_height {
+                let overflow = next_viewport
+                    .y
+                    .saturating_add(next_viewport.height)
+                    .saturating_sub(screen_height);
+                if overflow > 0 {
+                    let backend = self.terminal.backend_mut();
+                    backend.execute(ScrollUp(overflow))?;
+                    next_viewport.y = next_viewport.y.saturating_sub(overflow);
+                }
+            }
+
+            // Clamp the viewport to the screen.
+            if next_viewport.y >= screen_height {
+                next_viewport.y = screen_height.saturating_sub(1);
+            }
+            if next_viewport.y.saturating_add(next_viewport.height) > screen_height {
+                next_viewport.y = screen_height.saturating_sub(next_viewport.height);
+            }
+
+            if next_viewport != self.viewport {
+                // Clear the old viewport area to prevent stale UI artifacts.
                 self.terminal.backend_mut().set_viewport(self.viewport);
                 self.terminal.clear()?;
-            }
-        }
 
-        self.terminal.draw(draw_fn)?;
-        Ok(())
+                self.viewport = next_viewport;
+                self.terminal.backend_mut().set_viewport(self.viewport);
+                self.terminal.clear()?;
+            } else {
+                self.terminal.backend_mut().set_viewport(self.viewport);
+            }
+
+            if !self.pending_history_lines.is_empty() {
+                let lines = std::mem::take(&mut self.pending_history_lines);
+                let before = self.viewport;
+                let backend = self.terminal.backend_mut();
+                history::insert_history_lines(backend, &lines, &mut self.viewport, self.full_size)?;
+                if self.viewport != before {
+                    self.terminal.backend_mut().set_viewport(self.viewport);
+                    self.terminal.clear()?;
+                }
+            }
+
+            self.terminal.draw(draw_fn)?;
+            Ok(())
+        })();
+
+        let end_result = {
+            let backend = self.terminal.backend_mut();
+            backend.execute(EndSynchronizedUpdate).map(|_| ())
+        };
+
+        match (result, end_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(err)) => Err(err.into()),
+            (Err(err), _) => Err(err),
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 mod app;
+mod custom_terminal;
 mod header;
 mod highlight;
 mod history;
