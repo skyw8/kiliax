@@ -1,9 +1,13 @@
 ## description
-一个高性能、强大、跨平台的AI Agent工具
+a strong, high performance, cross-platform AI Agent tool
 subagents
 token efficient
-prompt caching
+minimal
 
+## philosophy
+
+- keep it simple, stupid
+- less is more
 
 ## tech stack
 
