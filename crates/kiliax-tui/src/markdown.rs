@@ -135,23 +135,14 @@ where
         match tag {
             Tag::Paragraph => {
                 self.flush_line();
-                if !self.lines.is_empty() {
-                    self.lines.push(Line::from(""));
-                }
             }
             Tag::Heading { level, .. } => {
                 self.flush_line();
-                if !self.lines.is_empty() {
-                    self.lines.push(Line::from(""));
-                }
                 let style = self.heading_style(level);
                 self.push_style(style);
             }
             Tag::BlockQuote(_) => {
                 self.flush_line();
-                if !self.lines.is_empty() {
-                    self.lines.push(Line::from(""));
-                }
                 self.prefix_stack.push(PrefixContext::BlockQuote);
             }
             Tag::List(start) => self.list_stack.push(start),

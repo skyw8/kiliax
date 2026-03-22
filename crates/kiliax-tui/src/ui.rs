@@ -118,10 +118,14 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::from(" ").dim());
         spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
     } else if let Some((step, elapsed)) = app.step_elapsed() {
+        let thinking_style = Style::default().dim().italic();
         spans.push(Span::from(" · ").dim());
-        spans.push(Span::from(format!("thinking (step {step})")).dim());
+        spans.push(Span::styled(
+            format!("thinking (step {step})"),
+            thinking_style,
+        ));
         spans.push(Span::from(" ").dim());
-        spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
+        spans.push(Span::styled(fmt_duration_compact(elapsed), thinking_style));
         spans.push(Span::from(" · ").dim());
         spans.push(Span::from(format!("{} tok", app.step_output_tokens())).dim());
     }

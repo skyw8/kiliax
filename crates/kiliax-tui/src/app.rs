@@ -398,6 +398,8 @@ impl App {
                 self.current_step = Some(step);
                 self.step_output_tokens.reset();
                 self.saw_delta_in_step = false;
+                self.pending_history_lines
+                    .push(render_thinking_start_line(step));
             }
             AgentEvent::AssistantDelta { delta } => {
                 self.turn_output_tokens.push_str(&delta);
@@ -445,12 +447,6 @@ impl App {
                         }
                     }
                     self.assistant_stream = None;
-
-                    if let (Some(step), Some(started_at)) = (self.current_step, self.step_started_at)
-                    {
-                        self.pending_history_lines
-                            .push(render_thinking_line(step, started_at.elapsed()));
-                    }
                     self.step_started_at = None;
                 }
             }
@@ -630,15 +626,12 @@ fn turn_divider_marker(elapsed: Duration, output_tokens: u64) -> Line<'static> {
     )))
 }
 
-fn render_thinking_line(step: usize, duration: Duration) -> Line<'static> {
+fn render_thinking_start_line(step: usize) -> Line<'static> {
     let summary_style = Style::default().dim().italic();
     let label = format!("Thinking (step {step})");
-    let dur = fmt_duration_compact(duration);
     Line::from(vec![
         Span::from("• ").dim(),
         Span::styled(label, summary_style),
-        Span::from(" ").dim(),
-        Span::styled(format!("({dur})"), summary_style),
     ])
 }
 

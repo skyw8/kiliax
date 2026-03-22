@@ -48,11 +48,11 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
 - `crates/kiliax-tui/src/main.rs`: 入口；支持 `--resume <id>`；启动插入 header；事件循环（键盘输入 + AgentRuntime 流）；退出清屏并打印恢复命令
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；统计 LLM 输出 token 并用于 status/divider；用户消息写入 scrollback 时发出 marker，由 history 按终端宽度渲染 bubble；工具调用默认折叠且高亮 read/write/shell；write 小改动渲染 diff）；AssistantDelta 通过 MarkdownStreamCollector 按换行增量提交到 scrollback；↑/↓ 历史与 Ctrl+C 清空输入
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；StepStart 先写入 Thinking 行（灰色斜体）再流式插入 AssistantDelta；统计输出 token 并用于 status/divider；用户消息 marker → history 渲染 bubble；工具调用折叠且高亮 read/write/shell；write 小改动渲染 diff）；↑/↓ 历史与 Ctrl+C 清空输入
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；输入框上方状态行显示计时 + token（当前 tool/step）；底部 footer（model/status/快捷键）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式与 diff 行背景（从终端默认背景色推导，类似 codex）
-- `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮
+- `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect → ratatui spans）
 - `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行
 - `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；支持整行替换（历史回填）
