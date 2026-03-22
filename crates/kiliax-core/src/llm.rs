@@ -5,7 +5,6 @@ use async_openai::{
     error::OpenAIError,
     types::{
         ChatChoice, ChatCompletionMessageToolCall, ChatCompletionNamedToolChoice,
-        CreateChatCompletionStreamResponse,
         ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
         ChatCompletionRequestDeveloperMessage, ChatCompletionRequestDeveloperMessageContent,
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
@@ -132,11 +131,16 @@ impl LlmClient {
             builder.max_completion_tokens(max_completion_tokens);
         }
 
-        let request = builder.build()?;
+        let mut request = builder.build()?;
+        request.stream = Some(true);
 
-        let stream = self.client.chat().create_stream(request).await?;
+        let stream = self
+            .client
+            .chat()
+            .create_stream_byot::<_, ByotCreateChatCompletionStreamResponse>(request)
+            .await?;
         Ok(Box::pin(stream.map(|res| match res {
-            Ok(chunk) => Ok(chat_stream_chunk_from_openai(chunk)),
+            Ok(chunk) => Ok(chat_stream_chunk_from_byot(chunk)),
             Err(err) => Err(err.into()),
         })))
     }
@@ -324,6 +328,10 @@ pub struct ChatStreamChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_delta: Option<String>,
 
+    /// Provider-specific chain-of-thought delta (e.g. `reasoning_content`, `thinking`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_delta: Option<String>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCallDelta>,
 
@@ -454,13 +462,76 @@ fn chat_response_from_openai(resp: CreateChatCompletionResponse) -> Result<ChatR
     })
 }
 
-fn chat_stream_chunk_from_openai(resp: CreateChatCompletionStreamResponse) -> ChatStreamChunk {
+#[derive(Debug, Clone, Deserialize)]
+struct ByotCreateChatCompletionStreamResponse {
+    pub id: String,
+    pub created: u32,
+    pub model: String,
+    #[serde(default)]
+    pub choices: Vec<ByotChatChoiceStream>,
+    #[serde(default)]
+    pub usage: Option<CompletionUsage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ByotChatChoiceStream {
+    #[serde(default)]
+    pub delta: ByotChatCompletionStreamDelta,
+    #[serde(default)]
+    pub finish_reason: Option<FinishReason>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+struct ByotChatCompletionStreamDelta {
+    #[serde(default)]
+    pub content: Option<String>,
+
+    #[serde(default, rename = "reasoning_content")]
+    pub reasoning_content: Option<String>,
+
+    #[serde(default)]
+    pub thinking: Option<String>,
+
+    #[serde(default)]
+    pub reasoning: Option<String>,
+
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ByotToolCallChunk>>,
+
+    #[serde(default)]
+    pub function_call: Option<ByotFunctionCallStream>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ByotToolCallChunk {
+    pub index: u32,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub function: Option<ByotFunctionCallStream>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ByotFunctionCallStream {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
+}
+
+fn chat_stream_chunk_from_byot(resp: ByotCreateChatCompletionStreamResponse) -> ChatStreamChunk {
     let mut content_delta = None;
+    let mut thinking_delta = None;
     let mut tool_calls = Vec::new();
     let mut finish_reason = None;
 
     if let Some(choice) = resp.choices.into_iter().next() {
         content_delta = choice.delta.content;
+        thinking_delta = choice
+            .delta
+            .reasoning_content
+            .or(choice.delta.thinking)
+            .or(choice.delta.reasoning);
         finish_reason = choice.finish_reason;
 
         if let Some(calls) = choice.delta.tool_calls {
@@ -473,6 +544,13 @@ fn chat_stream_chunk_from_openai(resp: CreateChatCompletionStreamResponse) -> Ch
                     arguments: c.function.as_ref().and_then(|f| f.arguments.clone()),
                 })
                 .collect();
+        } else if let Some(function_call) = choice.delta.function_call {
+            tool_calls = vec![ToolCallDelta {
+                index: 0,
+                id: None,
+                name: function_call.name,
+                arguments: function_call.arguments,
+            }];
         }
     }
 
@@ -481,6 +559,7 @@ fn chat_stream_chunk_from_openai(resp: CreateChatCompletionStreamResponse) -> Ch
         created: resp.created,
         model: resp.model,
         content_delta,
+        thinking_delta,
         tool_calls,
         finish_reason,
         usage: resp.usage,
@@ -520,5 +599,29 @@ mod tests {
         };
         assert!(a.content.is_none());
         assert_eq!(a.tool_calls.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn chat_stream_maps_reasoning_content_to_thinking_delta() {
+        let raw = serde_json::json!({
+            "id": "chat_1",
+            "created": 0,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "reasoning_content": "step 1\nstep 2\n",
+                        "content": "final"
+                    },
+                    "finish_reason": null
+                }
+            ]
+        });
+
+        let resp: ByotCreateChatCompletionStreamResponse = serde_json::from_value(raw).unwrap();
+        let chunk = chat_stream_chunk_from_byot(resp);
+        assert_eq!(chunk.thinking_delta.as_deref(), Some("step 1\nstep 2\n"));
+        assert_eq!(chunk.content_delta.as_deref(), Some("final"));
     }
 }

@@ -4,6 +4,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::Line;
 use ratatui::text::Span;
 use tokio_stream::wrappers::ReceiverStream;
+use unicode_width::UnicodeWidthChar;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -34,11 +35,17 @@ impl MarkdownStreamCollector {
 
     fn push_delta(&mut self, delta: &str) {
         self.buffer.push_str(delta);
+        if self.committed_line_count == 0 {
+            trim_leading_newlines(&mut self.buffer);
+        }
     }
 
     fn set_text(&mut self, text: &str) {
         self.buffer.clear();
         self.buffer.push_str(text);
+        if self.committed_line_count == 0 {
+            trim_leading_newlines(&mut self.buffer);
+        }
     }
 
     fn commit_complete_lines(&mut self) -> Vec<Line<'static>> {
@@ -82,6 +89,110 @@ impl MarkdownStreamCollector {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct ThinkingStreamCollector {
+    buffer: String,
+}
+
+impl ThinkingStreamCollector {
+    fn clear(&mut self) {
+        self.buffer.clear();
+    }
+
+    fn push_delta(&mut self, delta: &str, max_width: usize) -> Vec<Line<'static>> {
+        self.buffer.push_str(delta);
+        self.drain_ready_lines(max_width, false)
+    }
+
+    fn finalize_and_drain(&mut self, max_width: usize) -> Vec<Line<'static>> {
+        if self.buffer.trim().is_empty() {
+            self.clear();
+            return Vec::new();
+        }
+
+        let mut out = self.drain_ready_lines(max_width, true);
+        trim_trailing_blank_lines(&mut out);
+        self.clear();
+        out
+    }
+
+    fn drain_ready_lines(&mut self, max_width: usize, flush: bool) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+
+        loop {
+            if let Some(newline_idx) = self.buffer.find('\n') {
+                let mut chunk: String = self.buffer.drain(..=newline_idx).collect();
+                if chunk.ends_with('\n') {
+                    chunk.pop();
+                }
+                if chunk.ends_with('\r') {
+                    chunk.pop();
+                }
+                self.emit_wrapped_text(chunk, max_width, &mut out);
+                continue;
+            }
+
+            if self.buffer.is_empty() {
+                break;
+            }
+
+            if flush || max_width == 0 {
+                let chunk = std::mem::take(&mut self.buffer);
+                self.emit_wrapped_text(chunk, max_width, &mut out);
+                break;
+            }
+
+            let Some(split_idx) = soft_wrap_split_idx(&self.buffer, max_width) else {
+                break;
+            };
+
+            let mut tail = self.buffer.split_off(split_idx);
+            let mut head = std::mem::take(&mut self.buffer);
+            trim_end_whitespace(&mut head);
+            trim_start_whitespace(&mut tail);
+            self.emit_line(head, &mut out);
+            self.buffer = tail;
+        }
+
+        out
+    }
+
+    fn emit_wrapped_text(&mut self, mut text: String, max_width: usize, out: &mut Vec<Line<'static>>) {
+        if max_width == 0 {
+            self.emit_line(text, out);
+            return;
+        }
+
+        loop {
+            let Some(split_idx) = soft_wrap_split_idx(&text, max_width) else {
+                break;
+            };
+
+            let mut tail = text.split_off(split_idx);
+            let mut head = text;
+            trim_end_whitespace(&mut head);
+            trim_start_whitespace(&mut tail);
+
+            self.emit_line(head, out);
+            text = tail;
+        }
+
+        self.emit_line(text, out);
+    }
+
+    fn emit_line(&mut self, mut text: String, out: &mut Vec<Line<'static>>) {
+        trim_end_whitespace(&mut text);
+        if text.trim().is_empty() {
+            return;
+        }
+
+        let thinking_style = Style::default().dim().italic();
+        let mut rendered = Line::from(Span::raw(text));
+        rendered.style = thinking_style;
+        out.push(rendered);
+    }
+}
+
 fn trim_trailing_blank_lines(lines: &mut Vec<Line<'static>>) {
     while lines.last().is_some_and(|line| line_is_blank(line)) {
         lines.pop();
@@ -96,6 +207,64 @@ fn line_is_blank(line: &Line<'static>) -> bool {
         .collect::<Vec<_>>()
         .join("");
     text.trim().is_empty()
+}
+
+fn soft_wrap_split_idx(text: &str, max_width: usize) -> Option<usize> {
+    if max_width == 0 {
+        return None;
+    }
+
+    let mut width = 0usize;
+    let mut last_whitespace_idx = None;
+
+    for (idx, ch) in text.char_indices() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if ch.is_whitespace() {
+            last_whitespace_idx = Some(idx);
+        }
+
+        if width + ch_width > max_width {
+            if let Some(ws_idx) = last_whitespace_idx.filter(|&i| i > 0) {
+                return Some(ws_idx);
+            }
+            if idx == 0 {
+                return Some(ch.len_utf8());
+            }
+            return Some(idx);
+        }
+
+        width = width.saturating_add(ch_width);
+    }
+
+    None
+}
+
+fn trim_end_whitespace(text: &mut String) {
+    while text.chars().last().is_some_and(|ch| ch.is_whitespace()) {
+        text.pop();
+    }
+}
+
+fn trim_start_whitespace(text: &mut String) {
+    let start = text
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    if start > 0 {
+        text.drain(..start);
+    }
+}
+
+fn trim_leading_newlines(text: &mut String) {
+    let start = text
+        .char_indices()
+        .find(|(_, ch)| *ch != '\n' && *ch != '\r')
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    if start > 0 {
+        text.drain(..start);
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -182,6 +351,7 @@ pub struct App {
     pub should_quit: bool,
     pub running: bool,
     pub status: Option<String>,
+    screen_width: u16,
     pending_history_lines: Vec<Line<'static>>,
 
     profile: AgentProfile,
@@ -192,6 +362,8 @@ pub struct App {
     store: FileSessionStore,
     session: SessionState,
     assistant_stream: Option<MarkdownStreamCollector>,
+    assistant_thinking_stream: Option<ThinkingStreamCollector>,
+    accepting_thinking: bool,
 
     prompt_history: Vec<String>,
     history_index: Option<usize>,
@@ -229,6 +401,7 @@ impl App {
             should_quit: false,
             running: false,
             status: None,
+            screen_width: 0,
             pending_history_lines: Vec::new(),
             profile,
             runtime,
@@ -238,6 +411,8 @@ impl App {
             store,
             session,
             assistant_stream: None,
+            assistant_thinking_stream: None,
+            accepting_thinking: false,
             prompt_history,
             history_index: None,
             history_draft: String::new(),
@@ -257,6 +432,28 @@ impl App {
 
     pub fn model_id(&self) -> &str {
         &self.model_id
+    }
+
+    pub fn set_screen_width(&mut self, width: u16) {
+        self.screen_width = width;
+    }
+
+    fn history_wrap_width(&self) -> usize {
+        if self.screen_width == 0 {
+            80
+        } else {
+            self.screen_width as usize
+        }
+    }
+
+    fn close_thinking_stream(&mut self) {
+        let width = self.history_wrap_width();
+        if let Some(stream) = self.assistant_thinking_stream.as_mut() {
+            self.pending_history_lines
+                .extend(stream.finalize_and_drain(width));
+        }
+        self.assistant_thinking_stream = None;
+        self.accepting_thinking = false;
     }
 
     pub fn turn_elapsed(&self) -> Option<Duration> {
@@ -291,6 +488,7 @@ impl App {
             self.pending_history_lines.extend(stream.finalize_and_drain());
         }
         self.assistant_stream = None;
+        self.close_thinking_stream();
         self.running = false;
         self.status = Some("interrupted".to_string());
         self.messages = self.session.messages.clone();
@@ -376,6 +574,8 @@ impl App {
         self.running = true;
         self.status = Some("running".to_string());
         self.assistant_stream = None;
+        self.assistant_thinking_stream = None;
+        self.accepting_thinking = false;
         self.turn_started_at = Some(Instant::now());
         self.step_started_at = None;
         self.current_step = None;
@@ -394,6 +594,8 @@ impl App {
             AgentEvent::StepStart { step } => {
                 self.status = Some(format!("step {step}"));
                 self.assistant_stream = None;
+                self.assistant_thinking_stream = None;
+                self.accepting_thinking = true;
                 self.step_started_at = Some(Instant::now());
                 self.current_step = Some(step);
                 self.step_output_tokens.reset();
@@ -401,7 +603,27 @@ impl App {
                 self.pending_history_lines
                     .push(render_thinking_start_line(step));
             }
+            AgentEvent::AssistantThinkingDelta { delta } => {
+                if !self.accepting_thinking {
+                    return Ok(());
+                }
+                self.turn_output_tokens.push_str(&delta);
+                self.step_output_tokens.push_str(&delta);
+
+                if self.assistant_thinking_stream.is_none() {
+                    self.assistant_thinking_stream = Some(ThinkingStreamCollector::default());
+                }
+
+                let width = self.history_wrap_width();
+                if let Some(stream) = self.assistant_thinking_stream.as_mut() {
+                    self.pending_history_lines
+                        .extend(stream.push_delta(&delta, width));
+                }
+            }
             AgentEvent::AssistantDelta { delta } => {
+                if self.accepting_thinking {
+                    self.close_thinking_stream();
+                }
                 self.turn_output_tokens.push_str(&delta);
                 self.step_output_tokens.push_str(&delta);
                 self.saw_delta_in_step = true;
@@ -428,6 +650,8 @@ impl App {
                     tool_calls: _,
                 } = message
                 {
+                    self.close_thinking_stream();
+
                     let content = content.unwrap_or_default();
                     if !self.saw_delta_in_step && !content.is_empty() {
                         self.turn_output_tokens.push_str(&content);
@@ -517,6 +741,7 @@ impl App {
                     self.pending_history_lines.extend(stream.finalize_and_drain());
                 }
                 self.assistant_stream = None;
+                self.close_thinking_stream();
 
                 if let Some(started_at) = self.turn_started_at.take() {
                     self.turn_output_tokens.finish_segment();
@@ -538,6 +763,7 @@ impl App {
             .store
             .record_error(&mut self.session, text.clone())
             .await;
+        self.close_thinking_stream();
         self.pending_history_lines
             .extend(render_error_lines(&text));
         if let Some(started_at) = self.turn_started_at.take() {
@@ -549,6 +775,8 @@ impl App {
         self.running = false;
         self.status = Some("error".to_string());
         self.assistant_stream = None;
+        self.assistant_thinking_stream = None;
+        self.accepting_thinking = false;
         self.step_started_at = None;
         self.current_step = None;
         self.pending_tool_calls.clear();

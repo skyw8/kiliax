@@ -4,7 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
-async-openai = "0.28"
+async-openai = { version = "0.28", features = ["byot"] }
 async-trait = "0.1"
 dirs.workspace = true
 modelcontextprotocol-client = "0.1.3"

@@ -302,6 +302,7 @@ pub enum AgentEvent {
     StepStart { step: usize },
     StepEnd { step: usize },
     AssistantDelta { delta: String },
+    AssistantThinkingDelta { delta: String },
     AssistantMessage { message: Message },
     ToolCall { call: ToolCall },
     ToolResult { message: Message },
@@ -354,6 +355,16 @@ async fn drive_stream_step(
             break;
         };
         let chunk = item?;
+
+        if let Some(delta) = chunk.thinking_delta {
+            if tx
+                .send(Ok(AgentEvent::AssistantThinkingDelta { delta }))
+                .await
+                .is_err()
+            {
+                return Err(AgentRuntimeError::Cancelled);
+            }
+        }
 
         if let Some(delta) = chunk.content_delta {
             assistant_content.push_str(&delta);
@@ -423,6 +434,7 @@ mod tests {
                 created: 0,
                 model: "m".to_string(),
                 content_delta: Some("Hello ".to_string()),
+                thinking_delta: None,
                 tool_calls: vec![ToolCallDelta {
                     index: 0,
                     id: Some("call_1".to_string()),
@@ -437,6 +449,7 @@ mod tests {
                 created: 0,
                 model: "m".to_string(),
                 content_delta: Some("world".to_string()),
+                thinking_delta: None,
                 tool_calls: vec![ToolCallDelta {
                     index: 0,
                     id: None,

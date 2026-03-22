@@ -119,6 +119,7 @@ async fn main() -> Result<()> {
         }
 
         let width = terminal.screen_size()?.width;
+        app.set_screen_width(width);
         let viewport_height = ui::desired_viewport_height(&app, width);
         terminal.draw(viewport_height, |frame| {
             ui::draw(frame, &mut app, composer_style)
@@ -208,6 +209,7 @@ async fn main() -> Result<()> {
     if !history_lines.is_empty() {
         terminal.queue_history_lines(history_lines);
         let width = terminal.screen_size()?.width;
+        app.set_screen_width(width);
         let viewport_height = ui::desired_viewport_height(&app, width);
         terminal.draw(viewport_height, |frame| {
             ui::draw(frame, &mut app, composer_style)
