@@ -1,9 +1,8 @@
 use std::fmt;
 use std::io;
-use std::io::Write;
 use std::time::Duration;
 
-use crossterm::cursor::{MoveTo, MoveToColumn};
+use crossterm::cursor::{MoveDown, MoveTo, MoveToColumn, RestorePosition, SavePosition};
 use crossterm::queue;
 use crossterm::style::{Attribute, Color as CColor, Print, SetAttribute, SetForegroundColor};
 use crossterm::style::SetBackgroundColor;
@@ -23,6 +22,7 @@ const USER_MESSAGE_PREFIX_COLS: usize = 2; // "› "
 const USER_MESSAGE_RIGHT_MARGIN_COLS: usize = 1;
 
 pub fn insert_history_lines(
+    out: &mut impl io::Write,
     lines: &[Line<'static>],
     viewport: &mut Rect,
     full_size: Size,
@@ -35,11 +35,13 @@ pub fn insert_history_lines(
         return Ok(());
     }
 
-    let mut out = io::stdout();
+    let render_width = full_size.width.saturating_sub(1).max(1) as usize;
 
-    let expanded = expand_special_lines(lines, full_size.width as usize);
-    let wrapped = crate::wrap::wrap_lines(&expanded, full_size.width as usize);
+    let expanded = expand_special_lines(lines, render_width);
+    let wrapped = crate::wrap::wrap_lines(&expanded, render_width);
     let wrapped_rows = wrapped.len().min(u16::MAX as usize) as u16;
+
+    let cursor_top = viewport.top().saturating_sub(1);
 
     // If the viewport is not at the bottom of the screen, scroll the lower region down to make
     // room so the viewport can be pushed down inline (codex-style).
@@ -67,19 +69,39 @@ pub fn insert_history_lines(
         return Ok(());
     }
 
-    let cursor_row = viewport_top.saturating_sub(1);
-    queue!(out, SetScrollRegion(1..viewport_top), MoveTo(0, cursor_row))?;
+    // Disable wraparound while writing history lines. This avoids terminals (notably xterm.js) that
+    // auto-wrap when output lands in the last column, which can manifest as extra blank lines.
+    queue!(out, Print("\x1b[?7l"))?;
+
+    queue!(out, SetScrollRegion(1..viewport_top), MoveTo(0, cursor_top))?;
 
     for line in wrapped {
-        // Use a single LF and an explicit cursor move to avoid terminals/PTYs that remap CR to NL
-        // (which would otherwise double-space the output when printing "\r\n").
-        queue!(out, Print("\n"), MoveToColumn(0))?;
-        apply_style(&mut out, line.style)?;
+        // Don't emit '\n' or '\r' here: some PTY settings can translate them in ways that cause
+        // double-spaced scrollback. Codex uses CRLF here; with raw mode enabled OPOST is off, so
+        // the terminal should treat this as a single line advance.
+        queue!(out, Print("\r\n"))?;
+
+        // Some terminals can character-wrap long lines onto continuation rows. Pre-clear those
+        // rows so stale content from a previously longer line is erased. This should usually be
+        // a no-op because we pre-wrap, but is kept for codex parity.
+        let physical_rows = line
+            .width()
+            .max(1)
+            .div_ceil(render_width.max(1));
+        if physical_rows > 1 {
+            queue!(out, SavePosition)?;
+            for _ in 1..physical_rows {
+                queue!(out, MoveDown(1), MoveToColumn(0), Clear(ClearType::UntilNewLine))?;
+            }
+            queue!(out, RestorePosition)?;
+        }
+
+        apply_style(out, line.style)?;
         queue!(out, Clear(ClearType::UntilNewLine))?;
-        write_spans(&mut out, line.spans.iter(), line.style)?;
+        write_spans(out, line.spans.iter(), line.style)?;
     }
 
-    queue!(out, ResetScrollRegion)?;
+    queue!(out, ResetScrollRegion, Print("\x1b[?7h"))?;
     out.flush()?;
     Ok(())
 }
@@ -242,14 +264,31 @@ fn take_prefix_by_width(input: &str, width: usize) -> String {
     out
 }
 
-fn write_spans<'a, I>(w: &mut impl Write, spans: I, line_style: Style) -> io::Result<()>
+fn write_spans<'a, I>(w: &mut impl io::Write, spans: I, line_style: Style) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Span<'static>>,
 {
     for span in spans {
         let style = span.style.patch(line_style);
         apply_style(w, style)?;
-        queue!(w, Print(span.content.as_ref()))?;
+        let content = span.content.as_ref();
+        if !content.contains(['\n', '\r']) {
+            queue!(w, Print(content))?;
+            continue;
+        }
+
+        let mut start = 0usize;
+        for (idx, ch) in content.char_indices() {
+            if ch == '\n' || ch == '\r' {
+                if start < idx {
+                    queue!(w, Print(&content[start..idx]))?;
+                }
+                start = idx.saturating_add(ch.len_utf8());
+            }
+        }
+        if start < content.len() {
+            queue!(w, Print(&content[start..]))?;
+        }
     }
     queue!(
         w,
@@ -260,7 +299,7 @@ where
     Ok(())
 }
 
-fn apply_style(w: &mut impl Write, style: Style) -> io::Result<()> {
+fn apply_style(w: &mut impl io::Write, style: Style) -> io::Result<()> {
     queue!(
         w,
         SetAttribute(Attribute::Reset),

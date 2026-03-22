@@ -56,13 +56,13 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect → ratatui spans）
 - `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行
 - `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；支持整行替换（历史回填）
-- `crates/kiliax-tui/src/terminal.rs`: inline viewport backend（viewport 可下推/可伸缩；raw mode + bracketed paste）；仅重绘 viewport
-- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致的灰底样式并保留上下 padding；支持 fg/bg/italic 等 Style；并在屏幕内下推 viewport 写入终端 scrollback）
+- `crates/kiliax-tui/src/terminal.rs`: inline viewport backend（viewport 可下推/可伸缩；raw mode + bracketed paste）；仅重绘 viewport；跳过绘制终端右下角单元格以规避部分终端的滚屏/空行问题；`ViewportBackend` 也实现 `Write`，history 插入复用同一 backend writer（避免与 ratatui 绘制输出交错）
+- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致的灰底样式并保留上下 padding；支持 fg/bg/italic 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\\r\\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\\r/\\n`；必要时清理 continuation rows 以避免残留/空行）
 
 ## ATTENTION
 
 - 修改完代码后，更新AGENTS.md中的arch部分，只用说明这些核心代码部分
-- 优先遵循最佳实践，不用考虑兼容性，遗留代码大胆重构
+- 优先遵循最佳实践，并兼顾常见终端兼容性（尤其 VSCode WSL / xterm.js），遗留代码可大胆重构
 - 不要修改TODO.md
 - TUI UI 约束（后续修改必须保持一致）：
   - user bubble：历史区渲染需与输入框风格一致（灰底 + 上下 padding）

@@ -22,7 +22,7 @@ pub struct TerminalState {
 
 impl TerminalState {
     pub fn screen_size(&mut self) -> anyhow::Result<Size> {
-        self.full_size = self.terminal.backend().full_size()?;
+        self.full_size = self.terminal.backend_mut().refresh_full_size()?;
         Ok(self.full_size)
     }
 
@@ -35,7 +35,7 @@ impl TerminalState {
         viewport_height: u16,
         draw_fn: impl FnOnce(&mut ratatui::Frame),
     ) -> anyhow::Result<()> {
-        self.full_size = self.terminal.backend().full_size()?;
+        self.full_size = self.terminal.backend_mut().refresh_full_size()?;
         let screen_height = self.full_size.height.max(1);
         let desired_height = viewport_height.clamp(1, screen_height);
 
@@ -79,7 +79,8 @@ impl TerminalState {
         if !self.pending_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.pending_history_lines);
             let before = self.viewport;
-            history::insert_history_lines(&lines, &mut self.viewport, self.full_size)?;
+            let backend = self.terminal.backend_mut();
+            history::insert_history_lines(backend, &lines, &mut self.viewport, self.full_size)?;
             if self.viewport != before {
                 self.terminal.backend_mut().set_viewport(self.viewport);
                 self.terminal.clear()?;
@@ -99,7 +100,7 @@ pub fn init() -> anyhow::Result<(TerminalGuard, TerminalState)> {
     let viewport_backend = ViewportBackend::new(backend);
     let mut terminal = Terminal::new(viewport_backend)?;
 
-    let full_size = terminal.backend().full_size()?;
+    let full_size = terminal.backend_mut().refresh_full_size()?;
     let (_, cursor_y) = crossterm::cursor::position().unwrap_or((0, 0));
     let viewport_y = cursor_y.min(full_size.height.saturating_sub(1));
     let viewport = Rect::new(
@@ -144,6 +145,7 @@ where
 {
     inner: B,
     viewport: Viewport,
+    full_size: Size,
 }
 
 impl ViewportBackend<CrosstermBackend<Stdout>> {
@@ -154,6 +156,7 @@ impl ViewportBackend<CrosstermBackend<Stdout>> {
                 origin: Position { x: 0, y: 0 },
                 size: Size::new(0, 0),
             },
+            full_size: Size::new(0, 0),
         }
     }
 }
@@ -172,8 +175,9 @@ where
         };
     }
 
-    pub fn full_size(&self) -> io::Result<Size> {
-        self.inner.size()
+    pub fn refresh_full_size(&mut self) -> io::Result<Size> {
+        self.full_size = self.inner.size()?;
+        Ok(self.full_size)
     }
 
     fn offset(&self, position: Position) -> Position {
@@ -212,8 +216,19 @@ where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
         let origin = self.viewport.origin;
-        self.inner.draw(content.map(move |(x, y, cell)| {
-            (x.saturating_add(origin.x), y.saturating_add(origin.y), cell)
+        let max_x = self.full_size.width.saturating_sub(1);
+        let max_y = self.full_size.height.saturating_sub(1);
+        self.inner.draw(content.filter_map(move |(x, y, cell)| {
+            let gx = x.saturating_add(origin.x);
+            let gy = y.saturating_add(origin.y);
+
+            // Avoid writing the bottom-right cell: several terminals can scroll the screen when the
+            // cursor advances past it, which manifests as extra blank lines in scrollback.
+            if gx == max_x && gy == max_y {
+                None
+            } else {
+                Some((gx, gy, cell))
+            }
         }))
     }
 
@@ -258,5 +273,18 @@ where
 
     fn flush(&mut self) -> io::Result<()> {
         Backend::flush(&mut self.inner)
+    }
+}
+
+impl<B> Write for ViewportBackend<B>
+where
+    B: Backend + Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        std::io::Write::flush(&mut self.inner)
     }
 }
