@@ -25,9 +25,11 @@ minimal
 
 - `crates/kiliax-core/Cargo.toml`: core 依赖（`async-openai` 启用 `byot` 以兼容扩展字段、MCP client 等）
 - `crates/kiliax-core/prompts/`: agent 提示词（markdown，编译期 `include_str!`）
+  - `codex.md`: 模型层提示词（默认，用于 gpt 系列）
   - `plan.md`: plan agent 提示词（只读/受限命令）
   - `build.md`: build agent 提示词（可写/可执行）
   - `tools.md`: 通用工具使用规范（read/write/shell/mcp 命名空间）
+  - `how_to_use_skills.md`: skills 使用规范（与 skills 列表一起注入）
 - `crates/kiliax-core/examples/`: 可运行示例
   - `chat_hello.rs`: 非流式 chat 示例
   - `stream_chat.rs`: 流式 chat 示例（展示 delta 与 tool_call delta 合并）
@@ -36,7 +38,7 @@ minimal
 - `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、`<provider>/<model>` 路由；agent 运行参数（`runtime`/`agents.*`）；包含 config 优先级/resolve_model 单元测试
 - `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；流式通过 `byot` 解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`
 - `crates/kiliax-core/src/agents.rs`: `AgentProfile`（plan/build）及其可用工具集合与权限模型
-- `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（组装 system 前缀：agent prompt + tools 规范 + workspace root + `<skills_instructions>` skills 列表 + 对话消息）
+- `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt：model(codex) + agent(plan/build) + env(pwd/platform/provider/model_id/date/tools+skills/subagents) + project(AGENTS.md，兼容读取 CLAUDE.md) + history）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；流式 run 支持取消）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`；包含流式 delta/thinking/tool_call 合并与默认 id 等单元测试
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统

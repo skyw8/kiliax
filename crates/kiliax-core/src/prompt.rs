@@ -4,16 +4,24 @@ use crate::agents::AgentProfile;
 use crate::llm::Message;
 use crate::tools::skills::Skill;
 
+const CODEX_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/codex.md"));
 const TOOLS_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools.md"));
 const SKILLS_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/how_to_use_skills.md"));
 const SKILLS_INSTRUCTIONS_OPEN_TAG: &str = "<skills_instructions>";
 const SKILLS_INSTRUCTIONS_CLOSE_TAG: &str = "</skills_instructions>";
+const ENV_OPEN_TAG: &str = "<env>";
+const ENV_CLOSE_TAG: &str = "</env>";
+const SUBAGENTS_LINE: &str = "Subagents: not supported.";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PromptBuilder {
     workspace_root: Option<PathBuf>,
+    model_id: Option<String>,
+    include_model_prompt: bool,
     agent_prompt: Option<String>,
+    include_environment_prompt: bool,
     include_tools_prompt: bool,
+    include_project_prompt: bool,
     skills: Vec<Skill>,
     messages: Vec<Message>,
 }
@@ -22,8 +30,12 @@ impl PromptBuilder {
     pub fn new() -> Self {
         Self {
             workspace_root: None,
+            model_id: None,
+            include_model_prompt: true,
             agent_prompt: None,
+            include_environment_prompt: true,
             include_tools_prompt: true,
+            include_project_prompt: true,
             skills: Vec::new(),
             messages: Vec::new(),
         }
@@ -38,13 +50,33 @@ impl PromptBuilder {
         self
     }
 
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+
     pub fn with_agent_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.agent_prompt = Some(prompt.into());
         self
     }
 
+    pub fn include_model_prompt(mut self, on: bool) -> Self {
+        self.include_model_prompt = on;
+        self
+    }
+
+    pub fn include_environment_prompt(mut self, on: bool) -> Self {
+        self.include_environment_prompt = on;
+        self
+    }
+
     pub fn include_tools_prompt(mut self, on: bool) -> Self {
         self.include_tools_prompt = on;
+        self
+    }
+
+    pub fn include_project_prompt(mut self, on: bool) -> Self {
+        self.include_project_prompt = on;
         self
     }
 
@@ -86,9 +118,27 @@ impl PromptBuilder {
     pub fn build(self) -> Vec<Message> {
         let mut out = Vec::new();
 
+        if self.include_model_prompt {
+            if let Some(prompt) = model_prompt_for(self.model_id.as_deref()) {
+                // Use system role for maximum OpenAI-compatible coverage.
+                out.push(Message::System {
+                    content: prompt.to_string(),
+                });
+            }
+        }
+
         if let Some(prompt) = self.agent_prompt {
             // Use system role for maximum OpenAI-compatible coverage.
             out.push(Message::System { content: prompt });
+        }
+
+        if self.include_environment_prompt {
+            out.push(Message::System {
+                content: render_environment_prompt(
+                    self.workspace_root.as_deref(),
+                    self.model_id.as_deref(),
+                ),
+            });
         }
 
         if self.include_tools_prompt {
@@ -97,22 +147,92 @@ impl PromptBuilder {
             });
         }
 
-        if let Some(root) = self.workspace_root {
-            out.push(Message::System {
-                content: format!(
-                    "Workspace root: {}\nFor read/write tools, prefer paths relative to this workspace root (no `..`).\nSkill source files may live outside the workspace; use the exact `SKILL.md` paths listed in the skills section when needed.",
-                    root.display()
-                ),
-            });
-        }
-
         if let Some(skills) = render_skills_section(&self.skills) {
             out.push(Message::System { content: skills });
+        }
+
+        if self.include_project_prompt {
+            if let Some(project) = render_project_prompt(self.workspace_root.as_deref()) {
+                out.push(Message::System { content: project });
+            }
         }
 
         out.extend(self.messages);
         out
     }
+}
+
+impl Default for PromptBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn model_prompt_for(model_id: Option<&str>) -> Option<&'static str> {
+    let Some(model_id) = model_id else {
+        return Some(CODEX_PROMPT);
+    };
+
+    let model = model_id.rsplit('/').next().unwrap_or(model_id).trim();
+    if model.starts_with("gpt") {
+        return Some(CODEX_PROMPT);
+    }
+    None
+}
+
+fn render_environment_prompt(workspace_root: Option<&Path>, model_id: Option<&str>) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if let Some(root) = workspace_root {
+        lines.push(format!("PWD: {}", root.display()));
+    }
+
+    lines.push(format!(
+        "Platform: {}/{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+
+    if let Some(model_id) = model_id.map(str::trim).filter(|s| !s.is_empty()) {
+        let provider = model_id
+            .split_once('/')
+            .map(|(p, _)| p.trim())
+            .filter(|p| !p.is_empty())
+            .unwrap_or("unknown");
+        lines.push(format!("Provider: {provider}"));
+        lines.push(format!("Model ID: {model_id}"));
+    }
+
+    lines.push(format!("Date: {}", today_ymd()));
+    lines.push(SUBAGENTS_LINE.to_string());
+
+    let body = lines.join("\n");
+    format!("{ENV_OPEN_TAG}\n{body}\n{ENV_CLOSE_TAG}")
+}
+
+fn today_ymd() -> String {
+    use time::{macros::format_description, OffsetDateTime};
+
+    let date = OffsetDateTime::now_utc().date();
+    date.format(format_description!("[year]-[month]-[day]"))
+        .unwrap_or_else(|_| date.to_string())
+}
+
+fn render_project_prompt(workspace_root: Option<&Path>) -> Option<String> {
+    let root = workspace_root?;
+    for filename in ["AGENTS.md", "CLAUDE.md"] {
+        let path = root.join(filename);
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let content = content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        return Some(format!("# Project (AGENTS.md)\n{content}"));
+    }
+
+    None
 }
 
 fn render_skills_section(skills: &[Skill]) -> Option<String> {
@@ -165,15 +285,18 @@ mod tests {
     fn builds_in_stable_order() {
         let msgs = PromptBuilder::new()
             .with_agent_prompt("agent")
+            .include_model_prompt(true)
+            .include_project_prompt(false)
             .include_tools_prompt(false)
             .with_workspace_root("ws")
             .push_user("hi")
             .build();
 
-        assert_eq!(msgs.len(), 3);
-        assert!(matches!(&msgs[0], Message::System { content } if content == "agent"));
-        assert!(matches!(&msgs[1], Message::System { content } if content.contains("Workspace root:")));
-        assert!(matches!(&msgs[2], Message::User { content } if content == "hi"));
+        assert_eq!(msgs.len(), 4);
+        assert!(matches!(&msgs[0], Message::System { content } if content.contains("Codex CLI")));
+        assert!(matches!(&msgs[1], Message::System { content } if content == "agent"));
+        assert!(matches!(&msgs[2], Message::System { content } if content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG)));
+        assert!(matches!(&msgs[3], Message::User { content } if content == "hi"));
     }
 
     #[test]
@@ -197,5 +320,37 @@ mod tests {
             matches!(m, Message::System { content } if content.contains(SKILLS_INSTRUCTIONS_OPEN_TAG) && content.contains("### Available skills") && content.contains("- demo: desc (file: skills/demo/SKILL.md)"))
         });
         assert!(has_skills);
+    }
+
+    #[test]
+    fn includes_project_agents_md() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "project rules").unwrap();
+
+        let msgs = PromptBuilder::new()
+            .include_tools_prompt(false)
+            .with_workspace_root(dir.path())
+            .build();
+
+        let has_project = msgs.iter().any(|m| {
+            matches!(m, Message::System { content } if content.contains("# Project (AGENTS.md)") && content.contains("project rules"))
+        });
+        assert!(has_project);
+    }
+
+    #[test]
+    fn includes_project_claude_md_when_agents_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "claude rules").unwrap();
+
+        let msgs = PromptBuilder::new()
+            .include_tools_prompt(false)
+            .with_workspace_root(dir.path())
+            .build();
+
+        let has_project = msgs.iter().any(|m| {
+            matches!(m, Message::System { content } if content.contains("# Project (AGENTS.md)") && content.contains("claude rules"))
+        });
+        assert!(has_project);
     }
 }

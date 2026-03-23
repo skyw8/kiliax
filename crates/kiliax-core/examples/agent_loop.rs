@@ -78,7 +78,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => {
             let mut builder =
-                PromptBuilder::for_agent(&profile).with_workspace_root(&workspace_root);
+                PromptBuilder::for_agent(&profile)
+                    .with_model_id(runtime.llm().route().model_id())
+                    .with_workspace_root(&workspace_root);
             if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
                 builder = builder.add_skills(skills);
             }
