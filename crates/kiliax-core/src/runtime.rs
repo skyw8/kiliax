@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use tokio_stream::{Stream, StreamExt};
 
@@ -8,7 +8,7 @@ use async_openai::types::FinishReason;
 use crate::llm::{
     ChatRequest, ChatStreamChunk, LlmClient, LlmError, Message, ToolCall, ToolCallDelta, ToolChoice,
 };
-use crate::tools::{ToolEngine, ToolError};
+use crate::tools::{tool_parallelism, ToolEngine, ToolError, ToolParallelism};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentRuntimeError {
@@ -114,6 +114,7 @@ impl AgentRuntime {
         options: AgentRuntimeOptions,
     ) -> Result<AgentRunOutput, AgentRuntimeError> {
         let tool_defs = self.tool_definitions(profile).await;
+        let perms = std::sync::Arc::new(profile.permissions.clone());
 
         for step in 0..options.max_steps {
             let mut req = ChatRequest::new(messages.clone());
@@ -125,9 +126,12 @@ impl AgentRuntime {
 
             let resp = self.llm.chat(req).await?;
 
-            let assistant = resp.message;
-            let tool_calls = match &assistant {
-                Message::Assistant { tool_calls, .. } => tool_calls.clone(),
+            let mut assistant = resp.message;
+            let tool_calls = match &mut assistant {
+                Message::Assistant { tool_calls, .. } => {
+                    normalize_tool_call_ids(step, tool_calls);
+                    tool_calls.clone()
+                }
                 _ => Vec::new(),
             };
             messages.push(assistant);
@@ -140,22 +144,80 @@ impl AgentRuntime {
                 });
             }
 
-            for call in tool_calls {
-                match self
-                    .tools
-                    .execute_to_message(&profile.permissions, &call)
-                    .await
-                {
-                    Ok(tool_msg) => messages.push(tool_msg),
-                    Err(err) => match options.tool_error_mode {
-                        ToolErrorMode::FailFast => return Err(err.into()),
-                        ToolErrorMode::ToolMessage => {
-                            messages.push(Message::Tool {
-                                tool_call_id: call.id,
-                                content: format!("error: {err}"),
+            for group in group_tool_calls(&tool_calls) {
+                match group {
+                    ToolCallGroup::Exclusive(call) => {
+                        match self.tools.execute_to_message(perms.as_ref(), call).await {
+                            Ok(tool_msg) => messages.push(tool_msg),
+                            Err(err) => match options.tool_error_mode {
+                                ToolErrorMode::FailFast => return Err(err.into()),
+                                ToolErrorMode::ToolMessage => {
+                                    messages.push(Message::Tool {
+                                        tool_call_id: call.id.clone(),
+                                        content: format!("error: {err}"),
+                                    });
+                                }
+                            },
+                        }
+                    }
+                    ToolCallGroup::Parallel(calls) => {
+                        if calls.len() == 1 {
+                            let call = &calls[0];
+                            match self.tools.execute_to_message(perms.as_ref(), call).await {
+                                Ok(tool_msg) => messages.push(tool_msg),
+                                Err(err) => match options.tool_error_mode {
+                                    ToolErrorMode::FailFast => return Err(err.into()),
+                                    ToolErrorMode::ToolMessage => {
+                                        messages.push(Message::Tool {
+                                            tool_call_id: call.id.clone(),
+                                            content: format!("error: {err}"),
+                                        });
+                                    }
+                                },
+                            }
+                            continue;
+                        }
+
+                        let mut set = tokio::task::JoinSet::new();
+                        let tools = self.tools.clone();
+
+                        for (idx, call) in calls.iter().cloned().enumerate() {
+                            let tools = tools.clone();
+                            let perms = perms.clone();
+                            set.spawn(async move {
+                                let res = tools.execute_to_message(perms.as_ref(), &call).await;
+                                (idx, call, res)
                             });
                         }
-                    },
+
+                        let mut results: Vec<Option<Result<Message, ToolError>>> = Vec::new();
+                        results.resize_with(calls.len(), || None);
+                        while let Some(joined) = set.join_next().await {
+                            let (idx, _call, res) = joined.map_err(|e| {
+                                ToolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+                            })?;
+                            results[idx] = Some(res);
+                        }
+
+                        for (idx, call) in calls.iter().enumerate() {
+                            let Some(res) = results.get_mut(idx).and_then(Option::take) else {
+                                continue;
+                            };
+
+                            match res {
+                                Ok(tool_msg) => messages.push(tool_msg),
+                                Err(err) => match options.tool_error_mode {
+                                    ToolErrorMode::FailFast => return Err(err.into()),
+                                    ToolErrorMode::ToolMessage => {
+                                        messages.push(Message::Tool {
+                                            tool_call_id: call.id.clone(),
+                                            content: format!("error: {err}"),
+                                        });
+                                    }
+                                },
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -182,6 +244,7 @@ impl AgentRuntime {
         let llm = self.llm.clone();
         let tools = self.tools.clone();
         let profile = profile.clone();
+        let perms = std::sync::Arc::new(profile.permissions.clone());
 
         tokio::spawn(async move {
             for step in 0..options.max_steps {
@@ -209,10 +272,11 @@ impl AgentRuntime {
                 };
 
                 match drive_stream_step(step, stream, &tx).await {
-                    Ok(step_out) => {
+                    Ok(mut step_out) => {
                         if tx.is_closed() {
                             return;
                         }
+                        normalize_stream_step_tool_calls(step, &mut step_out);
                         messages.push(step_out.assistant.clone());
                         let _ = tx
                             .send(Ok(AgentEvent::AssistantMessage {
@@ -232,41 +296,155 @@ impl AgentRuntime {
                             return;
                         }
 
-                        for call in step_out.tool_calls {
-                            if tx.is_closed() {
-                                return;
-                            }
-                            let _ = tx
-                                .send(Ok(AgentEvent::ToolCall { call: call.clone() }))
-                                .await;
-
-                            match tools.execute_to_message(&profile.permissions, &call).await {
-                                Ok(tool_msg) => {
-                                    let _ = tx
-                                        .send(Ok(AgentEvent::ToolResult {
-                                            message: tool_msg.clone(),
-                                        }))
-                                        .await;
-                                    messages.push(tool_msg);
-                                }
-                                Err(err) => match options.tool_error_mode {
-                                    ToolErrorMode::FailFast => {
-                                        let _ = tx.send(Err(err.into())).await;
+                        for group in group_tool_calls(&step_out.tool_calls) {
+                            match group {
+                                ToolCallGroup::Exclusive(call) => {
+                                    if tx.is_closed() {
                                         return;
                                     }
-                                    ToolErrorMode::ToolMessage => {
-                                        let tool_msg = Message::Tool {
-                                            tool_call_id: call.id,
-                                            content: format!("error: {err}"),
-                                        };
-                                        let _ = tx
-                                            .send(Ok(AgentEvent::ToolResult {
-                                                message: tool_msg.clone(),
-                                            }))
-                                            .await;
-                                        messages.push(tool_msg);
+                                    let _ = tx
+                                        .send(Ok(AgentEvent::ToolCall { call: call.clone() }))
+                                        .await;
+
+                                    match tools.execute_to_message(perms.as_ref(), call).await {
+                                        Ok(tool_msg) => {
+                                            let _ = tx
+                                                .send(Ok(AgentEvent::ToolResult {
+                                                    message: tool_msg.clone(),
+                                                }))
+                                                .await;
+                                            messages.push(tool_msg);
+                                        }
+                                        Err(err) => match options.tool_error_mode {
+                                            ToolErrorMode::FailFast => {
+                                                let _ = tx.send(Err(err.into())).await;
+                                                return;
+                                            }
+                                            ToolErrorMode::ToolMessage => {
+                                                let tool_msg = Message::Tool {
+                                                    tool_call_id: call.id.clone(),
+                                                    content: format!("error: {err}"),
+                                                };
+                                                let _ = tx
+                                                    .send(Ok(AgentEvent::ToolResult {
+                                                        message: tool_msg.clone(),
+                                                    }))
+                                                    .await;
+                                                messages.push(tool_msg);
+                                            }
+                                        },
                                     }
-                                },
+                                }
+                                ToolCallGroup::Parallel(calls) => {
+                                    if tx.is_closed() {
+                                        return;
+                                    }
+
+                                    for call in calls.iter() {
+                                        let _ = tx
+                                            .send(Ok(AgentEvent::ToolCall { call: call.clone() }))
+                                            .await;
+                                    }
+
+                                    if calls.len() == 1 {
+                                        let call = &calls[0];
+                                        match tools.execute_to_message(perms.as_ref(), call).await {
+                                            Ok(tool_msg) => {
+                                                let _ = tx
+                                                    .send(Ok(AgentEvent::ToolResult {
+                                                        message: tool_msg.clone(),
+                                                    }))
+                                                    .await;
+                                                messages.push(tool_msg);
+                                            }
+                                            Err(err) => match options.tool_error_mode {
+                                                ToolErrorMode::FailFast => {
+                                                    let _ = tx.send(Err(err.into())).await;
+                                                    return;
+                                                }
+                                                ToolErrorMode::ToolMessage => {
+                                                    let tool_msg = Message::Tool {
+                                                        tool_call_id: call.id.clone(),
+                                                        content: format!("error: {err}"),
+                                                    };
+                                                    let _ = tx
+                                                        .send(Ok(AgentEvent::ToolResult {
+                                                            message: tool_msg.clone(),
+                                                        }))
+                                                        .await;
+                                                    messages.push(tool_msg);
+                                                }
+                                            },
+                                        }
+                                        continue;
+                                    }
+
+                                    let mut set = tokio::task::JoinSet::new();
+                                    let tools = tools.clone();
+
+                                    for (idx, call) in calls.iter().cloned().enumerate() {
+                                        let tools = tools.clone();
+                                        let perms = perms.clone();
+                                        set.spawn(async move {
+                                            let res =
+                                                tools.execute_to_message(perms.as_ref(), &call).await;
+                                            (idx, call, res)
+                                        });
+                                    }
+
+                                    let mut results: Vec<Option<Message>> = vec![None; calls.len()];
+                                    while let Some(joined) = set.join_next().await {
+                                        if tx.is_closed() {
+                                            return;
+                                        }
+                                        let (idx, call, res) = match joined {
+                                            Ok(v) => v,
+                                            Err(err) => {
+                                                let _ = tx
+                                                    .send(Err(ToolError::Io(std::io::Error::new(
+                                                        std::io::ErrorKind::Other,
+                                                        err,
+                                                    ))
+                                                    .into()))
+                                                    .await;
+                                                return;
+                                            }
+                                        };
+
+                                        match res {
+                                            Ok(tool_msg) => {
+                                                results[idx] = Some(tool_msg.clone());
+                                                let _ = tx
+                                                    .send(Ok(AgentEvent::ToolResult {
+                                                        message: tool_msg,
+                                                    }))
+                                                    .await;
+                                            }
+                                            Err(err) => match options.tool_error_mode {
+                                                ToolErrorMode::FailFast => {
+                                                    let _ = tx.send(Err(err.into())).await;
+                                                    return;
+                                                }
+                                                ToolErrorMode::ToolMessage => {
+                                                    let tool_msg = Message::Tool {
+                                                        tool_call_id: call.id,
+                                                        content: format!("error: {err}"),
+                                                    };
+                                                    results[idx] = Some(tool_msg.clone());
+                                                    let _ = tx
+                                                        .send(Ok(AgentEvent::ToolResult {
+                                                            message: tool_msg,
+                                                        }))
+                                                        .await;
+                                                }
+                                            },
+                                        }
+                                    }
+
+                                    for msg in results.into_iter().flatten() {
+                                        messages.push(msg);
+                                    }
+                                }
                             }
                         }
 
@@ -309,6 +487,36 @@ pub enum AgentEvent {
     Done(AgentRunOutput),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ToolCallGroup<'a> {
+    Exclusive(&'a ToolCall),
+    Parallel(&'a [ToolCall]),
+}
+
+fn group_tool_calls(tool_calls: &[ToolCall]) -> Vec<ToolCallGroup<'_>> {
+    let mut out = Vec::new();
+    let mut idx = 0usize;
+
+    while idx < tool_calls.len() {
+        let call = &tool_calls[idx];
+        if tool_parallelism(call.name.as_str()).is_parallel() {
+            let start = idx;
+            idx += 1;
+            while idx < tool_calls.len()
+                && tool_parallelism(tool_calls[idx].name.as_str()) == ToolParallelism::Parallel
+            {
+                idx += 1;
+            }
+            out.push(ToolCallGroup::Parallel(&tool_calls[start..idx]));
+        } else {
+            out.push(ToolCallGroup::Exclusive(call));
+            idx += 1;
+        }
+    }
+
+    out
+}
+
 #[derive(Debug)]
 struct StreamStepOutput {
     assistant: Message,
@@ -332,6 +540,29 @@ fn merge_tool_call_delta(buf: &mut ToolCallBuf, delta: ToolCallDelta) {
     }
     if let Some(args) = delta.arguments {
         buf.arguments.push_str(&args);
+    }
+}
+
+fn normalize_tool_call_ids(step: usize, tool_calls: &mut Vec<ToolCall>) {
+    let mut used: HashSet<String> = HashSet::with_capacity(tool_calls.len());
+
+    for (idx, call) in tool_calls.iter_mut().enumerate() {
+        let trimmed = call.id.trim();
+        if trimmed != call.id {
+            call.id = trimmed.to_string();
+        }
+
+        if call.id.is_empty() || used.contains(&call.id) {
+            call.id = format!("call_step{}_{}", step + 1, idx);
+        }
+        used.insert(call.id.clone());
+    }
+}
+
+fn normalize_stream_step_tool_calls(step: usize, out: &mut StreamStepOutput) {
+    normalize_tool_call_ids(step, &mut out.tool_calls);
+    if let Message::Assistant { tool_calls, .. } = &mut out.assistant {
+        *tool_calls = out.tool_calls.clone();
     }
 }
 

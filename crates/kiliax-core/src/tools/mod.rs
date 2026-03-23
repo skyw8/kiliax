@@ -7,6 +7,33 @@ pub use engine::ToolEngine;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolParallelism {
+    /// Safe to execute in parallel with other parallel tool calls.
+    Parallel,
+    /// Must be executed alone (acts as a barrier).
+    Exclusive,
+}
+
+impl ToolParallelism {
+    pub fn is_parallel(self) -> bool {
+        matches!(self, ToolParallelism::Parallel)
+    }
+}
+
+pub fn tool_parallelism(tool_name: &str) -> ToolParallelism {
+    match tool_name {
+        builtin::TOOL_READ_FILE
+        | builtin::TOOL_LIST_DIR
+        | builtin::TOOL_GREP_FILES
+        | builtin::TOOL_SHELL_COMMAND
+        | builtin::TOOL_WRITE_STDIN
+        | builtin::TOOL_APPLY_PATCH => ToolParallelism::Parallel,
+        builtin::TOOL_UPDATE_PLAN => ToolParallelism::Exclusive,
+        _ => ToolParallelism::Exclusive,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Permissions {
     pub file_read: bool,

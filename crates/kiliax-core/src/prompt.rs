@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::agents::AgentProfile;
-use crate::llm::Message;
+use crate::llm::{Message, ToolDefinition};
+use crate::tools::{tool_parallelism, ToolParallelism};
 use crate::tools::skills::Skill;
 
 const CODEX_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/codex.md"));
-const TOOLS_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools.md"));
+const TOOLS_RULES_PROMPT: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools.md"));
 const SKILLS_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/how_to_use_skills.md"));
 const SKILLS_INSTRUCTIONS_OPEN_TAG: &str = "<skills_instructions>";
 const SKILLS_INSTRUCTIONS_CLOSE_TAG: &str = "</skills_instructions>";
@@ -22,6 +24,7 @@ pub struct PromptBuilder {
     include_environment_prompt: bool,
     include_tools_prompt: bool,
     include_project_prompt: bool,
+    tool_definitions: Vec<ToolDefinition>,
     skills: Vec<Skill>,
     messages: Vec<Message>,
 }
@@ -36,13 +39,16 @@ impl PromptBuilder {
             include_environment_prompt: true,
             include_tools_prompt: true,
             include_project_prompt: true,
+            tool_definitions: Vec::new(),
             skills: Vec::new(),
             messages: Vec::new(),
         }
     }
 
     pub fn for_agent(profile: &AgentProfile) -> Self {
-        Self::new().with_agent_prompt(profile.developer_prompt)
+        Self::new()
+            .with_agent_prompt(profile.developer_prompt)
+            .with_tools(profile.tools.clone())
     }
 
     pub fn with_workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
@@ -77,6 +83,11 @@ impl PromptBuilder {
 
     pub fn include_project_prompt(mut self, on: bool) -> Self {
         self.include_project_prompt = on;
+        self
+    }
+
+    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.tool_definitions = tools;
         self
     }
 
@@ -143,7 +154,7 @@ impl PromptBuilder {
 
         if self.include_tools_prompt {
             out.push(Message::System {
-                content: TOOLS_PROMPT.to_string(),
+                content: render_tools_prompt(&self.tool_definitions),
             });
         }
 
@@ -233,6 +244,64 @@ fn render_project_prompt(workspace_root: Option<&Path>) -> Option<String> {
     }
 
     None
+}
+
+fn render_tools_prompt(tools: &[ToolDefinition]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("# Tool Use".to_string());
+    lines.push("You can call tools to inspect or modify the workspace.".to_string());
+    lines.push(String::new());
+    lines.push("## Available Tools".to_string());
+
+    if tools.is_empty() {
+        lines.push("- (none)".to_string());
+    } else {
+        for tool in tools {
+            let parallelism = match tool_parallelism(tool.name.as_str()) {
+                ToolParallelism::Parallel => "parallel",
+                ToolParallelism::Exclusive => "serial",
+            };
+            let desc = tool
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("No description.");
+            lines.push(format!("- `{}` ({parallelism}): {desc}", tool.name));
+        }
+    }
+
+    let parallel: Vec<String> = tools
+        .iter()
+        .filter(|t| tool_parallelism(t.name.as_str()) == ToolParallelism::Parallel)
+        .map(|t| format!("`{}`", t.name))
+        .collect();
+    let exclusive: Vec<String> = tools
+        .iter()
+        .filter(|t| tool_parallelism(t.name.as_str()) == ToolParallelism::Exclusive)
+        .map(|t| format!("`{}`", t.name))
+        .collect();
+
+    lines.push(String::new());
+    lines.push("## Parallel Tool Calls".to_string());
+    if !parallel.is_empty() {
+        lines.push(format!("- Parallel-safe: {}", parallel.join(", ")));
+    }
+    if !exclusive.is_empty() {
+        lines.push(format!("- Serial-only (won't run concurrently): {}", exclusive.join(", ")));
+    }
+    lines.push(
+        "- You MAY include multiple tool calls in one assistant message; parallel-safe calls may run concurrently."
+            .to_string(),
+    );
+    lines.push("- Only parallelize independent tool calls.".to_string());
+
+    if !TOOLS_RULES_PROMPT.trim().is_empty() {
+        lines.push(String::new());
+        lines.push(TOOLS_RULES_PROMPT.trim().to_string());
+    }
+
+    lines.join("\n")
 }
 
 fn render_skills_section(skills: &[Skill]) -> Option<String> {
