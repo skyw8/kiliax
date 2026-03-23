@@ -59,7 +59,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式与 diff 行背景（从终端默认背景色推导，类似 codex）
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
-- `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect → ratatui spans）
+- `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect scope → VS Code Dark+ 默认配色 → ratatui spans）
 - `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行（含宽字符/样式保持单元测试）
 - `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；支持整行替换（历史回填）；包含 Unicode/快捷键单元测试
 - `crates/kiliax-tui/src/custom_terminal.rs`: TUI 用到的自定义终端命令（scroll region、wraparound 开关、RI 等 ANSI 序列封装）
