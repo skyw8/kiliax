@@ -13,6 +13,14 @@ agents:
   general:
     max_steps: 8
 
+# Web search (optional, Tavily).
+# If omitted, the web_search tool falls back to env vars:
+# - TAVILY_API_KEY
+# - TAVILY_API_BASE_URL (default: https://api.tavily.com)
+web_search:
+  base_url: https://api.tavily.com
+  api_key: tvly-your-key
+
 providers:
   moonshot_cn:
     base_url: https://api.moonshot.cn/v1

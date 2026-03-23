@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::llm::{Message, ToolCall, ToolDefinition};
 use crate::tools::{builtin, Permissions, ToolError};
@@ -8,13 +9,15 @@ use crate::tools::{builtin, Permissions, ToolError};
 pub struct ToolEngine {
     workspace_root: PathBuf,
     shell_sessions: Arc<builtin::ShellSessions>,
+    config: Arc<RwLock<Arc<crate::config::Config>>>,
 }
 
 impl ToolEngine {
-    pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
+    pub fn new(workspace_root: impl Into<PathBuf>, config: crate::config::Config) -> Self {
         Self {
             workspace_root: workspace_root.into(),
             shell_sessions: Arc::new(builtin::ShellSessions::new()),
+            config: Arc::new(RwLock::new(Arc::new(config))),
         }
     }
 
@@ -22,15 +25,37 @@ impl ToolEngine {
         &self.workspace_root
     }
 
+    pub fn set_config(&self, config: crate::config::Config) -> Result<(), ToolError> {
+        let mut guard = self.config.write().map_err(|_| {
+            ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "tool config lock poisoned",
+            ))
+        })?;
+        *guard = Arc::new(config);
+        Ok(())
+    }
+
     pub async fn extra_tool_definitions(&self) -> Vec<ToolDefinition> {
         Vec::new()
     }
 
     pub async fn execute(&self, perms: &Permissions, call: &ToolCall) -> Result<String, ToolError> {
+        let cfg = self
+            .config
+            .read()
+            .map_err(|_| {
+                ToolError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "tool config lock poisoned",
+                ))
+            })?
+            .clone();
         builtin::execute(
             &self.workspace_root,
             perms,
             self.shell_sessions.as_ref(),
+            cfg.as_ref(),
             call,
         )
         .await
@@ -52,6 +77,7 @@ impl ToolEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::tools::{ShellPermissions, ToolError};
 
     fn plan_permissions() -> Permissions {
@@ -73,7 +99,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn plan_denies_apply_patch() {
         let tmp = tempfile::tempdir().unwrap();
-        let engine = ToolEngine::new(tmp.path());
+        let engine = ToolEngine::new(tmp.path(), Config::default());
 
         let call = ToolCall {
             id: "call_1".to_string(),
@@ -93,7 +119,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn plan_denies_disallowed_shell() {
         let tmp = tempfile::tempdir().unwrap();
-        let engine = ToolEngine::new(tmp.path());
+        let engine = ToolEngine::new(tmp.path(), Config::default());
 
         let call = ToolCall {
             id: "call_1".to_string(),
@@ -114,7 +140,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn build_can_apply_patch() {
         let tmp = tempfile::tempdir().unwrap();
-        let engine = ToolEngine::new(tmp.path());
+        let engine = ToolEngine::new(tmp.path(), Config::default());
 
         let call = ToolCall {
             id: "call_1".to_string(),

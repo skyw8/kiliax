@@ -35,7 +35,7 @@ minimal
   - `stream_chat.rs`: 流式 chat 示例（展示 delta 与 tool_call delta 合并）
   - `agent_loop.rs`: AgentRuntime + PromptBuilder 的闭环示例（流式输出 + 自动执行工具）
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
-- `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、`<provider>/<model>` 路由；agent 运行参数（`runtime`/`agents.*`）；包含 config 优先级/resolve_model 单元测试
+- `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、`<provider>/<model>` 路由；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；包含 config 优先级/resolve_model 单元测试
 - `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；流式通过 `byot` 解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染，并标注可并行工具）
@@ -49,10 +49,11 @@ minimal
     - `read_file.rs`: `read_file`
     - `list_dir.rs`: `list_dir`
     - `grep_files.rs`: `grep_files`（ignore/grep-searcher；尊重 ignore）
+    - `web_search.rs`: `web_search`（Tavily API；从 `killiax.yaml` 的 `web_search.*` 加载，兼容 `tools.tavily.*` 与 env `TAVILY_API_KEY` / `TAVILY_API_BASE_URL`）
     - `shell.rs`: `shell_command`/`write_stdin`（argv allowlist + sessions）
     - `apply_patch.rs`: `apply_patch`（Begin/End Patch）
     - `update_plan.rs`: `update_plan`
-  - `engine.rs`: 工具统一执行入口（仅集成内置工具；维护 shell sessions；`extra_tool_definitions` 暂为空）
+  - `engine.rs`: 工具统一执行入口（仅集成内置工具；维护 shell sessions；持有 Config 并支持 `set_config` 热更新；`extra_tool_definitions` 暂为空）
   - `mcp.rs`: MCP stdio hub（连接 server、列出 tools、`mcp__<server>__<tool>` 命名空间、调用工具；当前未接入 ToolEngine）
   - `skills.rs`: skills 发现（扫描 roots；按 `id` 去重；解析 `SKILL.md` YAML front matter 的 `name/description`；剥离 front matter 得到正文）
 
@@ -62,7 +63,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
 - `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流）；slash command 分发（/agent、/model）与模型切换落盘
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示）；slash command（/agent、/model）与 UI mode（chat/model picker）状态机；模型切换会更新 `killiax.yaml` 的 `default_model` 并热切换 runtime；切换后 checkpoint session（刷新 system preamble）
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示）；slash command（/agent、/model）与 UI mode（chat/model picker）状态机；模型切换会更新 `killiax.yaml` 的 `default_model` 并热切换 runtime（同步 reload Config + `ToolEngine::set_config`）；切换后 checkpoint session（刷新 system preamble）
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（`›` 前缀、自动换行、动态高度）；slash command popup；model picker 选择界面；状态行/底部 footer（agent+model/status/快捷键）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/slash_command.rs`: slash command 定义 + popup 状态（↑/↓ 选择、Tab 补全、/a alias）

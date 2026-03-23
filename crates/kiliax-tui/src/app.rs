@@ -849,6 +849,9 @@ impl App {
 
             let llm = kiliax_core::llm::LlmClient::from_config(&self.config, Some(&model_id))?;
             let tools = self.runtime.tools().clone();
+            tools
+                .set_config(self.config.clone())
+                .map_err(|e| anyhow::anyhow!(e))?;
             self.runtime = AgentRuntime::new(llm, tools);
             self.model_id = self.runtime.llm().route().model_id();
             self.options = AgentRuntimeOptions::from_config(&self.profile, &self.config);
@@ -884,6 +887,7 @@ impl App {
             self.model_id = prev_model_id;
             self.options = prev_options;
             self.config = prev_config;
+            let _ = self.runtime.tools().set_config(self.config.clone());
             self.session = prev_session;
             self.messages = prev_messages;
             return Err(err);
@@ -1930,8 +1934,6 @@ mod tests {
             base_url: "https://example.com/v1".to_string(),
             api_key: None,
         });
-        let tools = ToolEngine::new(tmp.path());
-        let runtime = AgentRuntime::new(llm, tools);
 
         let mut providers = std::collections::BTreeMap::new();
         providers.insert(
@@ -1947,6 +1949,9 @@ mod tests {
             providers,
             ..Default::default()
         };
+
+        let tools = ToolEngine::new(tmp.path(), config.clone());
+        let runtime = AgentRuntime::new(llm, tools);
 
         let mut app = App::new(
             AgentProfile::general(),

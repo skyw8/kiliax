@@ -24,12 +24,39 @@ pub struct AgentsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct WebSearchConfig {
+    #[serde(
+        default,
+        alias = "baseUrl",
+        alias = "baseurl",
+        alias = "base-url",
+        alias = "tavily_base_url",
+        alias = "tavilyBaseUrl"
+    )]
+    pub base_url: Option<String>,
+
+    #[serde(
+        default,
+        alias = "apiKey",
+        alias = "apikey",
+        alias = "api-key",
+        alias = "key",
+        alias = "tavily_api_key",
+        alias = "tavilyApiKey"
+    )]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Config {
     #[serde(default)]
     pub default_model: Option<String>,
 
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
+
+    #[serde(default)]
+    pub web_search: WebSearchConfig,
 
     /// Default agent runtime options applied to all agents.
     #[serde(default)]
@@ -149,6 +176,12 @@ struct ConfigFile {
     pub providers: BTreeMap<String, ProviderConfig>,
 
     #[serde(default)]
+    pub web_search: WebSearchConfig,
+
+    #[serde(default)]
+    pub tools: ToolsConfig,
+
+    #[serde(default)]
     pub runtime: AgentRuntimeConfig,
 
     #[serde(default)]
@@ -162,6 +195,12 @@ struct ConfigFile {
     //   models: [...]
     #[serde(default)]
     pub provider: Option<ProviderConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+struct ToolsConfig {
+    #[serde(default)]
+    pub tavily: WebSearchConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +299,8 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
     let ConfigFile {
         default_model,
         mut providers,
+        mut web_search,
+        tools,
         runtime,
         agents,
         provider,
@@ -275,9 +316,17 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         providers.insert("default".to_string(), p);
     }
 
+    if web_search.base_url.is_none() {
+        web_search.base_url = tools.tavily.base_url;
+    }
+    if web_search.api_key.is_none() {
+        web_search.api_key = tools.tavily.api_key;
+    }
+
     Ok(Config {
         default_model,
         providers,
+        web_search,
         runtime,
         agents,
     })
@@ -319,10 +368,30 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
         config.resolve_model(default_model)?;
     }
 
+    validate_web_search_config(&config.web_search)?;
+
     validate_agent_runtime_config("runtime", &config.runtime)?;
     validate_agent_runtime_config("agents.plan", &config.agents.plan)?;
     validate_agent_runtime_config("agents.general", &config.agents.general)?;
 
+    Ok(())
+}
+
+fn validate_web_search_config(cfg: &WebSearchConfig) -> Result<(), ConfigError> {
+    if let Some(base) = &cfg.base_url {
+        if base.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "web_search.base_url must not be empty when set".to_string(),
+            ));
+        }
+    }
+    if let Some(key) = &cfg.api_key {
+        if key.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "web_search.api_key must not be empty when set".to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -476,6 +545,27 @@ mod tests {
             panic!("unexpected error: {err:?}");
         };
         assert!(msg.contains("`<provider>/<model>`"));
+    }
+
+    #[test]
+    fn tools_tavily_config_maps_to_web_search() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().join("proj");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let path = cwd.join("killiax.yaml");
+        fs::write(
+            &path,
+            "providers:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - gpt-test\n\ntools:\n  tavily:\n    api_key: tvly-test\n    base_url: https://api.tavily.com\n",
+        )
+        .unwrap();
+
+        let loaded = load_from_locations(&cwd, None).unwrap();
+        assert_eq!(loaded.config.web_search.api_key.as_deref(), Some("tvly-test"));
+        assert_eq!(
+            loaded.config.web_search.base_url.as_deref(),
+            Some("https://api.tavily.com")
+        );
     }
 
     #[test]

@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = FileSessionStore::project(&workspace_root);
 
-    let tools_engine = ToolEngine::new(&workspace_root);
+    let tools_engine = ToolEngine::new(&workspace_root, loaded.config.clone());
     let runtime = AgentRuntime::new(llm, tools_engine);
 
     let (messages, mut session) = match resume_id {

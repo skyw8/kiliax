@@ -59,7 +59,10 @@ async fn main() -> Result<()> {
     let loaded = config::load()?;
     let model_override = resumed.as_ref().and_then(|s| s.meta.model_id.as_deref());
     let llm = LlmClient::from_config(&loaded.config, model_override)?;
-    let runtime = kiliax_core::runtime::AgentRuntime::new(llm, ToolEngine::new(&workspace_root));
+    let runtime = kiliax_core::runtime::AgentRuntime::new(
+        llm,
+        ToolEngine::new(&workspace_root, loaded.config.clone()),
+    );
 
     let profile = profile_override
         .and_then(AgentProfile::from_name)
