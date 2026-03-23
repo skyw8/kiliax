@@ -1,4 +1,5 @@
 mod app;
+mod clipboard_paste;
 mod custom_terminal;
 mod header;
 mod highlight;

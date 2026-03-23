@@ -147,8 +147,8 @@ impl AgentRuntime {
             for group in group_tool_calls(&tool_calls) {
                 match group {
                     ToolCallGroup::Exclusive(call) => {
-                        match self.tools.execute_to_message(perms.as_ref(), call).await {
-                            Ok(tool_msg) => messages.push(tool_msg),
+                        match self.tools.execute_to_messages(perms.as_ref(), call).await {
+                            Ok(tool_msgs) => messages.extend(tool_msgs),
                             Err(err) => match options.tool_error_mode {
                                 ToolErrorMode::FailFast => return Err(err.into()),
                                 ToolErrorMode::ToolMessage => {
@@ -163,8 +163,8 @@ impl AgentRuntime {
                     ToolCallGroup::Parallel(calls) => {
                         if calls.len() == 1 {
                             let call = &calls[0];
-                            match self.tools.execute_to_message(perms.as_ref(), call).await {
-                                Ok(tool_msg) => messages.push(tool_msg),
+                            match self.tools.execute_to_messages(perms.as_ref(), call).await {
+                                Ok(tool_msgs) => messages.extend(tool_msgs),
                                 Err(err) => match options.tool_error_mode {
                                     ToolErrorMode::FailFast => return Err(err.into()),
                                     ToolErrorMode::ToolMessage => {
@@ -185,12 +185,12 @@ impl AgentRuntime {
                             let tools = tools.clone();
                             let perms = perms.clone();
                             set.spawn(async move {
-                                let res = tools.execute_to_message(perms.as_ref(), &call).await;
+                                let res = tools.execute_to_messages(perms.as_ref(), &call).await;
                                 (idx, call, res)
                             });
                         }
 
-                        let mut results: Vec<Option<Result<Message, ToolError>>> = Vec::new();
+                        let mut results: Vec<Option<Result<Vec<Message>, ToolError>>> = Vec::new();
                         results.resize_with(calls.len(), || None);
                         while let Some(joined) = set.join_next().await {
                             let (idx, _call, res) = joined.map_err(|e| {
@@ -205,7 +205,7 @@ impl AgentRuntime {
                             };
 
                             match res {
-                                Ok(tool_msg) => messages.push(tool_msg),
+                                Ok(tool_msgs) => messages.extend(tool_msgs),
                                 Err(err) => match options.tool_error_mode {
                                     ToolErrorMode::FailFast => return Err(err.into()),
                                     ToolErrorMode::ToolMessage => {
@@ -306,14 +306,16 @@ impl AgentRuntime {
                                         .send(Ok(AgentEvent::ToolCall { call: call.clone() }))
                                         .await;
 
-                                    match tools.execute_to_message(perms.as_ref(), call).await {
-                                        Ok(tool_msg) => {
-                                            let _ = tx
-                                                .send(Ok(AgentEvent::ToolResult {
-                                                    message: tool_msg.clone(),
-                                                }))
-                                                .await;
-                                            messages.push(tool_msg);
+                                    match tools.execute_to_messages(perms.as_ref(), call).await {
+                                        Ok(tool_msgs) => {
+                                            for msg in tool_msgs {
+                                                let _ = tx
+                                                    .send(Ok(AgentEvent::ToolResult {
+                                                        message: msg.clone(),
+                                                    }))
+                                                    .await;
+                                                messages.push(msg);
+                                            }
                                         }
                                         Err(err) => match options.tool_error_mode {
                                             ToolErrorMode::FailFast => {
@@ -348,14 +350,16 @@ impl AgentRuntime {
 
                                     if calls.len() == 1 {
                                         let call = &calls[0];
-                                        match tools.execute_to_message(perms.as_ref(), call).await {
-                                            Ok(tool_msg) => {
-                                                let _ = tx
-                                                    .send(Ok(AgentEvent::ToolResult {
-                                                        message: tool_msg.clone(),
-                                                    }))
-                                                    .await;
-                                                messages.push(tool_msg);
+                                        match tools.execute_to_messages(perms.as_ref(), call).await {
+                                            Ok(tool_msgs) => {
+                                                for msg in tool_msgs {
+                                                    let _ = tx
+                                                        .send(Ok(AgentEvent::ToolResult {
+                                                            message: msg.clone(),
+                                                        }))
+                                                        .await;
+                                                    messages.push(msg);
+                                                }
                                             }
                                             Err(err) => match options.tool_error_mode {
                                                 ToolErrorMode::FailFast => {
@@ -387,12 +391,12 @@ impl AgentRuntime {
                                         let perms = perms.clone();
                                         set.spawn(async move {
                                             let res =
-                                                tools.execute_to_message(perms.as_ref(), &call).await;
+                                                tools.execute_to_messages(perms.as_ref(), &call).await;
                                             (idx, call, res)
                                         });
                                     }
 
-                                    let mut results: Vec<Option<Message>> = vec![None; calls.len()];
+                                    let mut results: Vec<Option<Vec<Message>>> = vec![None; calls.len()];
                                     while let Some(joined) = set.join_next().await {
                                         if tx.is_closed() {
                                             return;
@@ -412,13 +416,15 @@ impl AgentRuntime {
                                         };
 
                                         match res {
-                                            Ok(tool_msg) => {
-                                                results[idx] = Some(tool_msg.clone());
-                                                let _ = tx
-                                                    .send(Ok(AgentEvent::ToolResult {
-                                                        message: tool_msg,
-                                                    }))
-                                                    .await;
+                                            Ok(tool_msgs) => {
+                                                for msg in &tool_msgs {
+                                                    let _ = tx
+                                                        .send(Ok(AgentEvent::ToolResult {
+                                                            message: msg.clone(),
+                                                        }))
+                                                        .await;
+                                                }
+                                                results[idx] = Some(tool_msgs);
                                             }
                                             Err(err) => match options.tool_error_mode {
                                                 ToolErrorMode::FailFast => {
@@ -430,7 +436,7 @@ impl AgentRuntime {
                                                         tool_call_id: call.id,
                                                         content: format!("error: {err}"),
                                                     };
-                                                    results[idx] = Some(tool_msg.clone());
+                                                    results[idx] = Some(vec![tool_msg.clone()]);
                                                     let _ = tx
                                                         .send(Ok(AgentEvent::ToolResult {
                                                             message: tool_msg,
@@ -441,8 +447,8 @@ impl AgentRuntime {
                                         }
                                     }
 
-                                    for msg in results.into_iter().flatten() {
-                                        messages.push(msg);
+                                    for group in results.into_iter().flatten() {
+                                        messages.extend(group);
                                     }
                                 }
                             }

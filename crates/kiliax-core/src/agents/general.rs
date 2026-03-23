@@ -11,6 +11,7 @@ pub(super) fn profile() -> AgentProfile {
             builtin::read_file_tool_definition(),
             builtin::list_dir_tool_definition(),
             builtin::grep_files_tool_definition(),
+            builtin::view_image_tool_definition(),
             builtin::web_search_tool_definition(),
             builtin::shell_command_tool_definition(),
             builtin::write_stdin_tool_definition(),

@@ -3,7 +3,7 @@ use std::io::{self, Write};
 
 use kiliax_core::{
     config,
-    llm::{ChatRequest, LlmClient, Message, ToolCallDelta},
+    llm::{ChatRequest, LlmClient, Message, ToolCallDelta, UserMessageContent},
 };
 use tokio_stream::StreamExt;
 
@@ -48,7 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut req = ChatRequest::new(vec![Message::User { content: prompt }]);
+    let mut req = ChatRequest::new(vec![Message::User {
+        content: UserMessageContent::Text(prompt),
+    }]);
     req.temperature = Some(0.2);
     req.max_completion_tokens = Some(512);
 
@@ -85,4 +87,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use kiliax_core::{
     agents::AgentProfile,
     config,
-    llm::{LlmClient, Message},
+    llm::{LlmClient, Message, UserMessageContent},
     prompt::PromptBuilder,
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeOptions},
     session::{FileSessionStore, SessionId},
@@ -71,7 +71,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut s = store.load(&id).await?;
             if !prompt.trim().is_empty() {
                 store
-                    .record_message(&mut s, Message::User { content: prompt })
+                    .record_message(
+                        &mut s,
+                        Message::User {
+                            content: UserMessageContent::Text(prompt.clone()),
+                        },
+                    )
                     .await?;
             }
             (s.messages.clone(), s)

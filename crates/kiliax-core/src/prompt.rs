@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::agents::AgentProfile;
-use crate::llm::{Message, ToolDefinition};
+use crate::llm::{Message, ToolDefinition, UserMessageContent};
 use crate::tools::{tool_parallelism, ToolParallelism};
 use crate::tools::skills::Skill;
 
@@ -113,7 +113,7 @@ impl PromptBuilder {
 
     pub fn push_user(mut self, content: impl Into<String>) -> Self {
         self.messages.push(Message::User {
-            content: content.into(),
+            content: UserMessageContent::Text(content.into()),
         });
         self
     }
@@ -365,7 +365,7 @@ mod tests {
         assert!(matches!(&msgs[0], Message::System { content } if content.contains("Codex CLI")));
         assert!(matches!(&msgs[1], Message::System { content } if content == "agent"));
         assert!(matches!(&msgs[2], Message::System { content } if content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG)));
-        assert!(matches!(&msgs[3], Message::User { content } if content == "hi"));
+        assert!(matches!(&msgs[3], Message::User { content: UserMessageContent::Text(content) } if content == "hi"));
     }
 
     #[test]

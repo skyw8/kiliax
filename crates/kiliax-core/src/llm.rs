@@ -7,15 +7,18 @@ use async_openai::{
         ChatChoice, ChatCompletionMessageToolCall, ChatCompletionNamedToolChoice,
         ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
         ChatCompletionRequestDeveloperMessage, ChatCompletionRequestDeveloperMessageContent,
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
+        ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
+        ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
         ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
-        ChatCompletionRequestUserMessageContent, ChatCompletionTool, ChatCompletionToolChoiceOption,
-        ChatCompletionToolType, CompletionUsage, CreateChatCompletionRequestArgs,
-        CreateChatCompletionResponse, FinishReason, FunctionCall, FunctionName, FunctionObject,
+        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType, CompletionUsage,
+        CreateChatCompletionRequestArgs, CreateChatCompletionResponse, FinishReason, FunctionCall,
+        FunctionName, FunctionObject, ImageDetail, ImageUrl,
     },
     Client,
 };
+use base64::Engine as _;
 use reqwest::header::{HeaderMap, AUTHORIZATION};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -33,6 +36,12 @@ pub enum LlmError {
 
     #[error(transparent)]
     OpenAI(#[from] OpenAIError),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error("invalid image: {0}")]
+    InvalidImage(String),
 
     #[error("chat completion response has no choices")]
     NoChoices,
@@ -68,11 +77,10 @@ impl LlmClient {
     }
 
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let messages = req
-            .messages
-            .iter()
-            .map(to_openai_message)
-            .collect::<Result<Vec<_>, LlmError>>()?;
+        let mut messages: Vec<ChatCompletionRequestMessage> = Vec::with_capacity(req.messages.len());
+        for msg in &req.messages {
+            messages.push(to_openai_message(msg).await?);
+        }
 
         let mut builder = CreateChatCompletionRequestArgs::default();
         builder.model(&self.route.model).messages(messages);
@@ -103,11 +111,10 @@ impl LlmClient {
     }
 
     pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
-        let messages = req
-            .messages
-            .iter()
-            .map(to_openai_message)
-            .collect::<Result<Vec<_>, LlmError>>()?;
+        let mut messages: Vec<ChatCompletionRequestMessage> = Vec::with_capacity(req.messages.len());
+        for msg in &req.messages {
+            messages.push(to_openai_message(msg).await?);
+        }
 
         let mut builder = CreateChatCompletionRequestArgs::default();
         builder.model(&self.route.model).messages(messages);
@@ -242,12 +249,70 @@ impl Default for ToolChoice {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum UserMessageContent {
+    Text(String),
+    Parts(Vec<UserContentPart>),
+}
+
+impl UserMessageContent {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(text.into())
+    }
+
+    pub fn first_text(&self) -> Option<&str> {
+        match self {
+            UserMessageContent::Text(text) => Some(text.as_str()),
+            UserMessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
+                UserContentPart::Text { text } => Some(text.as_str()),
+                UserContentPart::Image { .. } => None,
+            }),
+        }
+    }
+
+    pub fn display_text(&self) -> String {
+        match self {
+            UserMessageContent::Text(text) => text.clone(),
+            UserMessageContent::Parts(parts) => {
+                let mut out = String::new();
+                for (idx, part) in parts.iter().enumerate() {
+                    if idx > 0 {
+                        out.push('\n');
+                    }
+                    match part {
+                        UserContentPart::Text { text } => out.push_str(text),
+                        UserContentPart::Image { path, .. } => {
+                            out.push_str("[image: ");
+                            out.push_str(path);
+                            out.push(']');
+                        }
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UserContentPart {
+    Text { text: String },
+    Image {
+        /// Local filesystem path or URL.
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<ImageDetail>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
     Developer { content: String },
     System { content: String },
-    User { content: String },
+    User { content: UserMessageContent },
     Assistant {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content: Option<String>,
@@ -368,7 +433,7 @@ fn to_openai_tool_choice(choice: &ToolChoice) -> ChatCompletionToolChoiceOption 
     }
 }
 
-fn to_openai_message(msg: &Message) -> Result<ChatCompletionRequestMessage, LlmError> {
+async fn to_openai_message(msg: &Message) -> Result<ChatCompletionRequestMessage, LlmError> {
     Ok(match msg {
         Message::Developer { content } => ChatCompletionRequestMessage::Developer(
             ChatCompletionRequestDeveloperMessage {
@@ -382,10 +447,12 @@ fn to_openai_message(msg: &Message) -> Result<ChatCompletionRequestMessage, LlmE
                 name: None,
             },
         ),
-        Message::User { content } => ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-            content: ChatCompletionRequestUserMessageContent::Text(content.clone()),
-            name: None,
-        }),
+        Message::User { content } => {
+            ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+                content: to_openai_user_content(content).await?,
+                name: None,
+            })
+        }
         Message::Assistant { content, tool_calls } => {
             let tool_calls = if tool_calls.is_empty() {
                 None
@@ -420,6 +487,107 @@ fn to_openai_message(msg: &Message) -> Result<ChatCompletionRequestMessage, LlmE
             tool_call_id: tool_call_id.clone(),
         }),
     })
+}
+
+async fn to_openai_user_content(
+    content: &UserMessageContent,
+) -> Result<ChatCompletionRequestUserMessageContent, LlmError> {
+    match content {
+        UserMessageContent::Text(text) => Ok(ChatCompletionRequestUserMessageContent::Text(text.clone())),
+        UserMessageContent::Parts(parts) => {
+            let mut out: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
+            for part in parts {
+                match part {
+                    UserContentPart::Text { text } => out.push(
+                        ChatCompletionRequestUserMessageContentPart::Text(
+                            ChatCompletionRequestMessageContentPartText { text: text.clone() },
+                        ),
+                    ),
+                    UserContentPart::Image { path, detail } => {
+                        let image_url = image_url_from_path(path, detail.clone()).await?;
+                        out.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                            ChatCompletionRequestMessageContentPartImage { image_url },
+                        ));
+                    }
+                }
+            }
+            if !out
+                .iter()
+                .any(|p| matches!(p, ChatCompletionRequestUserMessageContentPart::Text(_)))
+            {
+                out.insert(
+                    0,
+                    ChatCompletionRequestUserMessageContentPart::Text(
+                        ChatCompletionRequestMessageContentPartText {
+                            text: String::new(),
+                        },
+                    ),
+                );
+            }
+            Ok(ChatCompletionRequestUserMessageContent::Array(out))
+        }
+    }
+}
+
+const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
+async fn image_url_from_path(path: &str, detail: Option<ImageDetail>) -> Result<ImageUrl, LlmError> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(LlmError::InvalidImage("path must not be empty".to_string()));
+    }
+
+    if path.starts_with("http://") || path.starts_with("https://") || path.starts_with("data:") {
+        return Ok(ImageUrl {
+            url: path.to_string(),
+            detail,
+        });
+    }
+
+    let fs_path = std::path::Path::new(path);
+    let meta = tokio::fs::metadata(fs_path).await?;
+    if !meta.is_file() {
+        return Err(LlmError::InvalidImage(format!(
+            "path `{}` is not a file",
+            fs_path.display()
+        )));
+    }
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err(LlmError::InvalidImage(format!(
+            "image `{}` is too large ({} bytes > {} bytes)",
+            fs_path.display(),
+            meta.len(),
+            MAX_IMAGE_BYTES
+        )));
+    }
+
+    let mime_type = guess_image_mime_type(fs_path).ok_or_else(|| {
+        LlmError::InvalidImage(format!(
+            "unsupported image extension for `{}`",
+            fs_path.display()
+        ))
+    })?;
+
+    let bytes = tokio::fs::read(fs_path).await?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(ImageUrl {
+        url: format!("data:{mime_type};base64,{b64}"),
+        detail,
+    })
+}
+
+fn guess_image_mime_type(path: &std::path::Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.trim().to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "avif" => Some("image/avif"),
+        _ => None,
+    }
 }
 
 fn chat_response_from_openai(resp: CreateChatCompletionResponse) -> Result<ChatResponse, LlmError> {
@@ -570,21 +738,21 @@ fn chat_stream_chunk_from_byot(resp: ByotCreateChatCompletionStreamResponse) -> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn tool_message_roundtrip_builds_openai_message() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn tool_message_roundtrip_builds_openai_message() {
         let msg = Message::Tool {
             tool_call_id: "call_123".to_string(),
             content: "{\"ok\":true}".to_string(),
         };
-        let openai = to_openai_message(&msg).unwrap();
+        let openai = to_openai_message(&msg).await.unwrap();
         let ChatCompletionRequestMessage::Tool(t) = openai else {
             panic!("expected tool message");
         };
         assert_eq!(t.tool_call_id, "call_123");
     }
 
-    #[test]
-    fn assistant_message_includes_tool_calls() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn assistant_message_includes_tool_calls() {
         let msg = Message::Assistant {
             content: None,
             tool_calls: vec![ToolCall {
@@ -593,7 +761,7 @@ mod tests {
                 arguments: "{\"path\":\"README.md\"}".to_string(),
             }],
         };
-        let openai = to_openai_message(&msg).unwrap();
+        let openai = to_openai_message(&msg).await.unwrap();
         let ChatCompletionRequestMessage::Assistant(a) = openai else {
             panic!("expected assistant message");
         };

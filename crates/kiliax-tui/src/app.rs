@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -7,6 +7,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use unicode_width::UnicodeWidthChar;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -14,11 +15,13 @@ use serde::Deserialize;
 
 use kiliax_core::{
     agents::AgentProfile,
-    llm::Message,
+    llm::{Message, UserContentPart, UserMessageContent},
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions},
     session::{FileSessionStore, SessionState},
 };
 
+use crate::clipboard_paste;
+use crate::clipboard_paste::PastedImageInfo;
 use crate::input::{InputAction, InputLine};
 use crate::markdown::render_markdown_lines;
 use crate::model_picker::{ModelPicker, ModelPickerEvent};
@@ -371,11 +374,19 @@ enum PendingToolCallKind {
     ReadFile { path: String },
     ListDir { path: String },
     GrepFiles { pattern: String, path: Option<String> },
+    ViewImage { path: String },
     ShellCommand { argv: Vec<String>, cwd: Option<String> },
     WriteStdin { session_id: u64 },
     ApplyPatch { files: Vec<String> },
     UpdatePlan { steps: usize },
     Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingImage {
+    pub source_path: PathBuf,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 pub struct App {
@@ -416,6 +427,8 @@ pub struct App {
     turn_output_tokens: OutputTokenCounter,
     step_output_tokens: OutputTokenCounter,
     saw_delta_in_step: bool,
+
+    pending_images: Vec<PendingImage>,
 }
 
 impl App {
@@ -434,7 +447,7 @@ impl App {
         let prompt_history: Vec<String> = messages
             .iter()
             .filter_map(|msg| match msg {
-                Message::User { content } => Some(content.clone()),
+                Message::User { content } => content.first_text().map(|t| t.to_string()),
                 _ => None,
             })
             .collect();
@@ -470,6 +483,7 @@ impl App {
             turn_output_tokens: OutputTokenCounter::default(),
             step_output_tokens: OutputTokenCounter::default(),
             saw_delta_in_step: false,
+            pending_images: Vec::new(),
         }
     }
 
@@ -487,6 +501,10 @@ impl App {
 
     pub fn set_screen_width(&mut self, width: u16) {
         self.screen_width = width;
+    }
+
+    pub fn pending_images(&self) -> &[PendingImage] {
+        &self.pending_images
     }
 
     pub fn slash_popup(&self) -> &SlashPopupState {
@@ -563,6 +581,48 @@ impl App {
         self.saw_delta_in_step = false;
     }
 
+    fn clear_pending_images(&mut self) {
+        self.pending_images.clear();
+    }
+
+    fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
+        image::image_dimensions(path).ok()
+    }
+
+    fn attach_image(&mut self, path: PathBuf, info: Option<PastedImageInfo>) -> Result<()> {
+        let (width, height) = match info {
+            Some(info) => (Some(info.width), Some(info.height)),
+            None => match Self::image_dimensions(&path) {
+                Some((w, h)) => (Some(w), Some(h)),
+                None => (None, None),
+            },
+        };
+
+        self.pending_images.push(PendingImage {
+            source_path: path.clone(),
+            width,
+            height,
+        });
+
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let dims = match (width, height) {
+            (Some(w), Some(h)) => format!(" ({w}x{h})"),
+            _ => String::new(),
+        };
+        self.pending_history_lines.push(Line::from(vec![
+            Span::from("• ").dim(),
+            Span::from("image").bold(),
+            Span::from(": ").dim(),
+            Span::from(format!("{filename}{dims}")).dim(),
+        ]));
+
+        Ok(())
+    }
+
     pub fn drain_history_lines(&mut self) -> Vec<Line<'static>> {
         std::mem::take(&mut self.pending_history_lines)
     }
@@ -598,15 +658,34 @@ impl App {
             return AppAction::None;
         }
 
-        if key
-            .modifiers
-            .contains(crossterm::event::KeyModifiers::CONTROL)
-            && key.code == KeyCode::Char('c')
-        {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.input.clear();
+            self.clear_pending_images();
             self.reset_history_nav();
             self.slash_popup.hide();
             return AppAction::None;
+        }
+
+        if key.code == KeyCode::Char('v')
+            && key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            match clipboard_paste::paste_image_to_temp_png() {
+                Ok((path, info)) => {
+                    if let Err(err) = self.attach_image(path, Some(info)) {
+                        self.pending_history_lines
+                            .extend(render_error_lines(&err.to_string()));
+                    }
+                }
+                Err(err) => {
+                    self.pending_history_lines
+                        .extend(render_error_lines(&format!("failed to paste image: {err}")));
+                }
+            }
+            return AppAction::None;
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
+            self.clear_pending_images();
         }
 
         if self.slash_popup.visible() {
@@ -653,12 +732,14 @@ impl App {
 
         match key.code {
             KeyCode::Up => {
+                self.clear_pending_images();
                 self.history_prev();
                 self.slash_popup
                     .sync_from_input(self.input.text(), self.input.cursor());
                 return AppAction::None;
             }
             KeyCode::Down => {
+                self.clear_pending_images();
                 self.history_next();
                 self.slash_popup
                     .sync_from_input(self.input.text(), self.input.cursor());
@@ -676,7 +757,7 @@ impl App {
             InputAction::None => {}
             InputAction::Submit(text) => {
                 let text = text.trim().to_string();
-                if !text.is_empty() {
+                if !text.is_empty() || !self.pending_images.is_empty() {
                     self.slash_popup.hide();
                     return AppAction::Submitted(text);
                 }
@@ -693,7 +774,18 @@ impl App {
                 if self.history_index.is_some() {
                     self.reset_history_nav();
                 }
-                self.input.insert_str(text);
+                if let Some(path) = clipboard_paste::normalize_pasted_path(text) {
+                    if clipboard_paste::is_probably_image_path(&path) && path.is_file() {
+                        if let Err(err) = self.attach_image(path, None) {
+                            self.pending_history_lines
+                                .extend(render_error_lines(&err.to_string()));
+                        }
+                    } else {
+                        self.input.insert_str(text);
+                    }
+                } else {
+                    self.input.insert_str(text);
+                }
                 self.slash_popup
                     .sync_from_input(self.input.text(), self.input.cursor());
             }
@@ -729,14 +821,75 @@ impl App {
     }
 
     pub async fn submit_user_message(&mut self, text: String) -> Result<()> {
-        self.prompt_history.push(text.clone());
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            self.prompt_history.push(text.clone());
+        }
         self.reset_history_nav();
-        self.pending_history_lines
-            .extend(render_user_message_lines(&text));
 
-        let msg = Message::User { content: text };
+        let attachments_dir = self
+            .store
+            .session_dir(&self.session.meta.id)
+            .join("attachments");
+        if !self.pending_images.is_empty() {
+            tokio::fs::create_dir_all(&attachments_dir).await?;
+        }
+
+        let ts = now_ms();
+        let mut parts: Vec<UserContentPart> = Vec::new();
+        if !text.is_empty() {
+            parts.push(UserContentPart::Text { text });
+        }
+
+        for (idx, img) in self.pending_images.iter().enumerate() {
+            let src = &img.source_path;
+            let ext = src
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("png")
+                .trim();
+            let filename = format!("img_{ts}_{idx}.{}", if ext.is_empty() { "png" } else { ext });
+            let dest = attachments_dir.join(filename);
+
+            let path_for_message = if src.starts_with(&attachments_dir) || src == &dest {
+                src.clone()
+            } else {
+                match tokio::fs::copy(src, &dest).await {
+                    Ok(_) => dest,
+                    Err(err) => {
+                        self.pending_history_lines.extend(render_error_lines(&format!(
+                            "failed to copy image `{}`: {err}",
+                            src.display()
+                        )));
+                        src.clone()
+                    }
+                }
+            };
+
+            let rel = path_for_message
+                .strip_prefix(&self.workspace_root)
+                .unwrap_or(path_for_message.as_path());
+            let path = rel.to_string_lossy().replace('\\', "/");
+            parts.push(UserContentPart::Image { path, detail: None });
+        }
+
+        let content = if parts.len() == 1 {
+            match parts.pop().unwrap() {
+                UserContentPart::Text { text } => UserMessageContent::Text(text),
+                part => UserMessageContent::Parts(vec![part]),
+            }
+        } else {
+            UserMessageContent::Parts(parts)
+        };
+
+        let display_text = content.display_text();
+        self.pending_history_lines
+            .extend(render_user_message_lines(&display_text));
+
+        let msg = Message::User { content };
         self.messages.push(msg.clone());
         self.store.record_message(&mut self.session, msg).await?;
+        self.clear_pending_images();
         Ok(())
     }
 
@@ -1024,30 +1177,39 @@ impl App {
                     .record_message(&mut self.session, message.clone())
                     .await?;
 
-                if let Message::Tool {
-                    tool_call_id,
-                    content,
-                } = message
-                {
-                    let started_at = self
-                        .pending_tool_calls
-                        .get(&tool_call_id)
-                        .map(|pending| pending.started_at);
-                    let elapsed = started_at.map(|t| t.elapsed());
-                    let pending = self.pending_tool_calls.remove(&tool_call_id);
-                    if let Some(pending) = pending {
-                        self.pending_history_lines.extend(render_tool_result_lines(
-                            &pending,
-                            elapsed,
-                            &content,
-                        ));
-                    } else {
-                        self.pending_history_lines.extend(render_tool_result_fallback_lines(
-                            &tool_call_id,
-                            elapsed,
-                            &content,
-                        ));
+                match message {
+                    Message::Tool {
+                        tool_call_id,
+                        content,
+                    } => {
+                        let started_at = self
+                            .pending_tool_calls
+                            .get(&tool_call_id)
+                            .map(|pending| pending.started_at);
+                        let elapsed = started_at.map(|t| t.elapsed());
+                        let pending = self.pending_tool_calls.remove(&tool_call_id);
+                        if let Some(pending) = pending {
+                            self.pending_history_lines.extend(render_tool_result_lines(
+                                &pending,
+                                elapsed,
+                                &content,
+                            ));
+                        } else {
+                            self.pending_history_lines.extend(render_tool_result_fallback_lines(
+                                &tool_call_id,
+                                elapsed,
+                                &content,
+                            ));
+                        }
                     }
+                    Message::User { content } => {
+                        let display = content.display_text();
+                        if !display.trim().is_empty() {
+                            self.pending_history_lines
+                                .extend(render_user_message_lines(&display));
+                        }
+                    }
+                    _ => {}
                 }
             }
             AgentEvent::StepEnd { .. } => {}
@@ -1298,6 +1460,7 @@ fn tool_name_span(tool: &str) -> Span<'static> {
         "read_file"
         | "list_dir"
         | "grep_files"
+        | "view_image"
         | "shell_command"
         | "write_stdin"
         | "apply_patch"
@@ -1564,6 +1727,11 @@ struct GrepFilesArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct ViewImageArgs {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ShellCommandArgs {
     argv: Vec<String>,
     #[serde(default)]
@@ -1626,6 +1794,10 @@ fn classify_tool_call(call: &kiliax_core::llm::ToolCall) -> PendingToolCallKind 
                 pattern: args.pattern,
                 path: args.path,
             })
+            .unwrap_or(PendingToolCallKind::Other),
+        "view_image" => serde_json::from_str::<ViewImageArgs>(&call.arguments)
+            .ok()
+            .map(|args| PendingToolCallKind::ViewImage { path: args.path })
             .unwrap_or(PendingToolCallKind::Other),
         "shell_command" => serde_json::from_str::<ShellCommandArgs>(&call.arguments)
             .ok()
@@ -1692,6 +1864,13 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Tool
                 Some(format!("{match_count} matches")),
             )
         }
+        PendingToolCallKind::ViewImage { path } => (
+            ToolSummary {
+                tool: "view_image".to_string(),
+                rest: path.clone(),
+            },
+            None,
+        ),
         PendingToolCallKind::ShellCommand { argv, cwd } => {
             let cmd = argv.join(" ");
             let mut detail = String::new();
@@ -1777,6 +1956,7 @@ fn tool_status_label(pending: &PendingToolCall) -> String {
         PendingToolCallKind::ReadFile { path } => format!("read_file {path}"),
         PendingToolCallKind::ListDir { path } => format!("list_dir {path}"),
         PendingToolCallKind::GrepFiles { pattern, .. } => format!("grep_files {pattern}"),
+        PendingToolCallKind::ViewImage { path } => format!("view_image {path}"),
         PendingToolCallKind::ShellCommand { argv, .. } => format!("shell_command {}", argv.join(" ")),
         PendingToolCallKind::WriteStdin { session_id } => format!("write_stdin {session_id}"),
         PendingToolCallKind::ApplyPatch { files } => match files.len() {
@@ -1915,7 +2095,7 @@ mod tests {
 
         let store = FileSessionStore::new(tmp.path());
         let messages = vec![Message::User {
-            content: "hi".to_string(),
+            content: UserMessageContent::Text("hi".to_string()),
         }];
         let session = store
             .create(

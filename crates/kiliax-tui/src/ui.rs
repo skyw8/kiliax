@@ -278,7 +278,11 @@ fn list_offset(selected: usize, len: usize, visible: usize) -> usize {
 fn desired_composer_height(app: &App, width: u16) -> u16 {
     let text_width = inner_text_width(width);
     let wrapped = wrap_input(app.input.text(), text_width as usize);
-    let line_count = wrapped.len().min(u16::MAX as usize) as u16;
+    let attachments = pending_image_preview_lines(app, text_width as usize);
+    let line_count = wrapped
+        .len()
+        .saturating_add(attachments.len())
+        .min(u16::MAX as usize) as u16;
     let mut height =
         MIN_COMPOSER_HEIGHT.max(line_count.saturating_add(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM));
     let popup_height = app.slash_popup().desired_height(SLASH_POPUP_MAX_ITEMS);
@@ -378,6 +382,21 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    let attachments = pending_image_preview_lines(app, textarea.width as usize);
+    let (attachments_area, textarea) = if attachments.is_empty() {
+        (Rect::ZERO, textarea)
+    } else {
+        let attachments_height = (attachments.len().min(u16::MAX as usize) as u16).min(textarea.height);
+        let [a, rest] =
+            Layout::vertical([Constraint::Length(attachments_height), Constraint::Min(1)])
+                .areas(textarea);
+        (a, rest)
+    };
+
+    if !attachments_area.is_empty() {
+        frame.render_widget(Paragraph::new(Text::from(attachments)), attachments_area);
+    }
+
     let prompt = if app.running {
         Span::from("›").dim()
     } else {
@@ -394,6 +413,75 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     let cursor_x = textarea.x.saturating_add(cursor_col as u16);
     let cursor_y = textarea.y.saturating_add(cursor_row as u16);
     frame.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn pending_image_preview_lines(app: &App, max_width: usize) -> Vec<Line<'static>> {
+    if max_width == 0 {
+        return Vec::new();
+    }
+
+    let images = app.pending_images();
+    if images.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let max_items = 3usize;
+
+    for img in images.iter().take(max_items) {
+        let name = img
+            .source_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image");
+        let dims = match (img.width, img.height) {
+            (Some(w), Some(h)) => format!(" ({w}x{h})"),
+            _ => String::new(),
+        };
+        let mut text = format!("+ img: {name}{dims}");
+        if display_width_str(&text) > max_width {
+            text = take_prefix_by_width(&text, max_width.saturating_sub(1));
+            text.push('…');
+        }
+        out.push(Line::from(Span::styled(text, Style::default().dim())));
+    }
+
+    if images.len() > max_items {
+        let mut text = format!("+ {} more…", images.len().saturating_sub(max_items));
+        if display_width_str(&text) > max_width {
+            text = take_prefix_by_width(&text, max_width.saturating_sub(1));
+            text.push('…');
+        }
+        out.push(Line::from(Span::styled(text, Style::default().dim())));
+    }
+
+    out
+}
+
+fn display_width_str(s: &str) -> usize {
+    s.chars()
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
+}
+
+fn take_prefix_by_width(input: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut seen = 0usize;
+    for ch in input.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if seen + w > width {
+            break;
+        }
+        out.push(ch);
+        seen += w;
+        if seen == width {
+            break;
+        }
+    }
+    out
 }
 
 fn textarea_rect(area: Rect, y_offset: u16) -> Rect {
@@ -582,6 +670,7 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::styled("  / commands", Style::default().fg(Color::DarkGray)),
         Span::styled("  Tab complete", Style::default().fg(Color::DarkGray)),
         Span::styled("  Ctrl+C clear", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Ctrl+V image", Style::default().fg(Color::DarkGray)),
         Span::styled("  Esc stop/quit", Style::default().fg(Color::DarkGray)),
     ]);
     frame.render_widget(Paragraph::new(Text::from(vec![model, keys])), area);

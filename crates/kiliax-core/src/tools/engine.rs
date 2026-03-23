@@ -72,6 +72,31 @@ impl ToolEngine {
             content,
         })
     }
+
+    pub async fn execute_to_messages(
+        &self,
+        perms: &Permissions,
+        call: &ToolCall,
+    ) -> Result<Vec<Message>, ToolError> {
+        if call.name == builtin::TOOL_VIEW_IMAGE {
+            let (tool_content, image_message) =
+                builtin::execute_view_image_with_attachment(&self.workspace_root, perms, call)
+                    .await?;
+            return Ok(vec![
+                Message::Tool {
+                    tool_call_id: call.id.clone(),
+                    content: tool_content,
+                },
+                image_message,
+            ]);
+        }
+
+        let content = self.execute(perms, call).await?;
+        Ok(vec![Message::Tool {
+            tool_call_id: call.id.clone(),
+            content,
+        }])
+    }
 }
 
 #[cfg(test)]

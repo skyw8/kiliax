@@ -26,6 +26,7 @@ pub fn tool_parallelism(tool_name: &str) -> ToolParallelism {
         builtin::TOOL_READ_FILE
         | builtin::TOOL_LIST_DIR
         | builtin::TOOL_GREP_FILES
+        | builtin::TOOL_VIEW_IMAGE
         | builtin::TOOL_WEB_SEARCH
         | builtin::TOOL_SHELL_COMMAND
         | builtin::TOOL_WRITE_STDIN

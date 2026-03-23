@@ -1,4 +1,7 @@
-use kiliax_core::{config, llm::{ChatRequest, LlmClient, Message}};
+use kiliax_core::{
+    config,
+    llm::{ChatRequest, LlmClient, Message, UserMessageContent},
+};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let resp = llm
         .chat(ChatRequest::new(vec![Message::User {
-            content: "hi".into(),
+            content: UserMessageContent::Text("hi".into()),
         }]))
         .await?;
 

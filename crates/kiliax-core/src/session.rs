@@ -505,9 +505,11 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
         SessionEvent::Message { message } => {
             if state.meta.title.is_none() {
                 if let Message::User { content } = &message {
-                    let t = content.trim();
-                    if !t.is_empty() {
-                        state.meta.title = Some(truncate_title(t));
+                    if let Some(t) = content.first_text() {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            state.meta.title = Some(truncate_title(t));
+                        }
                     }
                 }
             }
@@ -526,9 +528,11 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
 fn derive_title(messages: &[Message]) -> Option<String> {
     for m in messages {
         if let Message::User { content } = m {
-            let t = content.trim();
-            if !t.is_empty() {
-                return Some(truncate_title(t));
+            if let Some(t) = content.first_text() {
+                let t = t.trim();
+                if !t.is_empty() {
+                    return Some(truncate_title(t));
+                }
             }
         }
     }
@@ -590,7 +594,7 @@ mod tests {
                 None,
                 None,
                 vec![Message::User {
-                    content: "hello".to_string(),
+                    content: crate::llm::UserMessageContent::Text("hello".to_string()),
                 }],
             )
             .await
