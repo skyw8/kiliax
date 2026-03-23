@@ -43,7 +43,7 @@ minimal
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`
-  - `builtin.rs`: codex 风格内置工具 schema + 执行（`read_file/list_dir/grep_files/shell_command/write_stdin/apply_patch/update_plan`；shell argv allowlist + session；apply_patch 支持 Begin/End Patch）
+  - `builtin.rs`: codex 风格内置工具 schema + 执行（`read_file/list_dir/grep_files/shell_command/write_stdin/apply_patch/update_plan`；grep_files 使用 ripgrep crates(ignore/grep-searcher) 以自动尊重 ignore；shell argv allowlist + session；apply_patch 支持 Begin/End Patch）
   - `engine.rs`: 工具统一执行入口（仅集成内置工具；维护 shell sessions；`extra_tool_definitions` 暂为空）
   - `mcp.rs`: MCP stdio hub（连接 server、列出 tools、`mcp__<server>__<tool>` 命名空间、调用工具；当前未接入 ToolEngine）
   - `skills.rs`: skills 发现（扫描 roots；按 `id` 去重；解析 `SKILL.md` YAML front matter 的 `name/description`；剥离 front matter 得到正文）
