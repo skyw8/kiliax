@@ -5,6 +5,8 @@ mod highlight;
 mod history;
 mod input;
 mod markdown;
+mod model_picker;
+mod slash_command;
 mod style;
 mod terminal;
 mod ui;
@@ -25,6 +27,7 @@ use kiliax_core::{
 };
 
 use crate::app::App;
+use crate::app::{AppAction, SubmitDisposition};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -95,7 +98,17 @@ async fn main() -> Result<()> {
     let (guard, mut terminal) = terminal::init()?;
     let composer_style = style::composer_background_style();
 
-    let mut app = App::new(profile, runtime, options, store, session, messages);
+    let mut app = App::new(
+        profile,
+        runtime,
+        options,
+        store,
+        session,
+        messages,
+        workspace_root.clone(),
+        loaded.path.clone(),
+        loaded.config.clone(),
+    );
     terminal.queue_history_lines(header::startup_lines(
         env!("CARGO_PKG_VERSION"),
         app.model_id(),
@@ -184,13 +197,19 @@ async fn main() -> Result<()> {
 
                     match event? {
                         Event::Key(key) => {
-                            if key.code == KeyCode::Esc {
-                                app.should_quit = true;
-                                continue;
-                            }
-                            if let Some(text) = app.handle_key(key) {
-                                app.submit_user_message(text).await?;
-                                agent_stream = Some(app.start_run().await?);
+                            match app.handle_key(key) {
+                                AppAction::None => {}
+                                AppAction::Submitted(text) => {
+                                    match app.handle_submit(text).await? {
+                                        SubmitDisposition::Handled => {}
+                                        SubmitDisposition::StartRun => {
+                                            agent_stream = Some(app.start_run().await?);
+                                        }
+                                    }
+                                }
+                                AppAction::ModelPicked(model_id) => {
+                                    app.apply_model_selection(model_id).await?;
+                                }
                             }
                         }
                         Event::Paste(text) => app.handle_paste(&text),

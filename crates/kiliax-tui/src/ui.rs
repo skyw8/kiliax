@@ -1,11 +1,12 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::App;
+use crate::model_picker::ModelPickerFocus;
 
 const LIVE_PREFIX_COLS: u16 = 2;
 const COMPOSER_PAD_TOP: u16 = 1;
@@ -14,8 +15,14 @@ const COMPOSER_PAD_RIGHT: u16 = 1;
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 const FOOTER_HEIGHT: u16 = 2;
 const STATUS_HEIGHT: u16 = 1;
+const SLASH_POPUP_MAX_ITEMS: usize = 6;
+const MODEL_PICKER_MIN_HEIGHT: u16 = 18;
 
 pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
+    if app.model_picker().is_some() {
+        return MODEL_PICKER_MIN_HEIGHT;
+    }
+
     let status_height = if app.running { STATUS_HEIGHT } else { 0 };
     desired_composer_height(app, width)
         .saturating_add(status_height)
@@ -25,6 +32,12 @@ pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
 pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
     let area = frame.area();
     frame.render_widget(Clear, area);
+
+    if app.model_picker().is_some() {
+        draw_model_picker(frame, app, area);
+        frame.render_widget(Block::default().style(composer_style), area);
+        return;
+    }
 
     let footer_height = if area.height <= FOOTER_HEIGHT {
         0
@@ -58,11 +71,222 @@ fn split_status_and_composer(app: &App, area: Rect) -> (Rect, Rect) {
     (status, composer)
 }
 
+fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(picker) = app.model_picker() else {
+        return;
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Model")
+        .border_style(Style::default().dim());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+
+    let [search_area, main_area, help_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let search_prefix = "Search: ";
+    let search_line = Line::from(vec![
+        Span::from(search_prefix).dim(),
+        Span::from(picker.search_text().to_string()),
+    ]);
+    frame.render_widget(Paragraph::new(search_line), search_area);
+
+    let cursor_col = search_prefix.len().saturating_add(display_width(
+        picker.search_text(),
+        picker.search_cursor(),
+    ));
+    frame.set_cursor_position((
+        search_area.x.saturating_add(cursor_col as u16),
+        search_area.y,
+    ));
+
+    let [providers_area, models_area] = Layout::horizontal([
+        Constraint::Percentage(34),
+        Constraint::Percentage(66),
+    ])
+    .areas(main_area);
+
+    draw_model_picker_providers(frame, picker, providers_area);
+    draw_model_picker_models(frame, app, picker, models_area);
+
+    let mut help = vec![
+        Span::from("↑/↓").dim(),
+        Span::from(" navigate  ").dim(),
+        Span::from("Tab").dim(),
+        Span::from(" switch  ").dim(),
+        Span::from("Enter").dim(),
+        Span::from(" select  ").dim(),
+        Span::from("Esc").dim(),
+        Span::from(" back").dim(),
+    ];
+    if let Some(model) = picker.selected_model() {
+        help.push(Span::from("  ·  ").dim());
+        help.push(Span::from(model.id.clone()).dim());
+    }
+    frame.render_widget(Paragraph::new(Line::from(help)), help_area);
+}
+
+fn draw_model_picker_providers(
+    frame: &mut Frame,
+    picker: &crate::model_picker::ModelPicker,
+    area: Rect,
+) {
+    if area.is_empty() {
+        return;
+    }
+
+    let focused = picker.focus() == ModelPickerFocus::Providers;
+    let mut block = Block::default().borders(Borders::ALL).title("Providers");
+    block = if focused {
+        block.border_style(Style::default().fg(Color::Cyan).bold())
+    } else {
+        block.border_style(Style::default().dim())
+    };
+
+    let items = picker
+        .filtered_providers()
+        .iter()
+        .filter_map(|&idx| picker.providers().get(idx))
+        .map(|p| {
+            let count = p.models.len();
+            ListItem::new(Line::from(vec![
+                Span::from(p.name.clone()),
+                Span::from(format!(" ({count})")).dim(),
+            ]))
+        })
+        .collect::<Vec<_>>();
+
+    let selected = if items.is_empty() {
+        None
+    } else {
+        Some(picker.provider_cursor())
+    };
+    let visible = area.height.saturating_sub(2) as usize;
+    let offset = selected
+        .map(|s| list_offset(s, items.len(), visible))
+        .unwrap_or(0);
+    let mut state = ListState::default()
+        .with_selected(selected)
+        .with_offset(offset);
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
+
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_model_picker_models(
+    frame: &mut Frame,
+    app: &App,
+    picker: &crate::model_picker::ModelPicker,
+    area: Rect,
+) {
+    if area.is_empty() {
+        return;
+    }
+
+    let focused = picker.focus() == ModelPickerFocus::Models;
+    let mut block = Block::default().borders(Borders::ALL).title("Models");
+    block = if focused {
+        block.border_style(Style::default().fg(Color::Cyan).bold())
+    } else {
+        block.border_style(Style::default().dim())
+    };
+
+    let current_model_id = app.model_id();
+    let provider_idx = picker.selected_provider_index();
+    let provider_models = provider_idx
+        .and_then(|idx| picker.providers().get(idx))
+        .map(|p| p.models.as_slice())
+        .unwrap_or(&[]);
+
+    let items = picker
+        .filtered_models()
+        .iter()
+        .filter_map(|&idx| provider_models.get(idx))
+        .map(|m| {
+            let is_current = m.id == current_model_id;
+            let mut spans = Vec::new();
+            if is_current {
+                spans.push(Span::from("• ").fg(Color::LightGreen));
+            } else {
+                spans.push(Span::from("  "));
+            }
+            spans.push(Span::from(m.display.clone()));
+            ListItem::new(Line::from(spans))
+        })
+        .collect::<Vec<_>>();
+
+    let selected = if items.is_empty() {
+        None
+    } else {
+        Some(picker.model_cursor())
+    };
+    let visible = area.height.saturating_sub(2) as usize;
+    let offset = selected
+        .map(|s| list_offset(s, items.len(), visible))
+        .unwrap_or(0);
+    let mut state = ListState::default()
+        .with_selected(selected)
+        .with_offset(offset);
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
+
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn display_width(text: &str, cursor_chars: usize) -> usize {
+    let mut width = 0usize;
+    let mut seen = 0usize;
+    for ch in text.chars() {
+        if seen >= cursor_chars {
+            break;
+        }
+        width = width.saturating_add(UnicodeWidthChar::width(ch).unwrap_or(0));
+        seen += 1;
+    }
+    width
+}
+
+fn list_offset(selected: usize, len: usize, visible: usize) -> usize {
+    if visible == 0 || len <= visible {
+        return 0;
+    }
+    let half = visible / 2;
+    let mut offset = selected.saturating_sub(half);
+    let max_offset = len.saturating_sub(visible);
+    if offset > max_offset {
+        offset = max_offset;
+    }
+    offset
+}
+
 fn desired_composer_height(app: &App, width: u16) -> u16 {
     let text_width = inner_text_width(width);
     let wrapped = wrap_input(app.input.text(), text_width as usize);
     let line_count = wrapped.len().min(u16::MAX as usize) as u16;
-    MIN_COMPOSER_HEIGHT.max(line_count.saturating_add(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM))
+    let mut height =
+        MIN_COMPOSER_HEIGHT.max(line_count.saturating_add(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM));
+    let popup_height = app.slash_popup().desired_height(SLASH_POPUP_MAX_ITEMS);
+    if popup_height > 0 {
+        // Extra gap so the popup doesn't visually collide with the input.
+        height = height.saturating_add(popup_height.saturating_add(1));
+    }
+    height
 }
 
 fn inner_text_width(width: u16) -> u16 {
@@ -138,7 +362,18 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let textarea = textarea_rect(area);
+    let popup_height = app.slash_popup().desired_height(SLASH_POPUP_MAX_ITEMS);
+    let popup_and_gap = if popup_height > 0 {
+        popup_height.saturating_add(1)
+    } else {
+        0
+    };
+
+    if popup_height > 0 {
+        draw_slash_popup(frame, app, area, popup_height);
+    }
+
+    let textarea = textarea_rect(area, popup_and_gap);
     if textarea.is_empty() {
         return;
     }
@@ -161,16 +396,69 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
-fn textarea_rect(area: Rect) -> Rect {
+fn textarea_rect(area: Rect, y_offset: u16) -> Rect {
     let x = area.x.saturating_add(LIVE_PREFIX_COLS);
-    let y = area.y.saturating_add(COMPOSER_PAD_TOP);
+    let y = area.y.saturating_add(COMPOSER_PAD_TOP).saturating_add(y_offset);
     let width = area
         .width
         .saturating_sub(LIVE_PREFIX_COLS + COMPOSER_PAD_RIGHT);
     let height = area
         .height
-        .saturating_sub(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM);
+        .saturating_sub(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM + y_offset);
     Rect::new(x, y, width, height)
+}
+
+fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect, popup_height: u16) {
+    if popup_height < 3 || area.width <= LIVE_PREFIX_COLS {
+        return;
+    }
+
+    let x = area.x.saturating_add(LIVE_PREFIX_COLS);
+    let y = area.y.saturating_add(COMPOSER_PAD_TOP);
+    let width = area
+        .width
+        .saturating_sub(LIVE_PREFIX_COLS + COMPOSER_PAD_RIGHT);
+    let rect = Rect::new(x, y, width, popup_height.min(area.height));
+    if rect.is_empty() {
+        return;
+    }
+
+    let popup = app.slash_popup();
+    let items = popup
+        .items()
+        .iter()
+        .take(SLASH_POPUP_MAX_ITEMS)
+        .map(|cmd| {
+            let mut spans = vec![
+                Span::styled(
+                    format!("/{}", cmd.command()),
+                    Style::default().fg(Color::Cyan).bold(),
+                ),
+            ];
+            if !cmd.aliases().is_empty() {
+                spans.push(Span::from(" ").dim());
+                spans.push(Span::from(format!("(/{})", cmd.aliases().join(", "))).dim());
+            }
+            spans.push(Span::from("  ").dim());
+            spans.push(Span::from(cmd.description()).dim());
+            ListItem::new(Line::from(spans))
+        })
+        .collect::<Vec<_>>();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Commands")
+        .border_style(Style::default().dim());
+
+    let mut state = ListState::default();
+    state.select(Some(popup.selected_index()));
+    let list = List::new(items)
+        .block(block)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
+
+    frame.render_widget(Clear, rect);
+    frame.render_stateful_widget(list, rect, &mut state);
 }
 
 fn input_display_lines(
@@ -291,6 +579,8 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(indent, Style::default()),
         status,
         Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
+        Span::styled("  / commands", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Tab complete", Style::default().fg(Color::DarkGray)),
         Span::styled("  Ctrl+C clear", Style::default().fg(Color::DarkGray)),
         Span::styled("  Esc stop/quit", Style::default().fg(Color::DarkGray)),
     ]);

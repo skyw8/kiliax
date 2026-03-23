@@ -61,10 +61,12 @@ minimal
 TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 codex）+ 终端 scrollback 历史；启动先插入 header（版本/模型/cwd），输入框从 header 之后开始并随输出自动下推；输入框支持自动换行与动态高度。
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
-- `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流）；每帧同步终端宽度到 `App` 供 thinking 软换行流式渲染
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；`AssistantThinkingDelta` 灰色斜体输出，按终端宽度软换行逐行流式；正文开始后关闭/忽略 thinking 以避免混入正文；正文去掉多余前导空行；StepStart 先写入 Thinking 行再流式插入 AssistantDelta；统计输出 token 并用于 status/divider；工具调用折叠 + apply_patch diff + update_plan 展示）；包含 stream collector/不交织约束等单元测试
-- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；输入框上方状态行显示计时 + token（当前 tool/step）；底部 footer（agent+model/status/快捷键）
+- `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流）；slash command 分发（/agent、/model）与模型切换落盘
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示）；slash command（/agent、/model）与 UI mode（chat/model picker）状态机；模型切换会更新 `killiax.yaml` 的 `default_model` 并热切换 runtime；切换后 checkpoint session（刷新 system preamble）
+- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（`›` 前缀、自动换行、动态高度）；slash command popup；model picker 选择界面；状态行/底部 footer（agent+model/status/快捷键）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
+- `crates/kiliax-tui/src/slash_command.rs`: slash command 定义 + popup 状态（↑/↓ 选择、Tab 补全、/a alias）
+- `crates/kiliax-tui/src/model_picker.rs`: model picker 状态（provider/model 列表、模糊搜索、键盘导航、返回所选 model id）
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式与 diff 行背景（从终端默认背景色推导，类似 codex）
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect scope → VS Code Dark+ 默认配色 → ratatui spans）

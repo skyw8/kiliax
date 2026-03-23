@@ -7,6 +7,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use unicode_width::UnicodeWidthChar;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -20,6 +21,33 @@ use kiliax_core::{
 
 use crate::input::{InputAction, InputLine};
 use crate::markdown::render_markdown_lines;
+use crate::model_picker::{ModelPicker, ModelPickerEvent};
+use crate::slash_command::SlashPopupState;
+
+#[derive(Debug, Clone)]
+pub enum AppAction {
+    None,
+    Submitted(String),
+    ModelPicked(String),
+}
+
+impl Default for AppAction {
+    fn default() -> Self {
+        AppAction::None
+    }
+}
+
+#[derive(Debug)]
+enum UiMode {
+    Chat,
+    ModelPicker(ModelPicker),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitDisposition {
+    Handled,
+    StartRun,
+}
 
 #[derive(Debug, Default, Clone)]
 struct MarkdownStreamCollector {
@@ -358,6 +386,13 @@ pub struct App {
     screen_width: u16,
     pending_history_lines: Vec<Line<'static>>,
 
+    ui_mode: UiMode,
+    slash_popup: SlashPopupState,
+
+    workspace_root: PathBuf,
+    config_path: PathBuf,
+    config: kiliax_core::config::Config,
+
     profile: AgentProfile,
     runtime: AgentRuntime,
     model_id: String,
@@ -391,6 +426,9 @@ impl App {
         store: FileSessionStore,
         session: SessionState,
         messages: Vec<Message>,
+        workspace_root: PathBuf,
+        config_path: PathBuf,
+        config: kiliax_core::config::Config,
     ) -> Self {
         let model_id = runtime.llm().route().model_id();
         let prompt_history: Vec<String> = messages
@@ -407,6 +445,11 @@ impl App {
             status: None,
             screen_width: 0,
             pending_history_lines: Vec::new(),
+            ui_mode: UiMode::Chat,
+            slash_popup: SlashPopupState::default(),
+            workspace_root,
+            config_path,
+            config,
             profile,
             runtime,
             model_id,
@@ -444,6 +487,17 @@ impl App {
 
     pub fn set_screen_width(&mut self, width: u16) {
         self.screen_width = width;
+    }
+
+    pub fn slash_popup(&self) -> &SlashPopupState {
+        &self.slash_popup
+    }
+
+    pub fn model_picker(&self) -> Option<&ModelPicker> {
+        match &self.ui_mode {
+            UiMode::ModelPicker(picker) => Some(picker),
+            UiMode::Chat => None,
+        }
     }
 
     fn history_wrap_width(&self) -> usize {
@@ -513,9 +567,35 @@ impl App {
         std::mem::take(&mut self.pending_history_lines)
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
+    pub fn handle_key(&mut self, key: KeyEvent) -> AppAction {
+        match &mut self.ui_mode {
+            UiMode::Chat => self.handle_chat_key(key),
+            UiMode::ModelPicker(picker) => match picker.handle_key(key) {
+                ModelPickerEvent::None => AppAction::None,
+                ModelPickerEvent::Cancel => {
+                    self.ui_mode = UiMode::Chat;
+                    AppAction::None
+                }
+                ModelPickerEvent::Picked(id) => {
+                    self.ui_mode = UiMode::Chat;
+                    AppAction::ModelPicked(id)
+                }
+            },
+        }
+    }
+
+    fn handle_chat_key(&mut self, key: KeyEvent) -> AppAction {
         if self.running && key.code == KeyCode::Enter {
-            return None;
+            return AppAction::None;
+        }
+
+        if key.code == KeyCode::Esc {
+            if self.slash_popup.visible() {
+                self.slash_popup.hide();
+            } else {
+                self.should_quit = true;
+            }
+            return AppAction::None;
         }
 
         if key
@@ -525,17 +605,64 @@ impl App {
         {
             self.input.clear();
             self.reset_history_nav();
-            return None;
+            self.slash_popup.hide();
+            return AppAction::None;
+        }
+
+        if self.slash_popup.visible() {
+            match key.code {
+                KeyCode::Up => {
+                    self.slash_popup.move_up();
+                    return AppAction::None;
+                }
+                KeyCode::Down => {
+                    self.slash_popup.move_down();
+                    return AppAction::None;
+                }
+                KeyCode::Tab => {
+                    if let Some(text) = self.slash_popup.completion_text() {
+                        self.input.set_text(text);
+                        self.reset_history_nav();
+                    }
+                    self.slash_popup.hide();
+                    return AppAction::None;
+                }
+                KeyCode::Enter => {
+                    let Some(selected) = self.slash_popup.selected() else {
+                        self.slash_popup.hide();
+                        return AppAction::None;
+                    };
+
+                    if selected.takes_args() {
+                        if let Some(text) = self.slash_popup.completion_text() {
+                            self.input.set_text(text);
+                            self.reset_history_nav();
+                        }
+                        self.slash_popup.hide();
+                        return AppAction::None;
+                    }
+
+                    // Dispatch bare commands like `/model` directly from the popup.
+                    self.slash_popup.hide();
+                    self.input.clear();
+                    return AppAction::Submitted(format!("/{}", selected.command()));
+                }
+                _ => {}
+            }
         }
 
         match key.code {
             KeyCode::Up => {
                 self.history_prev();
-                return None;
+                self.slash_popup
+                    .sync_from_input(self.input.text(), self.input.cursor());
+                return AppAction::None;
             }
             KeyCode::Down => {
                 self.history_next();
-                return None;
+                self.slash_popup
+                    .sync_from_input(self.input.text(), self.input.cursor());
+                return AppAction::None;
             }
             KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete => {
                 if self.history_index.is_some() {
@@ -550,18 +677,55 @@ impl App {
             InputAction::Submit(text) => {
                 let text = text.trim().to_string();
                 if !text.is_empty() {
-                    return Some(text);
+                    self.slash_popup.hide();
+                    return AppAction::Submitted(text);
                 }
             }
         }
-        None
+        self.slash_popup
+            .sync_from_input(self.input.text(), self.input.cursor());
+        AppAction::None
     }
 
     pub fn handle_paste(&mut self, text: &str) {
-        if self.history_index.is_some() {
-            self.reset_history_nav();
+        match &mut self.ui_mode {
+            UiMode::Chat => {
+                if self.history_index.is_some() {
+                    self.reset_history_nav();
+                }
+                self.input.insert_str(text);
+                self.slash_popup
+                    .sync_from_input(self.input.text(), self.input.cursor());
+            }
+            UiMode::ModelPicker(picker) => picker.handle_paste(text),
         }
-        self.input.insert_str(text);
+    }
+
+    pub async fn handle_submit(&mut self, text: String) -> Result<SubmitDisposition> {
+        if let Some((cmd, args)) = parse_known_slash_command(&text) {
+            match cmd {
+                crate::slash_command::SlashCommand::Model => {
+                    self.open_model_picker(args);
+                }
+                crate::slash_command::SlashCommand::Agent => {
+                    let agent = args.split_whitespace().next().unwrap_or("");
+                    if agent.is_empty() {
+                        self.pending_history_lines.extend(render_error_lines(
+                            "usage: /agent <plan|general> (alias: /a)",
+                        ));
+                        return Ok(SubmitDisposition::Handled);
+                    }
+                    if let Err(err) = self.switch_agent(agent).await {
+                        self.pending_history_lines
+                            .extend(render_error_lines(&err.to_string()));
+                    }
+                }
+            }
+            return Ok(SubmitDisposition::Handled);
+        }
+
+        self.submit_user_message(text).await?;
+        Ok(SubmitDisposition::StartRun)
     }
 
     pub async fn submit_user_message(&mut self, text: String) -> Result<()> {
@@ -573,6 +737,158 @@ impl App {
         let msg = Message::User { content: text };
         self.messages.push(msg.clone());
         self.store.record_message(&mut self.session, msg).await?;
+        Ok(())
+    }
+
+    fn open_model_picker(&mut self, initial_query: String) {
+        self.slash_popup.hide();
+        let mut picker = ModelPicker::new(&self.config, Some(self.model_id.as_str()));
+        if !initial_query.trim().is_empty() {
+            picker.set_search_text(initial_query);
+        }
+        self.ui_mode = UiMode::ModelPicker(picker);
+    }
+
+    async fn switch_agent(&mut self, agent_name: &str) -> Result<()> {
+        let Some(next) = AgentProfile::from_name(agent_name) else {
+            anyhow::bail!("unknown agent: {agent_name:?} (expected plan/general)");
+        };
+
+        let prev = self.profile.name.to_string();
+        if prev == next.name {
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("agent").bold(),
+                Span::from(": ").dim(),
+                Span::from(prev).dim(),
+            ]));
+            return Ok(());
+        }
+
+        let prev_profile = self.profile.clone();
+        let prev_options = self.options.clone();
+        let prev_session = self.session.clone();
+        let prev_messages = self.messages.clone();
+
+        self.profile = next;
+        self.options = AgentRuntimeOptions::from_config(&self.profile, &self.config);
+        self.session.meta.agent = self.profile.name.to_string();
+        self.session.meta.updated_at_ms = now_ms();
+
+        let new_preamble = build_preamble(&self.profile, &self.model_id, &self.workspace_root);
+        replace_preamble(&mut self.session.messages, new_preamble);
+        self.session.meta.message_count = self.session.messages.len();
+        self.messages = self.session.messages.clone();
+
+        if let Err(err) = self.store.checkpoint(&mut self.session).await {
+            self.profile = prev_profile;
+            self.options = prev_options;
+            self.session = prev_session;
+            self.messages = prev_messages;
+            return Err(err.into());
+        }
+
+        self.pending_history_lines.push(Line::from(vec![
+            Span::from("• ").dim(),
+            Span::from("agent").bold(),
+            Span::from(": ").dim(),
+            Span::from(prev).dim(),
+            Span::from(" -> ").dim(),
+            Span::from(self.profile.name.to_string()).dim(),
+        ]));
+
+        Ok(())
+    }
+
+    pub async fn apply_model_selection(&mut self, model_id: String) -> Result<()> {
+        if let Err(err) = self.apply_model_selection_inner(model_id).await {
+            self.pending_history_lines
+                .extend(render_error_lines(&err.to_string()));
+        }
+        Ok(())
+    }
+
+    async fn apply_model_selection_inner(&mut self, model_id: String) -> Result<()> {
+        let model_id = model_id.trim().to_string();
+        if model_id.is_empty() {
+            anyhow::bail!("model id must not be empty");
+        }
+        if self.running {
+            anyhow::bail!("cannot switch model while a run is in progress");
+        }
+
+        let prev = self.model_id.clone();
+        if prev == model_id {
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("model").bold(),
+                Span::from(": ").dim(),
+                Span::from(prev).dim(),
+            ]));
+            return Ok(());
+        }
+
+        let prev_runtime = self.runtime.clone();
+        let prev_model_id = self.model_id.clone();
+        let prev_options = self.options.clone();
+        let prev_config = self.config.clone();
+        let prev_session = self.session.clone();
+        let prev_messages = self.messages.clone();
+
+        let original = tokio::fs::read_to_string(&self.config_path).await?;
+        let updated = update_default_model_yaml(&original, &model_id);
+        let wrote = updated != original;
+        if updated != original {
+            tokio::fs::write(&self.config_path, &updated).await?;
+        }
+
+        let res: Result<()> = async {
+            let loaded = kiliax_core::config::load_from_path(self.config_path.clone())
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.config = loaded.config;
+
+            let llm = kiliax_core::llm::LlmClient::from_config(&self.config, Some(&model_id))?;
+            let tools = self.runtime.tools().clone();
+            self.runtime = AgentRuntime::new(llm, tools);
+            self.model_id = self.runtime.llm().route().model_id();
+            self.options = AgentRuntimeOptions::from_config(&self.profile, &self.config);
+
+            self.session.meta.model_id = Some(self.model_id.clone());
+            self.session.meta.updated_at_ms = now_ms();
+
+            let new_preamble = build_preamble(&self.profile, &self.model_id, &self.workspace_root);
+            replace_preamble(&mut self.session.messages, new_preamble);
+            self.session.meta.message_count = self.session.messages.len();
+            self.messages = self.session.messages.clone();
+
+            self.store.checkpoint(&mut self.session).await?;
+
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("model").bold(),
+                Span::from(": ").dim(),
+                Span::from(prev).dim(),
+                Span::from(" -> ").dim(),
+                Span::from(self.model_id.clone()).dim(),
+            ]));
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = res {
+            if wrote {
+                let _ = tokio::fs::write(&self.config_path, &original).await;
+            }
+            self.runtime = prev_runtime;
+            self.model_id = prev_model_id;
+            self.options = prev_options;
+            self.config = prev_config;
+            self.session = prev_session;
+            self.messages = prev_messages;
+            return Err(err);
+        }
+
         Ok(())
     }
 
@@ -833,6 +1149,102 @@ impl App {
         let draft = std::mem::take(&mut self.history_draft);
         self.input.set_text(draft);
     }
+}
+
+fn parse_known_slash_command(
+    text: &str,
+) -> Option<(crate::slash_command::SlashCommand, String)> {
+    let first_line = text.lines().next().unwrap_or("");
+    let trimmed = first_line.trim_start();
+    let rest = trimmed.strip_prefix('/')?.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+
+    let mut split_idx: Option<usize> = None;
+    for (idx, ch) in rest.char_indices() {
+        if ch.is_whitespace() {
+            split_idx = Some(idx);
+            break;
+        }
+    }
+
+    let (name, args) = match split_idx {
+        Some(idx) => (&rest[..idx], rest[idx..].trim()),
+        None => (rest, ""),
+    };
+
+    let cmd = crate::slash_command::find_command(name)?;
+    Some((cmd, args.to_string()))
+}
+
+fn replace_preamble(messages: &mut Vec<Message>, new_preamble: Vec<Message>) {
+    let offset = messages
+        .iter()
+        .take_while(|m| matches!(m, Message::System { .. }))
+        .count();
+
+    let rest = messages.get(offset..).unwrap_or(&[]).to_vec();
+    let mut out = new_preamble;
+    out.extend(rest);
+    *messages = out;
+}
+
+fn build_preamble(profile: &AgentProfile, model_id: &str, workspace_root: &PathBuf) -> Vec<Message> {
+    let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
+        .with_model_id(model_id.to_string())
+        .with_workspace_root(workspace_root);
+    if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
+        builder = builder.add_skills(skills);
+    }
+    builder.build()
+}
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn update_default_model_yaml(text: &str, model_id: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut replaced = false;
+
+    for raw in text.lines() {
+        let line = raw.trim_end_matches('\r');
+        let trimmed = line.trim_start();
+
+        if !replaced && !trimmed.starts_with('#') && trimmed.starts_with("default_model:") {
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            lines.push(format!("{indent}default_model: {model_id}"));
+            replaced = true;
+            continue;
+        }
+
+        lines.push(line.to_string());
+    }
+
+    if !replaced {
+        let mut insert_at = 0usize;
+        while insert_at < lines.len() {
+            let t = lines[insert_at].trim();
+            if t.is_empty() || t.starts_with('#') {
+                insert_at += 1;
+                continue;
+            }
+            break;
+        }
+        lines.insert(insert_at, format!("default_model: {model_id}"));
+    }
+
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 fn render_user_message_lines(content: &str) -> Vec<Line<'static>> {
@@ -1412,6 +1824,7 @@ struct PatchedFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kiliax_core::config::{Config, ProviderConfig};
     use kiliax_core::config::ResolvedModel;
     use kiliax_core::llm::LlmClient;
     use kiliax_core::tools::ToolEngine;
@@ -1520,6 +1933,21 @@ mod tests {
         let tools = ToolEngine::new(tmp.path());
         let runtime = AgentRuntime::new(llm, tools);
 
+        let mut providers = std::collections::BTreeMap::new();
+        providers.insert(
+            "p".to_string(),
+            ProviderConfig {
+                base_url: "https://example.com/v1".to_string(),
+                api_key: None,
+                models: vec!["m".to_string()],
+            },
+        );
+        let config = Config {
+            default_model: Some("p/m".to_string()),
+            providers,
+            ..Default::default()
+        };
+
         let mut app = App::new(
             AgentProfile::general(),
             runtime,
@@ -1527,6 +1955,9 @@ mod tests {
             store,
             session,
             messages,
+            tmp.path().to_path_buf(),
+            tmp.path().join("killiax.yaml"),
+            config,
         );
         app.set_screen_width(40);
 
@@ -1560,5 +1991,22 @@ mod tests {
         let modifiers = lines[1].style.add_modifier - lines[1].style.sub_modifier;
         assert!(modifiers.contains(Modifier::DIM));
         assert!(modifiers.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn update_default_model_yaml_replaces_existing_value() {
+        let input = "# header\ndefault_model: old/p\n\nproviders:\n  p:\n    base_url: x\n";
+        let out = update_default_model_yaml(input, "new/m");
+        assert!(out.contains("default_model: new/m"));
+        assert!(!out.contains("default_model: old/p"));
+        assert!(out.contains("providers:"));
+    }
+
+    #[test]
+    fn update_default_model_yaml_inserts_when_missing() {
+        let input = "# header\n\nproviders:\n  p:\n    base_url: x\n";
+        let out = update_default_model_yaml(input, "p/m");
+        assert!(out.lines().any(|l| l.trim() == "default_model: p/m"));
+        assert!(out.contains("providers:"));
     }
 }
