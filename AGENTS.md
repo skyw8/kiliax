@@ -75,6 +75,26 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - thinking：以灰色斜体显示；可以流式，但**不得**与正文输出交织；正文开始后应关闭/忽略后续 thinking delta
 - 输出紧凑：避免引入多余空行（尤其是 thinking/流式渲染导致的空行）
 
+
+## ENV
+
+终端环境
+```
+(base) skywo@skyw:~/github/kiliax$ stty -a
+speed 38400 baud; rows 55; columns 89; line = 0;
+intr = ^C; quit = ^\; erase = ^?; kill = ^U; eof = ^D; eol = M-^?; eol2 = M-^?;
+swtch = <undef>; start = ^Q; stop = ^S; susp = ^Z; rprnt = ^R; werase = ^W; lnext = ^V;
+discard = ^O; min = 1; time = 0;
+-parenb -parodd -cmspar cs8 hupcl -cstopb cread -clocal -crtscts
+-ignbrk brkint -ignpar -parmrk -inpck -istrip -inlcr -igncr icrnl ixon -ixoff -iuclc
+ixany imaxbel iutf8
+opost -olcuc -ocrnl onlcr -onocr -onlret -ofill -ofdel nl0 cr0 tab0 bs0 vt0 ff0
+isig icanon iexten echo echoe echok -echonl -noflsh -xcase -tostop -echoprt echoctl
+echoke -flusho -extproc
+(base) skywo@skyw:~/github/kiliax$ echo $TERM
+xterm-256color
+```
+
 ## ATTENTION
 
 - 修改完代码后，更新AGENTS.md中的arch部分，只用说明这些核心代码部分
