@@ -26,8 +26,12 @@ impl AgentProfile {
             name: "plan",
             developer_prompt: PLAN_PROMPT,
             tools: vec![
-                builtin::read_tool_definition(),
-                builtin::shell_tool_definition(),
+                builtin::read_file_tool_definition(),
+                builtin::list_dir_tool_definition(),
+                builtin::grep_files_tool_definition(),
+                builtin::shell_command_tool_definition(),
+                builtin::write_stdin_tool_definition(),
+                builtin::update_plan_tool_definition(),
             ],
             permissions: plan_permissions(),
         }
@@ -39,9 +43,13 @@ impl AgentProfile {
             name: "build",
             developer_prompt: BUILD_PROMPT,
             tools: vec![
-                builtin::read_tool_definition(),
-                builtin::write_tool_definition(),
-                builtin::shell_tool_definition(),
+                builtin::read_file_tool_definition(),
+                builtin::list_dir_tool_definition(),
+                builtin::grep_files_tool_definition(),
+                builtin::shell_command_tool_definition(),
+                builtin::write_stdin_tool_definition(),
+                builtin::apply_patch_tool_definition(),
+                builtin::update_plan_tool_definition(),
             ],
             permissions: build_permissions(),
         }

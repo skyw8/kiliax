@@ -1,25 +1,21 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::llm::{Message, ToolCall, ToolDefinition};
-use crate::tools::{builtin, mcp::McpHub, Permissions, ToolError};
+use crate::tools::{builtin, Permissions, ToolError};
 
 #[derive(Clone)]
 pub struct ToolEngine {
     workspace_root: PathBuf,
-    mcp: Option<McpHub>,
+    shell_sessions: Arc<builtin::ShellSessions>,
 }
 
 impl ToolEngine {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             workspace_root: workspace_root.into(),
-            mcp: None,
+            shell_sessions: Arc::new(builtin::ShellSessions::new()),
         }
-    }
-
-    pub fn with_mcp(mut self, hub: McpHub) -> Self {
-        self.mcp = Some(hub);
-        self
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -27,31 +23,17 @@ impl ToolEngine {
     }
 
     pub async fn extra_tool_definitions(&self) -> Vec<ToolDefinition> {
-        match &self.mcp {
-            Some(hub) => hub.tool_definitions().await,
-            None => Vec::new(),
-        }
+        Vec::new()
     }
 
     pub async fn execute(&self, perms: &Permissions, call: &ToolCall) -> Result<String, ToolError> {
-        match call.name.as_str() {
-            builtin::TOOL_READ | builtin::TOOL_WRITE | builtin::TOOL_SHELL => {
-                builtin::execute(&self.workspace_root, perms, call).await
-            }
-            _ => {
-                if let Some(hub) = &self.mcp {
-                    if McpHub::is_mcp_tool_name(&call.name) {
-                        let args = serde_json::from_str::<serde_json::Value>(&call.arguments)
-                            .map_err(|source| ToolError::InvalidArgs {
-                                tool: call.name.clone(),
-                                source,
-                            })?;
-                        return hub.call_exposed_tool(&call.name, args).await;
-                    }
-                }
-                Err(ToolError::UnknownTool(call.name.clone()))
-            }
-        }
+        builtin::execute(
+            &self.workspace_root,
+            perms,
+            self.shell_sessions.as_ref(),
+            call,
+        )
+        .await
     }
 
     pub async fn execute_to_message(
@@ -89,14 +71,17 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn plan_denies_write() {
+    async fn plan_denies_apply_patch() {
         let tmp = tempfile::tempdir().unwrap();
         let engine = ToolEngine::new(tmp.path());
 
         let call = ToolCall {
             id: "call_1".to_string(),
-            name: builtin::TOOL_WRITE.to_string(),
-            arguments: r#"{"path":"a.txt","content":"x"}"#.to_string(),
+            name: builtin::TOOL_APPLY_PATCH.to_string(),
+            arguments: serde_json::json!({
+                "patch": "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n"
+            })
+            .to_string(),
         };
 
         let err = engine.execute(&plan_permissions(), &call).await.unwrap_err();
@@ -112,8 +97,12 @@ mod tests {
 
         let call = ToolCall {
             id: "call_1".to_string(),
-            name: builtin::TOOL_SHELL.to_string(),
-            arguments: r#"{"argv":["rm","-rf","/"]}"#.to_string(),
+            name: builtin::TOOL_SHELL_COMMAND.to_string(),
+            arguments: serde_json::json!({
+                "argv": ["rm", "-rf", "/"],
+                "yield_time_ms": 0
+            })
+            .to_string(),
         };
 
         let err = engine.execute(&plan_permissions(), &call).await.unwrap_err();
@@ -123,23 +112,25 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn build_can_write() {
+    async fn build_can_apply_patch() {
         let tmp = tempfile::tempdir().unwrap();
         let engine = ToolEngine::new(tmp.path());
 
         let call = ToolCall {
             id: "call_1".to_string(),
-            name: builtin::TOOL_WRITE.to_string(),
-            arguments: r#"{"path":"a.txt","content":"hello"}"#.to_string(),
+            name: builtin::TOOL_APPLY_PATCH.to_string(),
+            arguments: serde_json::json!({
+                "patch": "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch\n"
+            })
+            .to_string(),
         };
 
         let out = engine.execute(&build_permissions(), &call).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
-        assert_eq!(parsed.get("path").and_then(|v| v.as_str()), Some("a.txt"));
         let s = tokio::fs::read_to_string(tmp.path().join("a.txt"))
             .await
             .unwrap();
-        assert_eq!(s, "hello");
+        assert_eq!(s, "hello\n");
     }
 }

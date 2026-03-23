@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prompt_args = args[idx..].to_vec();
 
     let prompt = if prompt_args.is_empty() && resume_id.is_none() {
-        "Use the read tool to read README.md, then summarize how to run examples.".to_string()
+        "Use the read_file tool to read README.md, then summarize how to run examples.".to_string()
     } else {
         prompt_args.join(" ")
     };

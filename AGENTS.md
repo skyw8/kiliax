@@ -28,7 +28,7 @@ minimal
   - `codex.md`: 模型层提示词（默认，用于 gpt 系列）
   - `plan.md`: plan agent 提示词（只读/受限命令）
   - `build.md`: build agent 提示词（可写/可执行）
-  - `tools.md`: 通用工具使用规范（read/write/shell/mcp 命名空间）
+  - `tools.md`: 通用工具使用规范（read_file/list_dir/grep_files/shell_command/write_stdin/apply_patch/update_plan）
   - `how_to_use_skills.md`: skills 使用规范（与 skills 列表一起注入）
 - `crates/kiliax-core/examples/`: 可运行示例
   - `chat_hello.rs`: 非流式 chat 示例
@@ -43,9 +43,9 @@ minimal
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`
-  - `builtin.rs`: 内置工具 `read/write/shell` 的 schema + 执行（write 生成 JSON 摘要并在小改动时附带 unified diff；read 允许 workspace + skills roots；shell argv allowlist）
-  - `engine.rs`: 工具路由与统一执行（builtin vs MCP），以及 MCP 工具 definitions 注入
-  - `mcp.rs`: MCP stdio hub（连接 server、列出 tools、`mcp__<server>__<tool>` 命名空间、调用工具）
+  - `builtin.rs`: codex 风格内置工具 schema + 执行（`read_file/list_dir/grep_files/shell_command/write_stdin/apply_patch/update_plan`；shell argv allowlist + session；apply_patch 支持 Begin/End Patch）
+  - `engine.rs`: 工具统一执行入口（仅集成内置工具；维护 shell sessions；`extra_tool_definitions` 暂为空）
+  - `mcp.rs`: MCP stdio hub（连接 server、列出 tools、`mcp__<server>__<tool>` 命名空间、调用工具；当前未接入 ToolEngine）
   - `skills.rs`: skills 发现（扫描 roots；按 `id` 去重；解析 `SKILL.md` YAML front matter 的 `name/description`；剥离 front matter 得到正文）
 
 ### crates/kiliax-tui
@@ -54,7 +54,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
 - `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流）；每帧同步终端宽度到 `App` 供 thinking 软换行流式渲染
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；`AssistantThinkingDelta` 灰色斜体输出，按终端宽度软换行逐行流式；正文开始后关闭/忽略 thinking 以避免混入正文；正文去掉多余前导空行；StepStart 先写入 Thinking 行再流式插入 AssistantDelta；统计输出 token 并用于 status/divider；工具调用折叠与 write diff 渲染）；包含 stream collector/不交织约束等单元测试
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；`AssistantThinkingDelta` 灰色斜体输出，按终端宽度软换行逐行流式；正文开始后关闭/忽略 thinking 以避免混入正文；正文去掉多余前导空行；StepStart 先写入 Thinking 行再流式插入 AssistantDelta；统计输出 token 并用于 status/divider；工具调用折叠 + apply_patch diff + update_plan 展示）；包含 stream collector/不交织约束等单元测试
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；输入框上方状态行显示计时 + token（当前 tool/step）；底部 footer（model/status/快捷键）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式与 diff 行背景（从终端默认背景色推导，类似 codex）

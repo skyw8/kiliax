@@ -340,9 +340,13 @@ struct PendingToolCall {
 
 #[derive(Debug, Clone)]
 enum PendingToolCallKind {
-    Read { path: String },
-    Write { path: String },
-    Shell { argv: Vec<String>, cwd: Option<String> },
+    ReadFile { path: String },
+    ListDir { path: String },
+    GrepFiles { pattern: String, path: Option<String> },
+    ShellCommand { argv: Vec<String>, cwd: Option<String> },
+    WriteStdin { session_id: u64 },
+    ApplyPatch { files: Vec<String> },
+    UpdatePlan { steps: usize },
     Other,
 }
 
@@ -871,7 +875,13 @@ struct ToolSummary {
 
 fn tool_name_span(tool: &str) -> Span<'static> {
     let style = match tool {
-        "read" | "write" | "shell" => Style::default().fg(Color::Cyan).bold(),
+        "read_file"
+        | "list_dir"
+        | "grep_files"
+        | "shell_command"
+        | "write_stdin"
+        | "apply_patch"
+        | "update_plan" => Style::default().fg(Color::Cyan).bold(),
         _ => Style::default().bold(),
     };
     Span::styled(tool.to_string(), style)
@@ -908,8 +918,11 @@ fn render_tool_result_lines(
     elapsed: Option<Duration>,
     tool_content: &str,
 ) -> Vec<Line<'static>> {
-    if matches!(pending.kind, PendingToolCallKind::Write { .. }) {
-        return render_write_tool_result_lines(pending, elapsed, tool_content);
+    if matches!(pending.kind, PendingToolCallKind::ApplyPatch { .. }) {
+        return render_apply_patch_tool_result_lines(pending, elapsed, tool_content);
+    }
+    if matches!(pending.kind, PendingToolCallKind::UpdatePlan { .. }) {
+        return render_update_plan_tool_result_lines(pending, elapsed);
     }
 
     let duration = elapsed.map(fmt_duration_compact);
@@ -935,14 +948,14 @@ fn render_tool_result_lines(
     out
 }
 
-fn render_write_tool_result_lines(
+fn render_apply_patch_tool_result_lines(
     pending: &PendingToolCall,
     elapsed: Option<Duration>,
     tool_content: &str,
 ) -> Vec<Line<'static>> {
     let duration = elapsed.map(fmt_duration_compact);
     let (summary, detail) = summarize_tool_result(pending, tool_content);
-    let parsed = serde_json::from_str::<WriteToolOutput>(tool_content).ok();
+    let parsed = serde_json::from_str::<ApplyPatchOutput>(tool_content).ok();
 
     let mut header = vec![Span::from("• ").dim(), tool_name_span(&summary.tool)];
     if !summary.rest.is_empty() {
@@ -962,18 +975,104 @@ fn render_write_tool_result_lines(
         ]));
     }
 
-    if let Some(diff) = parsed.and_then(|o| o.diff) {
-        out.extend(render_diff_block(&diff));
+    let Some(parsed) = parsed else {
+        return out;
+    };
+
+    for file in parsed.files.iter().take(6) {
+        let mut label = format!("{} {}", file.action, file.path);
+        if let Some(dest) = file.moved_to.as_deref() {
+            label.push_str(&format!(" -> {dest}"));
+        }
+        if let (Some(added), Some(removed)) = (file.added_lines, file.removed_lines) {
+            label.push_str(&format!(" (+{added}/-{removed})"));
+        }
+        out.push(Line::from(vec![
+            Span::from("  └ ").dim(),
+            Span::styled(label, Style::default().dim()),
+        ]));
+
+        if let Some(diff) = file.diff.as_deref() {
+            out.extend(render_diff_block_with_prefix(diff, "    └ ", "      "));
+        }
+    }
+
+    if parsed.files.len() > 6 {
+        out.push(Line::from(vec![
+            Span::from("  └ ").dim(),
+            Span::styled(
+                format!("… ({} more files)", parsed.files.len().saturating_sub(6)),
+                Style::default().dim(),
+            ),
+        ]));
     }
 
     out
 }
 
-fn render_diff_block(diff: &str) -> Vec<Line<'static>> {
+fn render_update_plan_tool_result_lines(
+    pending: &PendingToolCall,
+    elapsed: Option<Duration>,
+) -> Vec<Line<'static>> {
+    let duration = elapsed.map(fmt_duration_compact);
+    let (summary, detail) = summarize_tool_result(pending, "");
+
+    let mut header = vec![Span::from("• ").dim(), tool_name_span(&summary.tool)];
+    if !summary.rest.is_empty() {
+        header.push(Span::from(" "));
+        header.push(Span::from(summary.rest));
+    }
+    if let Some(duration) = duration {
+        header.push(Span::from(" "));
+        header.push(Span::styled(format!("({duration})"), Style::default().dim()));
+    }
+
+    let mut out = vec![Line::from(header)];
+    if let Some(detail) = detail {
+        out.push(Line::from(vec![
+            Span::from("  └ ").dim(),
+            Span::styled(detail, Style::default().dim()),
+        ]));
+    }
+
+    let Ok(args) = serde_json::from_str::<UpdatePlanArgs>(&pending.arguments) else {
+        return out;
+    };
+
+    for item in args.plan.iter().take(8) {
+        let status_style = match item.status.as_str() {
+            "completed" => Style::default().fg(Color::Green).dim(),
+            "in_progress" => Style::default().fg(Color::Cyan).dim(),
+            _ => Style::default().dim(),
+        };
+        out.push(Line::from(vec![
+            Span::from("  └ ").dim(),
+            Span::styled(format!("[{}] ", item.status), status_style),
+            Span::styled(item.step.clone(), Style::default().dim()),
+        ]));
+    }
+    if args.plan.len() > 8 {
+        out.push(Line::from(vec![
+            Span::from("  └ ").dim(),
+            Span::styled(
+                format!("… ({} more steps)", args.plan.len().saturating_sub(8)),
+                Style::default().dim(),
+            ),
+        ]));
+    }
+
+    out
+}
+
+fn render_diff_block_with_prefix(
+    diff: &str,
+    first_prefix: &'static str,
+    rest_prefix: &'static str,
+) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let mut first = true;
     for raw in diff.split('\n') {
-        let prefix = if first { "  └ " } else { "    " };
+        let prefix = if first { first_prefix } else { rest_prefix };
         first = false;
 
         let style = diff_line_style(raw);
@@ -1028,38 +1127,108 @@ fn render_error_lines(text: &str) -> Vec<Line<'static>> {
 }
 
 #[derive(Debug, Deserialize)]
-struct ReadArgs {
+struct ReadFileArgs {
     path: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct WriteArgs {
+struct ListDirArgs {
     path: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct ShellArgs {
+struct GrepFilesArgs {
+    pattern: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShellCommandArgs {
     argv: Vec<String>,
     #[serde(default)]
     cwd: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WriteStdinArgs {
+    session_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyPatchArgs {
+    patch: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdatePlanArgs {
+    #[allow(dead_code)]
+    explanation: Option<String>,
+    plan: Vec<UpdatePlanItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdatePlanItem {
+    step: String,
+    status: String,
+}
+
+fn extract_patch_files(patch: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in patch.lines() {
+        let line = raw.trim_end_matches('\r');
+        for prefix in ["*** Add File:", "*** Update File:", "*** Delete File:"] {
+            if let Some(rest) = line.strip_prefix(prefix) {
+                let p = rest.trim();
+                if !p.is_empty() {
+                    out.push(p.to_string());
+                }
+                break;
+            }
+        }
+    }
+    out
+}
+
 fn classify_tool_call(call: &kiliax_core::llm::ToolCall) -> PendingToolCallKind {
     match call.name.as_str() {
-        "read" => serde_json::from_str::<ReadArgs>(&call.arguments)
+        "read_file" => serde_json::from_str::<ReadFileArgs>(&call.arguments)
             .ok()
-            .map(|args| PendingToolCallKind::Read { path: args.path })
+            .map(|args| PendingToolCallKind::ReadFile { path: args.path })
             .unwrap_or(PendingToolCallKind::Other),
-        "write" => serde_json::from_str::<WriteArgs>(&call.arguments)
+        "list_dir" => serde_json::from_str::<ListDirArgs>(&call.arguments)
             .ok()
-            .map(|args| PendingToolCallKind::Write { path: args.path })
+            .map(|args| PendingToolCallKind::ListDir { path: args.path })
             .unwrap_or(PendingToolCallKind::Other),
-        "shell" => serde_json::from_str::<ShellArgs>(&call.arguments)
+        "grep_files" => serde_json::from_str::<GrepFilesArgs>(&call.arguments)
             .ok()
-            .map(|args| PendingToolCallKind::Shell {
+            .map(|args| PendingToolCallKind::GrepFiles {
+                pattern: args.pattern,
+                path: args.path,
+            })
+            .unwrap_or(PendingToolCallKind::Other),
+        "shell_command" => serde_json::from_str::<ShellCommandArgs>(&call.arguments)
+            .ok()
+            .map(|args| PendingToolCallKind::ShellCommand {
                 argv: args.argv,
                 cwd: args.cwd,
             })
+            .unwrap_or(PendingToolCallKind::Other),
+        "write_stdin" => serde_json::from_str::<WriteStdinArgs>(&call.arguments)
+            .ok()
+            .map(|args| PendingToolCallKind::WriteStdin {
+                session_id: args.session_id,
+            })
+            .unwrap_or(PendingToolCallKind::Other),
+        "apply_patch" => serde_json::from_str::<ApplyPatchArgs>(&call.arguments)
+            .ok()
+            .map(|args| PendingToolCallKind::ApplyPatch {
+                files: extract_patch_files(&args.patch),
+            })
+            .unwrap_or(PendingToolCallKind::Other),
+        "update_plan" => serde_json::from_str::<UpdatePlanArgs>(&call.arguments)
+            .ok()
+            .map(|args| PendingToolCallKind::UpdatePlan { steps: args.plan.len() })
             .unwrap_or(PendingToolCallKind::Other),
         _ => PendingToolCallKind::Other,
     }
@@ -1067,52 +1236,57 @@ fn classify_tool_call(call: &kiliax_core::llm::ToolCall) -> PendingToolCallKind 
 
 fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (ToolSummary, Option<String>) {
     match &pending.kind {
-        PendingToolCallKind::Read { path } => {
+        PendingToolCallKind::ReadFile { path } => {
             let line_count = tool_content.lines().count();
             (
                 ToolSummary {
-                    tool: "read".to_string(),
+                    tool: "read_file".to_string(),
                     rest: path.clone(),
                 },
                 Some(format!("{line_count} lines")),
             )
         }
-        PendingToolCallKind::Write { path } => {
-            let parsed = serde_json::from_str::<WriteToolOutput>(tool_content).ok();
-            let created = parsed.as_ref().map(|o| o.created);
-            let added = parsed.as_ref().and_then(|o| o.added_lines);
-            let removed = parsed.as_ref().and_then(|o| o.removed_lines);
-
-            let what = match created {
-                Some(true) => "created",
-                Some(false) => "updated",
-                None => "wrote",
-            };
-
-            let mut detail = what.to_string();
-            if let (Some(added), Some(removed)) = (added, removed) {
-                detail.push_str(&format!(" (+{added}/-{removed})"));
-            }
-
+        PendingToolCallKind::ListDir { path } => {
+            let entry_count = tool_content.lines().filter(|l| !l.trim().is_empty()).count();
             (
                 ToolSummary {
-                    tool: "write".to_string(),
+                    tool: "list_dir".to_string(),
                     rest: path.clone(),
                 },
-                Some(detail),
+                Some(format!("{entry_count} entries")),
             )
         }
-        PendingToolCallKind::Shell { argv, cwd } => {
+        PendingToolCallKind::GrepFiles { pattern, path } => {
+            let match_count = tool_content.lines().filter(|l| !l.trim().is_empty()).count();
+            let mut rest = pattern.clone();
+            if let Some(path) = path.as_deref() {
+                if !path.is_empty() && path != "." {
+                    rest.push_str(&format!(" ({path})"));
+                }
+            }
+            (
+                ToolSummary {
+                    tool: "grep_files".to_string(),
+                    rest,
+                },
+                Some(format!("{match_count} matches")),
+            )
+        }
+        PendingToolCallKind::ShellCommand { argv, cwd } => {
             let cmd = argv.join(" ");
-            let code = tool_content
-                .lines()
-                .next()
-                .and_then(|line| line.strip_prefix("exit_code: "))
-                .unwrap_or("")
-                .trim();
             let mut detail = String::new();
-            if !code.is_empty() {
-                detail.push_str(&format!("exit {code}"));
+            if let Ok(parsed) = serde_json::from_str::<ShellCommandOutput>(tool_content) {
+                if parsed.running {
+                    if let Some(id) = parsed.session_id {
+                        detail.push_str(&format!("running · session {id}"));
+                    } else {
+                        detail.push_str("running");
+                    }
+                } else if let Some(code) = parsed.exit_code {
+                    detail.push_str(&format!("exit {code}"));
+                }
+            } else if !tool_content.trim().is_empty() {
+                detail.push_str(&truncate_one_line(tool_content, 120));
             }
             if let Some(cwd) = cwd.as_deref() {
                 if !detail.is_empty() {
@@ -1122,12 +1296,52 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Tool
             }
             (
                 ToolSummary {
-                    tool: "shell".to_string(),
+                    tool: "shell_command".to_string(),
                     rest: cmd,
                 },
                 if detail.is_empty() { None } else { Some(detail) },
             )
         }
+        PendingToolCallKind::WriteStdin { session_id } => {
+            let mut detail = String::new();
+            if let Ok(parsed) = serde_json::from_str::<ShellCommandOutput>(tool_content) {
+                if parsed.running {
+                    detail.push_str("running");
+                } else if let Some(code) = parsed.exit_code {
+                    detail.push_str(&format!("exit {code}"));
+                }
+            } else if !tool_content.trim().is_empty() {
+                detail.push_str(&truncate_one_line(tool_content, 120));
+            }
+            (
+                ToolSummary {
+                    tool: "write_stdin".to_string(),
+                    rest: format!("session {session_id}"),
+                },
+                if detail.is_empty() { None } else { Some(detail) },
+            )
+        }
+        PendingToolCallKind::ApplyPatch { files } => {
+            let rest = match files.len() {
+                0 => String::new(),
+                1 => files[0].clone(),
+                n => format!("{n} files"),
+            };
+            (
+                ToolSummary {
+                    tool: "apply_patch".to_string(),
+                    rest,
+                },
+                None,
+            )
+        }
+        PendingToolCallKind::UpdatePlan { steps } => (
+            ToolSummary {
+                tool: "update_plan".to_string(),
+                rest: format!("{steps} steps"),
+            },
+            None,
+        ),
         PendingToolCallKind::Other => (
             ToolSummary {
                 tool: pending.name.clone(),
@@ -1140,22 +1354,49 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Tool
 
 fn tool_status_label(pending: &PendingToolCall) -> String {
     match &pending.kind {
-        PendingToolCallKind::Read { path } => format!("read {path}"),
-        PendingToolCallKind::Write { path } => format!("write {path}"),
-        PendingToolCallKind::Shell { argv, .. } => format!("shell {}", argv.join(" ")),
+        PendingToolCallKind::ReadFile { path } => format!("read_file {path}"),
+        PendingToolCallKind::ListDir { path } => format!("list_dir {path}"),
+        PendingToolCallKind::GrepFiles { pattern, .. } => format!("grep_files {pattern}"),
+        PendingToolCallKind::ShellCommand { argv, .. } => format!("shell_command {}", argv.join(" ")),
+        PendingToolCallKind::WriteStdin { session_id } => format!("write_stdin {session_id}"),
+        PendingToolCallKind::ApplyPatch { files } => match files.len() {
+            0 => "apply_patch".to_string(),
+            1 => format!("apply_patch {}", files[0]),
+            n => format!("apply_patch {n} files"),
+        },
+        PendingToolCallKind::UpdatePlan { steps } => format!("update_plan {steps}"),
         PendingToolCallKind::Other => pending.name.clone(),
     }
 }
 
 #[derive(Debug, Deserialize)]
-struct WriteToolOutput {
+struct ShellCommandOutput {
+    #[allow(dead_code)]
+    session_id: Option<u64>,
+    #[allow(dead_code)]
+    running: bool,
+    #[allow(dead_code)]
+    exit_code: Option<i32>,
+    #[allow(dead_code)]
+    stdout: String,
+    #[allow(dead_code)]
+    stderr: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyPatchOutput {
     #[allow(dead_code)]
     ok: bool,
-    #[allow(dead_code)]
+    #[serde(default)]
+    files: Vec<PatchedFile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PatchedFile {
+    action: String,
     path: String,
-    created: bool,
-    #[allow(dead_code)]
-    bytes: usize,
+    #[serde(default)]
+    moved_to: Option<String>,
     #[serde(default)]
     diff: Option<String>,
     #[serde(default)]
