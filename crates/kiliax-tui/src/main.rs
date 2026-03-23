@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "plan" | "build" => profile_override = Some(arg.as_str()),
+            "plan" | "general" | "build" => profile_override = Some(arg.as_str()),
             "--resume" => {
                 let Some(id) = iter.next() else {
                     anyhow::bail!("--resume expects a session id");
@@ -58,16 +58,10 @@ async fn main() -> Result<()> {
     let llm = LlmClient::from_config(&loaded.config, model_override)?;
     let runtime = kiliax_core::runtime::AgentRuntime::new(llm, ToolEngine::new(&workspace_root));
 
-    let profile = match (
-        profile_override,
-        resumed.as_ref().map(|s| s.meta.agent.as_str()),
-    ) {
-        (Some("plan"), _) => AgentProfile::plan(),
-        (Some("build"), _) => AgentProfile::build(),
-        (None, Some("plan")) => AgentProfile::plan(),
-        (None, Some("build")) => AgentProfile::build(),
-        _ => AgentProfile::build(),
-    };
+    let profile = profile_override
+        .and_then(AgentProfile::from_name)
+        .or_else(|| resumed.as_ref().and_then(|s| AgentProfile::from_name(&s.meta.agent)))
+        .unwrap_or_else(AgentProfile::general);
 
     let (session, messages) = match resumed {
         Some(session) => {

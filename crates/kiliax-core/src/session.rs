@@ -71,7 +71,7 @@ pub struct SessionMeta {
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
 
-    /// "plan" / "build" / future custom agent names.
+    /// "plan" / "general" / future custom agent names.
     pub agent: String,
 
     /// Fully-qualified model id used for routing, e.g. "moonshot_cn/kimi-k2-turbo-preview".

@@ -27,7 +27,7 @@ minimal
 - `crates/kiliax-core/prompts/`: agent 提示词（markdown，编译期 `include_str!`）
   - `codex.md`: 模型层提示词（默认，用于 gpt 系列）
   - `plan.md`: plan agent 提示词（只读/受限命令）
-  - `build.md`: build agent 提示词（可写/可执行）
+  - `general.md`: general agent 提示词（可写/可执行）
   - `tools.md`: 工具使用规则（工具列表/并行能力由 `PromptBuilder` 动态注入）
   - `how_to_use_skills.md`: skills 使用规范（与 skills 列表一起注入）
 - `crates/kiliax-core/examples/`: 可运行示例
@@ -37,7 +37,7 @@ minimal
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
 - `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、`<provider>/<model>` 路由；agent 运行参数（`runtime`/`agents.*`）；包含 config 优先级/resolve_model 单元测试
 - `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；流式通过 `byot` 解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`
-- `crates/kiliax-core/src/agents.rs`: `AgentProfile`（plan/build）及其可用工具集合与权限模型
+- `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染，并标注可并行工具）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
@@ -63,7 +63,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
 - `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流）；每帧同步终端宽度到 `App` 供 thinking 软换行流式渲染
 - `crates/kiliax-tui/src/app.rs`: `App` 状态（turn/step/tool 计时；`AssistantThinkingDelta` 灰色斜体输出，按终端宽度软换行逐行流式；正文开始后关闭/忽略 thinking 以避免混入正文；正文去掉多余前导空行；StepStart 先写入 Thinking 行再流式插入 AssistantDelta；统计输出 token 并用于 status/divider；工具调用折叠 + apply_patch diff + update_plan 展示）；包含 stream collector/不交织约束等单元测试
-- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；输入框上方状态行显示计时 + token（当前 tool/step）；底部 footer（model/status/快捷键）
+- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（左侧 `›` 前缀、自动换行、动态高度）；输入框上方状态行显示计时 + token（当前 tool/step）；底部 footer（agent+model/status/快捷键）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式与 diff 行背景（从终端默认背景色推导，类似 codex）
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试

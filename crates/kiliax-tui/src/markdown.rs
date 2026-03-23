@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn renders_sample_greeting_without_extra_blank_lines() {
         let input = "\
-Hello! I'm the build agent, ready to help you implement changes in the repository.
+Hello! I'm the general agent, ready to help you implement changes in the repository.
 
 What would you like me to work on? I can:
 

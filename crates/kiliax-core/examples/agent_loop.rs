@@ -18,9 +18,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut idx = 0;
     let profile = match args.get(0).map(|s| s.as_str()) {
-        Some("build") => {
+        Some("general") | Some("build") => {
             idx = 1;
-            AgentProfile::build()
+            AgentProfile::general()
         }
         Some("plan") => {
             idx = 1;

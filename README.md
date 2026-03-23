@@ -17,7 +17,7 @@ cargo run -p kiliax-core --example agent_loop
 See `killiax.example.yaml`.
 
 - `runtime.max_steps`: default max steps for all agents
-- `agents.plan.max_steps` / `agents.build.max_steps`: per-agent overrides
+- `agents.plan.max_steps` / `agents.general.max_steps`: per-agent overrides
 
 ## tui
 

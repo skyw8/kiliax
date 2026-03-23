@@ -19,7 +19,8 @@ pub struct AgentsConfig {
     pub plan: AgentRuntimeConfig,
 
     #[serde(default)]
-    pub build: AgentRuntimeConfig,
+    #[serde(alias = "build")]
+    pub general: AgentRuntimeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -320,7 +321,7 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
 
     validate_agent_runtime_config("runtime", &config.runtime)?;
     validate_agent_runtime_config("agents.plan", &config.agents.plan)?;
-    validate_agent_runtime_config("agents.build", &config.agents.build)?;
+    validate_agent_runtime_config("agents.general", &config.agents.general)?;
 
     Ok(())
 }

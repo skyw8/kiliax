@@ -71,7 +71,7 @@ impl AgentRuntimeOptions {
 
         let agent_cfg = match profile.kind {
             AgentKind::Plan => &config.agents.plan,
-            AgentKind::Build => &config.agents.build,
+            AgentKind::General => &config.agents.general,
         };
         if let Some(max_steps) = agent_cfg.max_steps {
             options.max_steps = max_steps;

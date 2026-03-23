@@ -281,6 +281,9 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     let indent = " ".repeat(LIVE_PREFIX_COLS as usize);
     let model = Line::from(vec![
         Span::styled(indent.clone(), Style::default()),
+        Span::from("agent: ").dim(),
+        Span::from(app.agent_name().to_string()).cyan(),
+        Span::from("  ").dim(),
         Span::from("model: ").dim(),
         Span::from(app.model_id().to_string()).cyan(),
     ]);

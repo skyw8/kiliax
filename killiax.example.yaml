@@ -10,7 +10,7 @@ runtime:
 agents:
   plan:
     max_steps: 16
-  build:
+  general:
     max_steps: 8
 
 providers:

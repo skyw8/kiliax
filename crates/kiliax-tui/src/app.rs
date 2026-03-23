@@ -438,6 +438,10 @@ impl App {
         &self.model_id
     }
 
+    pub fn agent_name(&self) -> &str {
+        self.profile.name
+    }
+
     pub fn set_screen_width(&mut self, width: u16) {
         self.screen_width = width;
     }
@@ -1498,7 +1502,7 @@ mod tests {
         }];
         let session = store
             .create(
-                "build",
+                "general",
                 Some("p/m".to_string()),
                 None,
                 None,
@@ -1517,7 +1521,7 @@ mod tests {
         let runtime = AgentRuntime::new(llm, tools);
 
         let mut app = App::new(
-            AgentProfile::build(),
+            AgentProfile::general(),
             runtime,
             AgentRuntimeOptions::default(),
             store,
