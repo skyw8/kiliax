@@ -35,8 +35,8 @@ minimal
   - `stream_chat.rs`: 流式 chat 示例（展示 delta 与 tool_call delta 合并）
   - `agent_loop.rs`: AgentRuntime + PromptBuilder 的闭环示例（流式输出 + 自动执行工具）
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
-- `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、`<provider>/<model>` 路由；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；包含 config 优先级/resolve_model 单元测试
-- `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；User 输入支持 `UserMessageContent`（text + local image path → data URL base64）；流式通过 `byot` 解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`
+- `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、model 路由（按首个 `/` 分割，支持 `openrouter/openai/gpt-4o-mini` 这类 model id）；多 provider 时可按 `providers.*.models` 反查唯一 provider；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；包含 config 优先级/resolve_model 单元测试
+- `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；User 输入支持 `UserMessageContent`（text + local image path → data URL base64）；流式用 `reqwest-eventsource` 直连 SSE（4xx 会读取 body 并转换为 `ApiError`），并解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`；工具 schema 默认不发送 `strict` 以提升兼容性
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染，并标注可并行工具）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`
@@ -69,7 +69,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/clipboard_paste.rs`: 剪切板图片读取→临时 PNG 路径（arboard + WSL PowerShell fallback）；粘贴路径规范化（file://、Windows/UNC、WSL 映射）
 - `crates/kiliax-tui/src/slash_command.rs`: slash command 定义 + popup 状态（↑/↓ 选择、Tab 补全、/a alias）
-- `crates/kiliax-tui/src/model_picker.rs`: model picker 状态（provider/model 列表、模糊搜索、键盘导航、返回所选 model id）
+- `crates/kiliax-tui/src/model_picker.rs`: model picker 状态（provider/model 列表、模糊搜索、键盘导航；返回值总是 provider-qualified model id，兼容带 `/` 的模型名）
 - `crates/kiliax-tui/src/style.rs`: composer 灰底样式与 diff 行背景（从终端默认背景色推导，类似 codex）
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect scope → VS Code Dark+ 默认配色 → ratatui spans）

@@ -46,16 +46,17 @@ impl ModelPicker {
     pub fn new(config: &Config, current_model_id: Option<&str>) -> Self {
         let mut providers: Vec<ProviderEntry> = Vec::new();
         for (name, provider) in &config.providers {
+            let provider_prefix = format!("{name}/");
             let mut models = Vec::new();
             for raw in &provider.models {
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
-                let id = if trimmed.contains('/') {
+                let id = if trimmed.starts_with(&provider_prefix) {
                     trimmed.to_string()
                 } else {
-                    format!("{name}/{trimmed}")
+                    format!("{provider_prefix}{trimmed}")
                 };
                 models.push(ModelEntry {
                     display: trimmed.to_string(),
@@ -380,5 +381,38 @@ mod tests {
     fn fuzzy_match_subsequence() {
         assert!(fuzzy_match("k2", "kimi-k2.5").is_some());
         assert!(fuzzy_match("zz", "kimi-k2.5").is_none());
+    }
+
+    #[test]
+    fn model_picker_qualifies_models_with_slashes() {
+        use std::collections::BTreeMap;
+
+        use kiliax_core::config::ProviderConfig;
+
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            "openrouter".to_string(),
+            ProviderConfig {
+                base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                api_key: None,
+                models: vec!["openai/gpt-4o-mini".to_string()],
+            },
+        );
+
+        let cfg = Config {
+            default_model: None,
+            providers,
+            ..Default::default()
+        };
+
+        let picker = ModelPicker::new(&cfg, None);
+        assert_eq!(picker.providers().len(), 1);
+        assert_eq!(picker.providers()[0].name, "openrouter");
+        assert_eq!(picker.providers()[0].models.len(), 1);
+        assert_eq!(picker.providers()[0].models[0].display, "openai/gpt-4o-mini");
+        assert_eq!(
+            picker.providers()[0].models[0].id,
+            "openrouter/openai/gpt-4o-mini"
+        );
     }
 }

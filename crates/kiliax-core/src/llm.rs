@@ -20,6 +20,7 @@ use async_openai::{
 };
 use base64::Engine as _;
 use reqwest::header::{HeaderMap, AUTHORIZATION};
+use reqwest_eventsource::{Event, RequestBuilderExt};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use tokio_stream::{Stream, StreamExt};
@@ -89,7 +90,9 @@ impl LlmClient {
             let tools: Vec<ChatCompletionTool> =
                 req.tools.into_iter().map(to_openai_tool).collect();
             builder.tools(tools);
-            builder.tool_choice(to_openai_tool_choice(&req.tool_choice));
+            if req.tool_choice != ToolChoice::Auto {
+                builder.tool_choice(to_openai_tool_choice(&req.tool_choice));
+            }
         }
 
         if let Some(parallel_tool_calls) = req.parallel_tool_calls {
@@ -123,7 +126,9 @@ impl LlmClient {
             let tools: Vec<ChatCompletionTool> =
                 req.tools.into_iter().map(to_openai_tool).collect();
             builder.tools(tools);
-            builder.tool_choice(to_openai_tool_choice(&req.tool_choice));
+            if req.tool_choice != ToolChoice::Auto {
+                builder.tool_choice(to_openai_tool_choice(&req.tool_choice));
+            }
         }
 
         if let Some(parallel_tool_calls) = req.parallel_tool_calls {
@@ -141,15 +146,52 @@ impl LlmClient {
         let mut request = builder.build()?;
         request.stream = Some(true);
 
-        let stream = self
-            .client
-            .chat()
-            .create_stream_byot::<_, ByotCreateChatCompletionStreamResponse>(request)
-            .await?;
-        Ok(Box::pin(stream.map(|res| match res {
-            Ok(chunk) => Ok(chat_stream_chunk_from_byot(chunk)),
-            Err(err) => Err(err.into()),
-        })))
+        let cfg = self.client.config();
+        let http = reqwest::Client::new();
+        let mut event_source = http
+            .post(cfg.url("/chat/completions"))
+            .query(&cfg.query())
+            .headers(cfg.headers())
+            .json(&request)
+            .eventsource()
+            .map_err(|e| OpenAIError::StreamError(e.to_string()))?;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<ChatStreamChunk, LlmError>>();
+
+        tokio::spawn(async move {
+            while let Some(ev) = event_source.next().await {
+                match ev {
+                    Ok(Event::Open) => continue,
+                    Ok(Event::Message(message)) => {
+                        let data = message.data.trim();
+                        if data.is_empty() || message.event == "keepalive" {
+                            continue;
+                        }
+                        if data == "[DONE]" {
+                            break;
+                        }
+
+                        let response = match serde_json::from_str::<ByotCreateChatCompletionStreamResponse>(data) {
+                            Ok(resp) => Ok(chat_stream_chunk_from_byot(resp)),
+                            Err(err) => Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(err))),
+                        };
+
+                        if tx.send(response).is_err() {
+                            break;
+                        }
+                    }
+                    Err(reqwest_eventsource::Error::StreamEnded) => break,
+                    Err(err) => {
+                        let mapped = map_eventsource_error(err).await;
+                        let _ = tx.send(Err(LlmError::OpenAI(mapped)));
+                        break;
+                    }
+                }
+            }
+            event_source.close();
+        });
+
+        Ok(Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx)))
     }
 }
 
@@ -207,6 +249,57 @@ impl OpenAIConfigTrait for KiliaxOpenAIConfig {
 
 fn normalize_api_base(api_base: &str) -> String {
     api_base.trim().trim_end_matches('/').to_string()
+}
+
+async fn map_eventsource_error(err: reqwest_eventsource::Error) -> OpenAIError {
+    match err {
+        reqwest_eventsource::Error::Transport(err) => OpenAIError::Reqwest(err),
+        reqwest_eventsource::Error::InvalidStatusCode(status, response) => {
+            map_api_error_response(status, response).await
+        }
+        reqwest_eventsource::Error::InvalidContentType(_ct, response) => {
+            map_api_error_response(response.status(), response).await
+        }
+        reqwest_eventsource::Error::StreamEnded => OpenAIError::StreamError("Stream ended".to_string()),
+        other => OpenAIError::StreamError(other.to_string()),
+    }
+}
+
+async fn map_api_error_response(status: reqwest::StatusCode, response: reqwest::Response) -> OpenAIError {
+    #[derive(Debug, Deserialize)]
+    struct ErrorWrapper {
+        error: async_openai::error::ApiError,
+    }
+
+    const MAX_BODY_BYTES: usize = 16 * 1024;
+    let bytes = match response.bytes().await {
+        Ok(b) => {
+            if b.len() > MAX_BODY_BYTES {
+                b.slice(..MAX_BODY_BYTES)
+            } else {
+                b
+            }
+        }
+        Err(err) => return OpenAIError::Reqwest(err),
+    };
+
+    if let Ok(mut wrapped) = serde_json::from_slice::<ErrorWrapper>(&bytes) {
+        wrapped.error.message = format!("HTTP {status}: {}", wrapped.error.message);
+        return OpenAIError::ApiError(wrapped.error);
+    }
+
+    let body = String::from_utf8_lossy(&bytes).trim().to_string();
+    let message = if body.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        format!("HTTP {status}: {body}")
+    };
+    OpenAIError::ApiError(async_openai::error::ApiError {
+        message,
+        r#type: None,
+        param: None,
+        code: None,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -414,7 +507,7 @@ fn to_openai_tool(tool: ToolDefinition) -> ChatCompletionTool {
             name: tool.name,
             description: tool.description,
             parameters: tool.parameters,
-            strict: tool.strict,
+            strict: None,
         },
     }
 }
@@ -791,5 +884,17 @@ mod tests {
         let chunk = chat_stream_chunk_from_byot(resp);
         assert_eq!(chunk.thinking_delta.as_deref(), Some("step 1\nstep 2\n"));
         assert_eq!(chunk.content_delta.as_deref(), Some("final"));
+    }
+
+    #[test]
+    fn openai_tool_conversion_omits_strict() {
+        let tool = ToolDefinition {
+            name: "t".to_string(),
+            description: None,
+            parameters: Some(serde_json::json!({"type":"object"})),
+            strict: Some(true),
+        };
+        let openai = to_openai_tool(tool);
+        assert!(openai.function.strict.is_none());
     }
 }

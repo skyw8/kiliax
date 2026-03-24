@@ -114,30 +114,50 @@ impl Config {
                 "model id must not be empty".to_string(),
             ));
         }
+        if self.providers.is_empty() {
+            return Err(ConfigError::Invalid(
+                "providers is required and must not be empty".to_string(),
+            ));
+        }
 
         let (provider_name, model_name) = match split_qualified_model_id(model_id)
             .map_err(ConfigError::Invalid)?
         {
-            Some((provider, model)) => (provider, model),
-            None => {
-                let provider = self
-                    .providers
-                    .keys()
-                    .next()
-                    .map(|s| s.as_str())
-                    .ok_or_else(|| {
-                        ConfigError::Invalid(
-                            "providers is required and must not be empty".to_string(),
-                        )
-                    })?;
+            Some((provider_candidate, model_candidate))
+                if self.providers.contains_key(provider_candidate) =>
+            {
+                (provider_candidate, model_candidate)
+            }
+            _ => {
+                if self.providers.len() == 1 {
+                    let provider = self.providers.keys().next().expect("len checked above");
+                    (provider.as_str(), model_id)
+                } else {
+                    let mut matches: Vec<&str> = Vec::new();
+                    for (name, provider) in &self.providers {
+                        if provider.models.is_empty() {
+                            continue;
+                        }
+                        let qualified = format!("{name}/{model_id}");
+                        if provider.models.iter().any(|m| m == model_id || m == &qualified) {
+                            matches.push(name.as_str());
+                        }
+                    }
 
-                if self.providers.len() != 1 {
-                    return Err(ConfigError::Invalid(
-                            "model id must be `<provider>/<model>` when multiple providers are configured".to_string(),
+                    if matches.len() == 1 {
+                        (matches[0], model_id)
+                    } else if matches.is_empty() {
+                        return Err(ConfigError::Invalid(
+                            "model id must be `<provider>/<model>` when multiple providers are configured"
+                                .to_string(),
                         ));
+                    } else {
+                        return Err(ConfigError::Invalid(format!(
+                            "model {model_id:?} matches multiple providers ({})",
+                            matches.join(", ")
+                        )));
+                    }
                 }
-
-                (provider, model_id)
             }
         };
 
@@ -240,9 +260,6 @@ fn split_qualified_model_id(model_id: &str) -> Result<Option<(&str, &str)>, Stri
 
     if provider.is_empty() || model.is_empty() {
         return Err("model id must be `<provider>/<model>`".to_string());
-    }
-    if model.contains('/') {
-        return Err("model id must contain exactly one `/`".to_string());
     }
     Ok(Some((provider, model)))
 }
@@ -593,5 +610,42 @@ mod tests {
         let resolved = cfg.resolve_model("p/m").unwrap();
         assert_eq!(resolved.provider, "p");
         assert_eq!(resolved.model, "m");
+    }
+
+    #[test]
+    fn resolve_model_supports_models_with_slashes() {
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            "openrouter".to_string(),
+            ProviderConfig {
+                base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                api_key: None,
+                models: vec!["openai/gpt-4o-mini".to_string()],
+            },
+        );
+        providers.insert(
+            "zhipu".to_string(),
+            ProviderConfig {
+                base_url: "https://open.bigmodel.cn/api/paas/v4/".to_string(),
+                api_key: None,
+                models: vec!["glm-5".to_string()],
+            },
+        );
+
+        let cfg = Config {
+            default_model: None,
+            providers,
+            ..Default::default()
+        };
+
+        let resolved = cfg
+            .resolve_model("openrouter/openai/gpt-4o-mini")
+            .unwrap();
+        assert_eq!(resolved.provider, "openrouter");
+        assert_eq!(resolved.model, "openai/gpt-4o-mini");
+
+        let resolved = cfg.resolve_model("openai/gpt-4o-mini").unwrap();
+        assert_eq!(resolved.provider, "openrouter");
+        assert_eq!(resolved.model, "openai/gpt-4o-mini");
     }
 }
