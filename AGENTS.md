@@ -88,7 +88,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - thinking：以灰色斜体显示；可以流式，但**不得**与正文输出交织；正文开始后应关闭/忽略后续 thinking delta
 - 输出紧凑：避免引入多余空行（尤其是 thinking/流式渲染导致的空行）
 
-- 遵循无框线的设计，简化UI，必要时可以使用灰色背景，或者使用蓝色高亮作为区分。
+- 遵循无框线的设计，简化UI
 
 ## ENV
 
