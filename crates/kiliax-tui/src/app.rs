@@ -941,6 +941,17 @@ impl App {
         args: String,
     ) -> Result<()> {
         match cmd {
+            crate::slash_command::SlashCommand::New => {
+                if !args.trim().is_empty() {
+                    self.pending_history_lines
+                        .extend(render_error_lines("usage: /new"));
+                    return Ok(());
+                }
+                if let Err(err) = self.start_new_session().await {
+                    self.pending_history_lines
+                        .extend(render_error_lines(&err.to_string()));
+                }
+            }
             crate::slash_command::SlashCommand::Model => {
                 self.open_model_picker(args);
             }
@@ -958,6 +969,68 @@ impl App {
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn start_new_session(&mut self) -> Result<()> {
+        if self.running {
+            anyhow::bail!("cannot start a new session while a run is in progress");
+        }
+
+        let prev = self.session.meta.id.to_string();
+        let preamble = build_preamble(&self.profile, &self.model_id, &self.workspace_root);
+        let session = self
+            .store
+            .create(
+                self.profile.name.to_string(),
+                Some(self.model_id.clone()),
+                Some(self.config_path.display().to_string()),
+                Some(self.workspace_root.display().to_string()),
+                preamble,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let next = session.meta.id.to_string();
+        self.session = session;
+        self.messages = self.session.messages.clone();
+        self.prompt_history = self
+            .messages
+            .iter()
+            .filter_map(|msg| match msg {
+                Message::User { content } => content.first_text().map(|t| t.to_string()),
+                _ => None,
+            })
+            .collect();
+        self.reset_history_nav();
+
+        self.status = None;
+        self.assistant_stream = None;
+        self.assistant_thinking_stream = None;
+        self.accepting_thinking = false;
+        self.turn_started_at = None;
+        self.step_started_at = None;
+        self.current_step = None;
+        self.pending_tool_calls.clear();
+        self.turn_output_tokens.reset();
+        self.step_output_tokens.reset();
+        self.saw_delta_in_step = false;
+
+        self.next_image_placeholder_id = 1;
+        self.clear_pending_images();
+
+        self.ui_mode = UiMode::Chat;
+        self.slash_popup.hide();
+
+        self.pending_history_lines.push(Line::from(vec![
+            Span::from("• ").dim(),
+            Span::from("session").bold(),
+            Span::from(": ").dim(),
+            Span::from(prev).dim(),
+            Span::from(" -> ").dim(),
+            Span::from(next).dim(),
+        ]));
+
         Ok(())
     }
 

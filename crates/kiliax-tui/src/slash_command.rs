@@ -1,5 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
+    New,
     Model,
     Agent,
 }
@@ -7,6 +8,7 @@ pub enum SlashCommand {
 impl SlashCommand {
     pub fn command(self) -> &'static str {
         match self {
+            SlashCommand::New => "new",
             SlashCommand::Model => "model",
             SlashCommand::Agent => "agent",
         }
@@ -14,6 +16,7 @@ impl SlashCommand {
 
     pub fn aliases(self) -> &'static [&'static str] {
         match self {
+            SlashCommand::New => &[],
             SlashCommand::Model => &[],
             SlashCommand::Agent => &["a"],
         }
@@ -21,6 +24,7 @@ impl SlashCommand {
 
     pub fn description(self) -> &'static str {
         match self {
+            SlashCommand::New => "start a new session",
             SlashCommand::Model => "choose provider/model",
             SlashCommand::Agent => "switch agent (plan/general)",
         }
@@ -33,7 +37,7 @@ impl SlashCommand {
 
 pub fn all_commands() -> &'static [SlashCommand] {
     // Order is presentation order in the popup.
-    &[SlashCommand::Model, SlashCommand::Agent]
+    &[SlashCommand::New, SlashCommand::Model, SlashCommand::Agent]
 }
 
 pub fn find_command(name: &str) -> Option<SlashCommand> {
@@ -205,6 +209,7 @@ mod tests {
 
     #[test]
     fn find_command_matches_alias() {
+        assert_eq!(find_command("new"), Some(SlashCommand::New));
         assert_eq!(find_command("agent"), Some(SlashCommand::Agent));
         assert_eq!(find_command("a"), Some(SlashCommand::Agent));
         assert_eq!(find_command("model"), Some(SlashCommand::Model));
