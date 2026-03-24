@@ -1,11 +1,22 @@
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Style, Stylize};
+use ratatui::text::Span;
 
 pub fn composer_background_style() -> Style {
-    let bg = match terminal_theme_hint() {
-        TerminalTheme::Light => Color::Rgb(240, 240, 240),
-        TerminalTheme::Dark | TerminalTheme::Unknown => Color::Rgb(48, 48, 48),
+    Style::default()
+}
+
+pub fn composer_prompt_spans() -> [Span<'static>; 2] {
+    let (blue, purple) = match terminal_theme_hint() {
+        TerminalTheme::Light => (Color::Rgb(0, 92, 255), Color::Rgb(140, 0, 255)),
+        TerminalTheme::Dark | TerminalTheme::Unknown => {
+            (Color::Rgb(97, 175, 239), Color::Rgb(198, 120, 221))
+        }
     };
-    Style::default().bg(bg)
+
+    [
+        Span::styled("›", Style::default().fg(blue).bold()),
+        Span::styled("›", Style::default().fg(purple).bold()),
+    ]
 }
 
 pub fn model_picker_providers_panel_style() -> Style {

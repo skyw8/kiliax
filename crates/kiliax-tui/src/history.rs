@@ -20,7 +20,7 @@ use crate::custom_terminal::{
 pub const DIVIDER_MARKER_PREFIX: &str = "\u{001f}kiliax_divider:";
 pub const USER_MESSAGE_MARKER_PREFIX: &str = "\u{001f}kiliax_user_message:";
 
-const USER_MESSAGE_PREFIX_COLS: usize = 2; // "› "
+const USER_MESSAGE_PREFIX_COLS: usize = 2; // "››"
 const USER_MESSAGE_RIGHT_MARGIN_COLS: usize = 1;
 
 pub fn insert_history_lines(
@@ -206,14 +206,12 @@ fn render_user_message_block(content: &str, width: usize) -> Vec<Line<'static>> 
     out.push(top);
 
     for (idx, line) in wrapped.into_iter().enumerate() {
-        let prefix: Span<'static> = if idx == 0 {
-            Span::from("› ").bold().dim()
+        let mut spans = Vec::with_capacity(line.spans.len().saturating_add(2));
+        if idx == 0 {
+            spans.extend(crate::style::composer_prompt_spans());
         } else {
-            Span::from("  ")
-        };
-
-        let mut spans = Vec::with_capacity(line.spans.len().saturating_add(1));
-        spans.push(prefix);
+            spans.push(Span::from("  "));
+        }
         spans.extend(line.spans.into_iter());
 
         let mut line_out = Line::from(spans);
@@ -397,6 +395,7 @@ mod tests {
     #[test]
     fn user_message_block_has_padding_prefixes_and_composer_style() {
         let bubble = crate::style::composer_background_style();
+        let prompt = crate::style::composer_prompt_spans();
         let block = render_user_message_block("hello world", 8);
 
         assert!(block.len() >= 4, "expected wrapped block, got {block:?}");
@@ -408,7 +407,10 @@ mod tests {
         assert_eq!(block.last().unwrap().style.bg, bubble.bg);
 
         // first content line uses arrow prefix, subsequent lines use spaces
-        assert_eq!(block[1].spans[0].content.as_ref(), "› ");
+        assert_eq!(block[1].spans[0].content.as_ref(), "›");
+        assert_eq!(block[1].spans[1].content.as_ref(), "›");
+        assert_eq!(block[1].spans[0].style.fg, prompt[0].style.fg);
+        assert_eq!(block[1].spans[1].style.fg, prompt[1].style.fg);
         for line in block.iter().skip(2).take(block.len().saturating_sub(3)) {
             assert_eq!(line.spans[0].content.as_ref(), "  ");
         }

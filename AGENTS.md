@@ -65,26 +65,26 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
 - `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送）；slash command 分发（/new、/agent、/model）与模型切换落盘
 - `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model）与 UI mode（chat/model picker）状态机（/new 创建全新 session）；模型切换会更新 `killiax.yaml` 的 `default_model` 并热切换 runtime（同步 reload Config + `ToolEngine::set_config`）；切换后 checkpoint session（刷新 system preamble）
-- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（`›` 前缀、自动换行、动态高度；`[img#N]` token 蓝色高亮显示；输入框上方 queue 列表：tool-call 风格且高亮 queue）；slash command popup（无框线/无标题）；model picker（无框线：`Search` 白色且下方留空行；`Providers/Models` 蓝色标题；无底部提示；providers 灰底面板铺满列表高度）；状态行/底部 footer（仅 status/快捷键，不展示 agent/model）
+- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；slash command popup（无框线）；model picker（无框线；providers 灰底面板铺满列表高度）；底部 footer 仅显示 status + agent + model_id（去 provider）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/clipboard_paste.rs`: 剪切板图片读取→临时 PNG 路径（arboard + WSL PowerShell fallback）；粘贴路径规范化（file://、Windows/UNC、WSL 映射）
 - `crates/kiliax-tui/src/slash_command.rs`: slash command 定义 + popup 状态（/new、/agent、/model；↑/↓ 选择、Tab 补全、/a alias；popup 高度按 item 数，UI 无边框）
 - `crates/kiliax-tui/src/model_picker.rs`: model picker 状态（provider/model 列表、模糊搜索、键盘导航；返回值总是 provider-qualified model id，兼容带 `/` 的模型名）
-- `crates/kiliax-tui/src/style.rs`: composer 灰底、model picker providers 面板灰底与 diff 行背景（从终端默认背景色推导，类似 codex）
+- `crates/kiliax-tui/src/style.rs`: composer 无背景样式、prompt 双彩箭头配色（按终端主题 hint），以及 model picker providers 面板灰底与 diff 行背景
 - `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect scope → VS Code Dark+ 默认配色 → ratatui spans）
 - `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行（含宽字符/样式保持单元测试）
 - `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；`[img#N]` token 原子移动/删除；支持整行替换（历史回填）；包含 Unicode/快捷键单元测试
 - `crates/kiliax-tui/src/custom_terminal.rs`: TUI 用到的自定义终端命令（scroll region、wraparound 开关、RI 等 ANSI 序列封装）
 - `crates/kiliax-tui/src/terminal.rs`: inline viewport backend（viewport 可下推/可伸缩；raw mode + bracketed paste）；仅重绘 viewport；跳过绘制终端右下角单元格以规避部分终端的滚屏/空行问题；每帧用 Synchronized Update 包裹所有写入（同一 backend writer）以减少 tearing
-- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致的灰底样式并保留上下 padding；支持 fg/bg/italic 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\\r\\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\\r/\\n`；必要时清理 continuation rows 以避免残留/空行；相关 ANSI 命令封装在 `custom_terminal`）；包含 marker 解析/user bubble/divider 展开单元测试
+- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致样式（无背景 + 上下 padding + 双彩箭头前缀）；支持 fg/bg/italic 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\\r\\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\\r/\\n`；必要时清理 continuation rows 以避免残留/空行；相关 ANSI 命令封装在 `custom_terminal`）；包含 marker 解析/user bubble/divider 展开单元测试
 
 ## constraints
 
 ### TUI
 
 后续修改必须保持一致
-- user bubble：历史区渲染需与输入框风格一致（灰底 + 上下 padding）
+- user bubble：历史区渲染需与输入框风格一致（无背景 + 上下 padding）
 - thinking：以灰色斜体显示；可以流式，但**不得**与正文输出交织；正文开始后应关闭/忽略后续 thinking delta
 - 输出紧凑：避免引入多余空行（尤其是 thinking/流式渲染导致的空行）
 

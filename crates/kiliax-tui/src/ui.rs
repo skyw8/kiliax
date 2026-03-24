@@ -395,11 +395,7 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(Paragraph::new(Text::from(queue)), queue_area);
     }
 
-    let prompt = if app.running {
-        Span::from("›").dim()
-    } else {
-        Span::from("›").bold()
-    };
+    let prompt = Line::from(crate::style::composer_prompt_spans().to_vec());
     let prompt_rect = Rect::new(area.x, textarea.y, LIVE_PREFIX_COLS.min(area.width), 1);
     frame.render_widget(Paragraph::new(prompt), prompt_rect);
 
@@ -730,16 +726,19 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let indent = " ".repeat(LIVE_PREFIX_COLS as usize);
     let mut spans = vec![Span::styled(indent, Style::default()), status];
-    spans.extend([
-        Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
-        Span::styled("  / commands", Style::default().fg(Color::DarkGray)),
-        Span::styled("  Tab complete", Style::default().fg(Color::DarkGray)),
-        Span::styled("  Ctrl+C unqueue/clear", Style::default().fg(Color::DarkGray)),
-        Span::styled("  Ctrl+V image", Style::default().fg(Color::DarkGray)),
-        Span::styled("  Esc stop/quit", Style::default().fg(Color::DarkGray)),
-    ]);
-    let keys = Line::from(spans);
-    frame.render_widget(Paragraph::new(keys), area);
+
+    spans.push(Span::from(" · ").dim());
+    spans.push(Span::styled(
+        app.agent_name().to_string(),
+        Style::default().fg(Color::LightBlue),
+    ));
+    spans.push(Span::from(" · ").dim());
+    spans.push(Span::styled(
+        model_id_without_provider(app.model_id()).to_string(),
+        Style::default().fg(Color::LightMagenta),
+    ));
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn desired_footer_height(app: &App) -> u16 {
@@ -749,4 +748,11 @@ fn desired_footer_height(app: &App) -> u16 {
     } else {
         FOOTER_HEIGHT
     }
+}
+
+fn model_id_without_provider(model_id: &str) -> &str {
+    model_id
+        .split_once('/')
+        .map(|(_, model)| model)
+        .unwrap_or(model_id)
 }
