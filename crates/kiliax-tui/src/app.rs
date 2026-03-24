@@ -519,6 +519,10 @@ impl App {
         self.queued_submissions.len()
     }
 
+    pub(crate) fn queued_submissions(&self) -> &VecDeque<QueuedSubmission> {
+        &self.queued_submissions
+    }
+
     pub(crate) fn pop_next_queued_submission(&mut self) -> Option<QueuedSubmission> {
         self.queued_submissions.pop_front()
     }

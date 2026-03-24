@@ -16,6 +16,7 @@ const MIN_COMPOSER_HEIGHT: u16 = 3;
 const FOOTER_HEIGHT: u16 = 2;
 const STATUS_HEIGHT: u16 = 1;
 const SLASH_POPUP_MAX_ITEMS: usize = 6;
+const QUEUE_MAX_ITEMS: usize = 4;
 const MODEL_PICKER_MIN_HEIGHT: u16 = 18;
 
 pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
@@ -279,9 +280,20 @@ fn desired_composer_height(app: &App, width: u16) -> u16 {
     let text_width = inner_text_width(width);
     let wrapped = wrap_input(app.input.text(), text_width as usize);
     let attachments = pending_image_preview_lines(app, text_width as usize);
+    let queued_count = if text_width == 0 {
+        0usize
+    } else {
+        let len = app.queued_len();
+        if len == 0 {
+            0
+        } else {
+            1 + len.min(QUEUE_MAX_ITEMS) + usize::from(len > QUEUE_MAX_ITEMS)
+        }
+    };
     let line_count = wrapped
         .len()
         .saturating_add(attachments.len())
+        .saturating_add(queued_count)
         .min(u16::MAX as usize) as u16;
     let mut height =
         MIN_COMPOSER_HEIGHT.max(line_count.saturating_add(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM));
@@ -327,11 +339,6 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
 
     spans.push(Span::from(" · ").dim());
     spans.push(Span::from(format!("{} tok", app.turn_output_tokens())).dim());
-
-    if app.queued_len() > 0 {
-        spans.push(Span::from(" · ").dim());
-        spans.push(Span::from(format!("queued {}", app.queued_len())).dim());
-    }
 
     if let Some((tool, elapsed)) = app.active_tool_elapsed() {
         spans.push(Span::from(" · ").dim());
@@ -387,17 +394,38 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let attachments = pending_image_preview_lines(app, textarea.width as usize);
-    let (attachments_area, textarea) = if attachments.is_empty() {
-        (Rect::ZERO, textarea)
-    } else {
-        let attachments_height = (attachments.len().min(u16::MAX as usize) as u16).min(textarea.height);
-        let [a, rest] =
-            Layout::vertical([Constraint::Length(attachments_height), Constraint::Min(1)])
-                .areas(textarea);
-        (a, rest)
-    };
+    let text_width = textarea.width as usize;
+    let queue = queued_submission_preview_lines(app, text_width);
+    let attachments = pending_image_preview_lines(app, text_width);
 
+    let mut remaining = textarea;
+    let available_non_input = remaining.height.saturating_sub(1);
+    let attachments_height =
+        (attachments.len().min(u16::MAX as usize) as u16).min(available_non_input);
+    let queue_height = (queue.len().min(u16::MAX as usize) as u16)
+        .min(available_non_input.saturating_sub(attachments_height));
+
+    let mut queue_area = Rect::ZERO;
+    if queue_height > 0 {
+        let [q, rest] =
+            Layout::vertical([Constraint::Length(queue_height), Constraint::Min(1)]).areas(remaining);
+        queue_area = q;
+        remaining = rest;
+    }
+
+    let mut attachments_area = Rect::ZERO;
+    if attachments_height > 0 {
+        let [a, rest] =
+            Layout::vertical([Constraint::Length(attachments_height), Constraint::Min(1)]).areas(remaining);
+        attachments_area = a;
+        remaining = rest;
+    }
+
+    let textarea = remaining;
+
+    if !queue_area.is_empty() {
+        frame.render_widget(Paragraph::new(Text::from(queue)), queue_area);
+    }
     if !attachments_area.is_empty() {
         frame.render_widget(Paragraph::new(Text::from(attachments)), attachments_area);
     }
@@ -410,7 +438,6 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     let prompt_rect = Rect::new(area.x, textarea.y, LIVE_PREFIX_COLS.min(area.width), 1);
     frame.render_widget(Paragraph::new(prompt), prompt_rect);
 
-    let text_width = textarea.width as usize;
     let (lines, cursor_row, cursor_col) =
         input_display_lines(app.input.text(), app.input.cursor(), text_width);
     frame.render_widget(Paragraph::new(Text::from(lines)), textarea);
@@ -418,6 +445,80 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     let cursor_x = textarea.x.saturating_add(cursor_col as u16);
     let cursor_y = textarea.y.saturating_add(cursor_row as u16);
     frame.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn queued_submission_preview_lines(app: &App, max_width: usize) -> Vec<Line<'static>> {
+    if max_width == 0 {
+        return Vec::new();
+    }
+
+    let items = app.queued_submissions();
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let header_style = Style::default().fg(Color::LightYellow).bold();
+    let mut out = vec![Line::from(vec![
+        Span::from("• ").dim(),
+        Span::styled("queue", header_style),
+        Span::from(" ").dim(),
+        Span::styled(format!("({})", items.len()), Style::default().dim()),
+    ])];
+
+    let prefix = "  └ ";
+    let prefix_width = display_width_str(prefix);
+    let detail_width = max_width.saturating_sub(prefix_width);
+    let summary_style = Style::default().dim();
+
+    for queued in items.iter().take(QUEUE_MAX_ITEMS) {
+        let mut summary = queued_summary_text(queued);
+        if display_width_str(&summary) > detail_width {
+            summary = take_prefix_by_width(&summary, detail_width.saturating_sub(1));
+            summary.push('…');
+        }
+        out.push(Line::from(vec![
+            Span::from(prefix).dim(),
+            Span::styled(summary, summary_style),
+        ]));
+    }
+
+    if items.len() > QUEUE_MAX_ITEMS {
+        out.push(Line::from(vec![
+            Span::from(prefix).dim(),
+            Span::styled(
+                format!("… ({} more)", items.len().saturating_sub(QUEUE_MAX_ITEMS)),
+                summary_style,
+            ),
+        ]));
+    }
+
+    out
+}
+
+fn queued_summary_text(queued: &crate::app::QueuedSubmission) -> String {
+    let text = queued.text.trim();
+
+    let mut line_iter = text.lines();
+    let first = line_iter.next().unwrap_or("").trim();
+    let has_more = line_iter.next().is_some();
+
+    let (mut out, show_image_suffix) = if first.is_empty() {
+        if queued.images.is_empty() {
+            ("(empty)".to_string(), false)
+        } else {
+            (format!("(images ×{})", queued.images.len()), false)
+        }
+    } else {
+        (first.to_string(), !queued.images.is_empty())
+    };
+
+    if has_more {
+        out.push_str(" …");
+    }
+    if show_image_suffix {
+        out.push_str(&format!(" (+{} img)", queued.images.len()));
+    }
+    out
 }
 
 fn pending_image_preview_lines(app: &App, max_width: usize) -> Vec<Line<'static>> {
@@ -669,12 +770,6 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::from(app.model_id().to_string()).cyan(),
     ]);
     let mut spans = vec![Span::styled(indent, Style::default()), status];
-    if app.queued_len() > 0 {
-        spans.push(Span::styled(
-            format!("  queued {}", app.queued_len()),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
     spans.extend([
         Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
         Span::styled("  / commands", Style::default().fg(Color::DarkGray)),
