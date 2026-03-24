@@ -502,10 +502,6 @@ impl App {
         &self.model_id
     }
 
-    pub fn agent_name(&self) -> &str {
-        self.profile.name
-    }
-
     pub fn set_screen_width(&mut self, width: u16) {
         self.screen_width = width;
     }

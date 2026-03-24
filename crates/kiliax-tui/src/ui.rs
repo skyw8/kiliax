@@ -14,7 +14,7 @@ const COMPOSER_PAD_TOP: u16 = 1;
 const COMPOSER_PAD_BOTTOM: u16 = 1;
 const COMPOSER_PAD_RIGHT: u16 = 1;
 const MIN_COMPOSER_HEIGHT: u16 = 3;
-const FOOTER_HEIGHT: u16 = 2;
+const FOOTER_HEIGHT: u16 = 1;
 const STATUS_HEIGHT: u16 = 1;
 const SLASH_POPUP_MAX_ITEMS: usize = 6;
 const QUEUE_MAX_ITEMS: usize = 4;
@@ -26,9 +26,10 @@ pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
     }
 
     let status_height = if app.running { STATUS_HEIGHT } else { 0 };
+    let footer_height = desired_footer_height(app);
     desired_composer_height(app, width)
         .saturating_add(status_height)
-        .saturating_add(FOOTER_HEIGHT)
+        .saturating_add(footer_height)
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
@@ -41,11 +42,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
         return;
     }
 
-    let footer_height = if area.height <= FOOTER_HEIGHT {
-        0
-    } else {
-        FOOTER_HEIGHT.min(area.height)
-    };
+    let footer_height = desired_footer_height(app)
+        .min(area.height.saturating_sub(1));
     let [composer_area, footer_area] = if footer_height == 0 {
         [area, Rect::ZERO]
     } else {
@@ -294,14 +292,7 @@ fn desired_composer_height(app: &App, width: u16) -> u16 {
         .len()
         .saturating_add(queued_count)
         .min(u16::MAX as usize) as u16;
-    let mut height =
-        MIN_COMPOSER_HEIGHT.max(line_count.saturating_add(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM));
-    let popup_height = app.slash_popup().desired_height(SLASH_POPUP_MAX_ITEMS);
-    if popup_height > 0 {
-        // Extra gap so the popup doesn't visually collide with the input.
-        height = height.saturating_add(popup_height.saturating_add(1));
-    }
-    height
+    MIN_COMPOSER_HEIGHT.max(line_count.saturating_add(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM))
 }
 
 fn inner_text_width(width: u16) -> u16 {
@@ -377,18 +368,7 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let popup_height = app.slash_popup().desired_height(SLASH_POPUP_MAX_ITEMS);
-    let popup_and_gap = if popup_height > 0 {
-        popup_height.saturating_add(1)
-    } else {
-        0
-    };
-
-    if popup_height > 0 {
-        draw_slash_popup(frame, app, area, popup_height);
-    }
-
-    let textarea = textarea_rect(area, popup_and_gap);
+    let textarea = textarea_rect(area);
     if textarea.is_empty() {
         return;
     }
@@ -532,30 +512,29 @@ fn take_prefix_by_width(input: &str, width: usize) -> String {
     out
 }
 
-fn textarea_rect(area: Rect, y_offset: u16) -> Rect {
-    let x = area.x.saturating_add(LIVE_PREFIX_COLS);
-    let y = area.y.saturating_add(COMPOSER_PAD_TOP).saturating_add(y_offset);
-    let width = area
-        .width
-        .saturating_sub(LIVE_PREFIX_COLS + COMPOSER_PAD_RIGHT);
-    let height = area
-        .height
-        .saturating_sub(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM + y_offset);
-    Rect::new(x, y, width, height)
-}
-
-fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect, popup_height: u16) {
-    if popup_height < 3 || area.width <= LIVE_PREFIX_COLS {
-        return;
-    }
-
+fn textarea_rect(area: Rect) -> Rect {
     let x = area.x.saturating_add(LIVE_PREFIX_COLS);
     let y = area.y.saturating_add(COMPOSER_PAD_TOP);
     let width = area
         .width
         .saturating_sub(LIVE_PREFIX_COLS + COMPOSER_PAD_RIGHT);
-    let rect = Rect::new(x, y, width, popup_height.min(area.height));
-    if rect.is_empty() {
+    let height = area
+        .height
+        .saturating_sub(COMPOSER_PAD_TOP + COMPOSER_PAD_BOTTOM);
+    Rect::new(x, y, width, height)
+}
+
+fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect) {
+    if area.height < 3 || area.width <= LIVE_PREFIX_COLS {
+        return;
+    }
+
+    let x = area.x.saturating_add(LIVE_PREFIX_COLS);
+    let width = area
+        .width
+        .saturating_sub(LIVE_PREFIX_COLS + COMPOSER_PAD_RIGHT);
+    let rect = Rect::new(x, area.y, width, area.height);
+    if rect.is_empty() || rect.height < 3 {
         return;
     }
 
@@ -729,6 +708,11 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    if app.slash_popup().visible() {
+        draw_slash_popup(frame, app, area);
+        return;
+    }
+
     let status = app.status.as_deref().unwrap_or("").trim().to_string();
     let status = if status.is_empty() {
         Span::styled("idle".to_string(), Style::default().fg(Color::DarkGray))
@@ -751,14 +735,6 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let indent = " ".repeat(LIVE_PREFIX_COLS as usize);
-    let model = Line::from(vec![
-        Span::styled(indent.clone(), Style::default()),
-        Span::from("agent: ").dim(),
-        Span::from(app.agent_name().to_string()).cyan(),
-        Span::from("  ").dim(),
-        Span::from("model: ").dim(),
-        Span::from(app.model_id().to_string()).cyan(),
-    ]);
     let mut spans = vec![Span::styled(indent, Style::default()), status];
     spans.extend([
         Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
@@ -769,5 +745,14 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::styled("  Esc stop/quit", Style::default().fg(Color::DarkGray)),
     ]);
     let keys = Line::from(spans);
-    frame.render_widget(Paragraph::new(Text::from(vec![model, keys])), area);
+    frame.render_widget(Paragraph::new(keys), area);
+}
+
+fn desired_footer_height(app: &App) -> u16 {
+    let popup_height = app.slash_popup().desired_height(SLASH_POPUP_MAX_ITEMS);
+    if popup_height > 0 {
+        popup_height
+    } else {
+        FOOTER_HEIGHT
+    }
 }
