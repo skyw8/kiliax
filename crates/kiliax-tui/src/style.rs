@@ -5,13 +5,17 @@ pub fn composer_background_style() -> Style {
     Style::default()
 }
 
-pub fn composer_prompt_spans() -> [Span<'static>; 2] {
-    let (blue, purple) = match terminal_theme_hint() {
+pub fn accent_colors() -> (Color, Color) {
+    match terminal_theme_hint() {
         TerminalTheme::Light => (Color::Rgb(0, 92, 255), Color::Rgb(140, 0, 255)),
         TerminalTheme::Dark | TerminalTheme::Unknown => {
             (Color::Rgb(97, 175, 239), Color::Rgb(198, 120, 221))
         }
-    };
+    }
+}
+
+pub fn composer_prompt_spans() -> [Span<'static>; 2] {
+    let (blue, purple) = accent_colors();
 
     [
         Span::styled("›", Style::default().fg(blue).bold()),
@@ -20,11 +24,24 @@ pub fn composer_prompt_spans() -> [Span<'static>; 2] {
 }
 
 pub fn model_picker_providers_panel_style() -> Style {
-    let bg = match terminal_theme_hint() {
-        TerminalTheme::Light => Color::Rgb(230, 230, 230),
-        TerminalTheme::Dark | TerminalTheme::Unknown => Color::Rgb(58, 58, 58),
-    };
-    Style::default().bg(bg)
+    Style::default()
+}
+
+pub fn slash_popup_item_style() -> Style {
+    match terminal_theme_hint() {
+        TerminalTheme::Light => Style::default().fg(Color::DarkGray),
+        TerminalTheme::Dark | TerminalTheme::Unknown => Style::default().fg(Color::Gray),
+    }
+}
+
+pub fn slash_popup_highlight_style() -> Style {
+    let (blue, _purple) = accent_colors();
+    Style::default().fg(blue).bold()
+}
+
+pub fn model_picker_highlight_style() -> Style {
+    let (_blue, purple) = accent_colors();
+    Style::default().fg(purple).bold()
 }
 
 pub fn diff_insert_style() -> Style {

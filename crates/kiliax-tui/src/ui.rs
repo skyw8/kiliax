@@ -190,7 +190,7 @@ fn draw_model_picker_providers(
 
     let list = List::new(items)
         .highlight_symbol("› ")
-        .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
+        .highlight_style(crate::style::model_picker_highlight_style());
 
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -244,7 +244,7 @@ fn draw_model_picker_models(
 
     let list = List::new(items)
         .highlight_symbol("› ")
-        .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
+        .highlight_style(crate::style::model_picker_highlight_style());
 
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -540,19 +540,13 @@ fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .take(SLASH_POPUP_MAX_ITEMS)
         .map(|cmd| {
-            let mut spans = vec![
-                Span::styled(
-                    format!("/{}", cmd.command()),
-                    Style::default().fg(Color::Cyan).bold(),
-                ),
-            ];
+            let mut text = format!("/{}", cmd.command());
             if !cmd.aliases().is_empty() {
-                spans.push(Span::from(" ").dim());
-                spans.push(Span::from(format!("(/{})", cmd.aliases().join(", "))).dim());
+                text.push_str(&format!(" (/{})", cmd.aliases().join(", ")));
             }
-            spans.push(Span::from("  ").dim());
-            spans.push(Span::from(cmd.description()).dim());
-            ListItem::new(Line::from(spans))
+            text.push_str("  ");
+            text.push_str(cmd.description());
+            ListItem::new(Line::from(text)).style(crate::style::slash_popup_item_style())
         })
         .collect::<Vec<_>>();
 
@@ -560,7 +554,7 @@ fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect) {
     state.select(Some(popup.selected_index()));
     let list = List::new(items)
         .highlight_symbol("› ")
-        .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
+        .highlight_style(crate::style::slash_popup_highlight_style());
 
     frame.render_widget(Clear, rect);
     frame.render_stateful_widget(list, rect, &mut state);
