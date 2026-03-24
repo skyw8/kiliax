@@ -9,6 +9,7 @@ use crate::app::App;
 use crate::model_picker::ModelPickerFocus;
 
 const LIVE_PREFIX_COLS: u16 = 2;
+const IMAGE_PLACEHOLDER_PREFIX: &str = "[img#";
 const COMPOSER_PAD_TOP: u16 = 1;
 const COMPOSER_PAD_BOTTOM: u16 = 1;
 const COMPOSER_PAD_RIGHT: u16 = 1;
@@ -279,7 +280,6 @@ fn list_offset(selected: usize, len: usize, visible: usize) -> usize {
 fn desired_composer_height(app: &App, width: u16) -> u16 {
     let text_width = inner_text_width(width);
     let wrapped = wrap_input(app.input.text(), text_width as usize);
-    let attachments = pending_image_preview_lines(app, text_width as usize);
     let queued_count = if text_width == 0 {
         0usize
     } else {
@@ -292,7 +292,6 @@ fn desired_composer_height(app: &App, width: u16) -> u16 {
     };
     let line_count = wrapped
         .len()
-        .saturating_add(attachments.len())
         .saturating_add(queued_count)
         .min(u16::MAX as usize) as u16;
     let mut height =
@@ -396,14 +395,11 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let text_width = textarea.width as usize;
     let queue = queued_submission_preview_lines(app, text_width);
-    let attachments = pending_image_preview_lines(app, text_width);
 
     let mut remaining = textarea;
     let available_non_input = remaining.height.saturating_sub(1);
-    let attachments_height =
-        (attachments.len().min(u16::MAX as usize) as u16).min(available_non_input);
     let queue_height = (queue.len().min(u16::MAX as usize) as u16)
-        .min(available_non_input.saturating_sub(attachments_height));
+        .min(available_non_input);
 
     let mut queue_area = Rect::ZERO;
     if queue_height > 0 {
@@ -413,21 +409,10 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         remaining = rest;
     }
 
-    let mut attachments_area = Rect::ZERO;
-    if attachments_height > 0 {
-        let [a, rest] =
-            Layout::vertical([Constraint::Length(attachments_height), Constraint::Min(1)]).areas(remaining);
-        attachments_area = a;
-        remaining = rest;
-    }
-
     let textarea = remaining;
 
     if !queue_area.is_empty() {
         frame.render_widget(Paragraph::new(Text::from(queue)), queue_area);
-    }
-    if !attachments_area.is_empty() {
-        frame.render_widget(Paragraph::new(Text::from(attachments)), attachments_area);
     }
 
     let prompt = if app.running {
@@ -518,49 +503,6 @@ fn queued_summary_text(queued: &crate::app::QueuedSubmission) -> String {
     if show_image_suffix {
         out.push_str(&format!(" (+{} img)", queued.images.len()));
     }
-    out
-}
-
-fn pending_image_preview_lines(app: &App, max_width: usize) -> Vec<Line<'static>> {
-    if max_width == 0 {
-        return Vec::new();
-    }
-
-    let images = app.pending_images();
-    if images.is_empty() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::new();
-    let max_items = 3usize;
-
-    for img in images.iter().take(max_items) {
-        let name = img
-            .source_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("image");
-        let dims = match (img.width, img.height) {
-            (Some(w), Some(h)) => format!(" ({w}x{h})"),
-            _ => String::new(),
-        };
-        let mut text = format!("+ img: {name}{dims}");
-        if display_width_str(&text) > max_width {
-            text = take_prefix_by_width(&text, max_width.saturating_sub(1));
-            text.push('…');
-        }
-        out.push(Line::from(Span::styled(text, Style::default().dim())));
-    }
-
-    if images.len() > max_items {
-        let mut text = format!("+ {} more…", images.len().saturating_sub(max_items));
-        if display_width_str(&text) > max_width {
-            text = take_prefix_by_width(&text, max_width.saturating_sub(1));
-            text.push('…');
-        }
-        out.push(Line::from(Span::styled(text, Style::default().dim())));
-    }
-
     out
 }
 
@@ -672,9 +614,57 @@ fn input_display_lines(
     let (wrapped, cursor_row, cursor_col) = wrap_with_cursor(text, cursor, max_width);
     let lines = wrapped
         .into_iter()
-        .map(|s| Line::from(Span::raw(s)))
+        .map(styled_input_line)
         .collect::<Vec<_>>();
     (lines, cursor_row, cursor_col)
+}
+
+fn styled_input_line(line: String) -> Line<'static> {
+    let token_style = Style::default().fg(Color::LightBlue).bold();
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut last = 0usize;
+    let mut search = 0usize;
+    while let Some(rel) = line[search..].find(IMAGE_PLACEHOLDER_PREFIX) {
+        let start = search.saturating_add(rel);
+        if let Some(end) = parse_image_placeholder_end(&line, start) {
+            if start > last {
+                spans.push(Span::raw(line[last..start].to_string()));
+            }
+            spans.push(Span::styled(line[start..end].to_string(), token_style));
+            last = end;
+            search = end;
+            continue;
+        }
+        search = start.saturating_add(1);
+    }
+
+    if last < line.len() {
+        spans.push(Span::raw(line[last..].to_string()));
+    }
+
+    if spans.is_empty() {
+        Line::from(Span::raw(line))
+    } else {
+        Line::from(spans)
+    }
+}
+
+fn parse_image_placeholder_end(text: &str, start: usize) -> Option<usize> {
+    let rest = text.get(start..)?;
+    if !rest.starts_with(IMAGE_PLACEHOLDER_PREFIX) {
+        return None;
+    }
+    let close_rel = rest.find(']')?;
+    let end = start.saturating_add(close_rel).saturating_add(1);
+    if end <= start.saturating_add(IMAGE_PLACEHOLDER_PREFIX.len()) {
+        return None;
+    }
+    let digits = text.get(start + IMAGE_PLACEHOLDER_PREFIX.len()..end.saturating_sub(1))?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(end)
 }
 
 fn wrap_input(text: &str, max_width: usize) -> Vec<String> {

@@ -7,7 +7,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use unicode_width::UnicodeWidthChar;
 
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -21,7 +20,6 @@ use kiliax_core::{
 };
 
 use crate::clipboard_paste;
-use crate::clipboard_paste::PastedImageInfo;
 use crate::input::{InputAction, InputLine};
 use crate::markdown::render_markdown_lines;
 use crate::model_picker::{ModelPicker, ModelPickerEvent};
@@ -384,9 +382,8 @@ enum PendingToolCallKind {
 
 #[derive(Debug, Clone)]
 pub struct PendingImage {
+    pub placeholder: String,
     pub source_path: PathBuf,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +431,7 @@ pub struct App {
     step_output_tokens: OutputTokenCounter,
     saw_delta_in_step: bool,
 
+    next_image_placeholder_id: u64,
     pending_images: Vec<PendingImage>,
     queued_submissions: VecDeque<QueuedSubmission>,
 }
@@ -490,6 +488,7 @@ impl App {
             turn_output_tokens: OutputTokenCounter::default(),
             step_output_tokens: OutputTokenCounter::default(),
             saw_delta_in_step: false,
+            next_image_placeholder_id: 1,
             pending_images: Vec::new(),
             queued_submissions: VecDeque::new(),
         }
@@ -509,10 +508,6 @@ impl App {
 
     pub fn set_screen_width(&mut self, width: u16) {
         self.screen_width = width;
-    }
-
-    pub fn pending_images(&self) -> &[PendingImage] {
-        &self.pending_images
     }
 
     pub fn queued_len(&self) -> usize {
@@ -609,42 +604,93 @@ impl App {
         self.pending_images.clear();
     }
 
-    fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
-        image::image_dimensions(path).ok()
-    }
-
-    fn attach_image(&mut self, path: PathBuf, info: Option<PastedImageInfo>) -> Result<()> {
-        let (width, height) = match info {
-            Some(info) => (Some(info.width), Some(info.height)),
-            None => match Self::image_dimensions(&path) {
-                Some((w, h)) => (Some(w), Some(h)),
-                None => (None, None),
-            },
-        };
+    fn attach_image(&mut self, path: PathBuf) -> Result<()> {
+        let placeholder = format!("[img#{}]", self.next_image_placeholder_id);
+        self.next_image_placeholder_id = self.next_image_placeholder_id.saturating_add(1);
+        self.insert_image_placeholder(&placeholder);
 
         self.pending_images.push(PendingImage {
-            source_path: path.clone(),
-            width,
-            height,
+            placeholder,
+            source_path: path,
         });
 
-        let filename = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
-        let dims = match (width, height) {
-            (Some(w), Some(h)) => format!(" ({w}x{h})"),
-            _ => String::new(),
-        };
-        self.pending_history_lines.push(Line::from(vec![
-            Span::from("• ").dim(),
-            Span::from("image").bold(),
-            Span::from(": ").dim(),
-            Span::from(format!("{filename}{dims}")).dim(),
-        ]));
-
         Ok(())
+    }
+
+    fn insert_image_placeholder(&mut self, placeholder: &str) {
+        let cursor = self.input.cursor();
+        let text = self.input.text();
+        let prev = if cursor > 0 {
+            text.chars().nth(cursor.saturating_sub(1))
+        } else {
+            None
+        };
+        let next = text.chars().nth(cursor);
+
+        if prev.is_some_and(|ch| !ch.is_whitespace()) {
+            self.input.insert_str(" ");
+        }
+
+        self.input.insert_str(placeholder);
+
+        let needs_trailing_space = match next {
+            None => true,
+            Some(ch) => !ch.is_whitespace(),
+        };
+        if needs_trailing_space {
+            self.input.insert_str(" ");
+        }
+    }
+
+    fn strip_image_placeholders_from_text(&self, text: &str) -> String {
+        if self.pending_images.is_empty() {
+            return text.to_string();
+        }
+        let mut out = text.to_string();
+        for img in &self.pending_images {
+            if out.contains(img.placeholder.as_str()) {
+                out = out.replace(img.placeholder.as_str(), "");
+            }
+        }
+        out
+    }
+
+    fn prune_pending_images_missing_placeholders(&mut self) {
+        if self.pending_images.is_empty() {
+            return;
+        }
+        let text = self.input.text();
+        self.pending_images
+            .retain(|img| text.contains(img.placeholder.as_str()));
+    }
+
+    fn ensure_pending_image_placeholders(&mut self) {
+        if self.pending_images.is_empty() {
+            return;
+        }
+
+        let mut text = self.input.text().to_string();
+        let mut changed = false;
+
+        for img in &self.pending_images {
+            if text.contains(img.placeholder.as_str()) {
+                continue;
+            }
+            if text
+                .chars()
+                .last()
+                .is_some_and(|ch| !ch.is_whitespace())
+            {
+                text.push(' ');
+            }
+            text.push_str(img.placeholder.as_str());
+            text.push(' ');
+            changed = true;
+        }
+
+        if changed {
+            self.input.set_text(text);
+        }
     }
 
     pub fn drain_history_lines(&mut self) -> Vec<Line<'static>> {
@@ -709,8 +755,8 @@ impl App {
             && key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
             match clipboard_paste::paste_image_to_temp_png() {
-                Ok((path, info)) => {
-                    if let Err(err) = self.attach_image(path, Some(info)) {
+                Ok(path) => {
+                    if let Err(err) = self.attach_image(path) {
                         self.pending_history_lines
                             .extend(render_error_lines(&err.to_string()));
                     }
@@ -720,6 +766,8 @@ impl App {
                         .extend(render_error_lines(&format!("failed to paste image: {err}")));
                 }
             }
+            self.slash_popup
+                .sync_from_input(self.input.text(), self.input.cursor());
             return AppAction::None;
         }
 
@@ -740,6 +788,7 @@ impl App {
                 KeyCode::Tab => {
                     if let Some(text) = self.slash_popup.completion_text() {
                         self.input.set_text(text);
+                        self.ensure_pending_image_placeholders();
                         self.reset_history_nav();
                     }
                     self.slash_popup.hide();
@@ -754,6 +803,7 @@ impl App {
                     if selected.takes_args() {
                         if let Some(text) = self.slash_popup.completion_text() {
                             self.input.set_text(text);
+                            self.ensure_pending_image_placeholders();
                             self.reset_history_nav();
                         }
                         self.slash_popup.hide();
@@ -766,8 +816,14 @@ impl App {
                     let text = format!("/{}", selected.command());
                     if self.running {
                         self.enqueue_submission(text, Vec::new());
+                        self.ensure_pending_image_placeholders();
+                        self.slash_popup
+                            .sync_from_input(self.input.text(), self.input.cursor());
                         return AppAction::None;
                     }
+                    self.ensure_pending_image_placeholders();
+                    self.slash_popup
+                        .sync_from_input(self.input.text(), self.input.cursor());
                     return AppAction::Submitted(text);
                 }
                 _ => {}
@@ -797,21 +853,35 @@ impl App {
             _ => {}
         }
 
+        let key_code = key.code;
         match self.input.handle_key(key) {
-            InputAction::None => {}
+            InputAction::None => {
+                if matches!(key_code, KeyCode::Backspace | KeyCode::Delete) {
+                    self.prune_pending_images_missing_placeholders();
+                }
+            }
             InputAction::Submit(text) => {
+                let text = self.strip_image_placeholders_from_text(&text);
                 let text = text.trim().to_string();
                 if !text.is_empty() || !self.pending_images.is_empty() {
                     self.slash_popup.hide();
+                    if parse_known_slash_command(&text).is_some() {
+                        self.ensure_pending_image_placeholders();
+                    }
                     if self.running {
-                        let images = if parse_known_slash_command(&text).is_some() {
-                            Vec::new()
-                        } else {
-                            std::mem::take(&mut self.pending_images)
-                        };
+                        if parse_known_slash_command(&text).is_some() {
+                            self.enqueue_submission(text, Vec::new());
+                            self.slash_popup
+                                .sync_from_input(self.input.text(), self.input.cursor());
+                            return AppAction::None;
+                        }
+
+                        let images = std::mem::take(&mut self.pending_images);
                         self.enqueue_submission(text, images);
                         return AppAction::None;
                     }
+                    self.slash_popup
+                        .sync_from_input(self.input.text(), self.input.cursor());
                     return AppAction::Submitted(text);
                 }
             }
@@ -829,7 +899,7 @@ impl App {
                 }
                 if let Some(path) = clipboard_paste::normalize_pasted_path(text) {
                     if clipboard_paste::is_probably_image_path(&path) && path.is_file() {
-                        if let Err(err) = self.attach_image(path, None) {
+                        if let Err(err) = self.attach_image(path) {
                             self.pending_history_lines
                                 .extend(render_error_lines(&err.to_string()));
                         }
@@ -849,6 +919,7 @@ impl App {
     pub async fn handle_submit(&mut self, text: String) -> Result<SubmitDisposition> {
         if let Some((cmd, args)) = parse_known_slash_command(&text) {
             self.handle_known_slash_command(cmd, args).await?;
+            self.ensure_pending_image_placeholders();
             return Ok(SubmitDisposition::Handled);
         }
 
@@ -860,6 +931,7 @@ impl App {
     pub async fn handle_queued_submission(&mut self, queued: QueuedSubmission) -> Result<SubmitDisposition> {
         if let Some((cmd, args)) = parse_known_slash_command(&queued.text) {
             self.handle_known_slash_command(cmd, args).await?;
+            self.ensure_pending_image_placeholders();
             return Ok(SubmitDisposition::Handled);
         }
 

@@ -23,14 +23,8 @@ impl std::fmt::Display for PasteImageError {
 
 impl std::error::Error for PasteImageError {}
 
-#[derive(Debug, Clone)]
-pub struct PastedImageInfo {
-    pub width: u32,
-    pub height: u32,
-}
-
 #[cfg(not(target_os = "android"))]
-fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
+fn paste_image_as_png() -> Result<Vec<u8>, PasteImageError> {
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()))?;
 
@@ -67,17 +61,11 @@ fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
             .map_err(|e| PasteImageError::EncodeFailed(e.to_string()))?;
     }
 
-    Ok((
-        png,
-        PastedImageInfo {
-            width: dyn_img.width(),
-            height: dyn_img.height(),
-        },
-    ))
+    Ok(png)
 }
 
 #[cfg(target_os = "android")]
-fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
+fn paste_image_as_png() -> Result<Vec<u8>, PasteImageError> {
     Err(PasteImageError::ClipboardUnavailable(
         "clipboard image paste is unsupported on Android".into(),
     ))
@@ -87,9 +75,9 @@ fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
 ///
 /// On WSL, `arboard` often cannot access the Windows clipboard; in that case a PowerShell
 /// fallback is attempted (Linux only).
-pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
+pub fn paste_image_to_temp_png() -> Result<PathBuf, PasteImageError> {
     match paste_image_as_png() {
-        Ok((png, info)) => {
+        Ok(png) => {
             let tmp = Builder::new()
                 .prefix("kiliax-clipboard-")
                 .suffix(".png")
@@ -99,7 +87,7 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
             let (_file, path) = tmp
                 .keep()
                 .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
-            Ok((path, info))
+            Ok(path)
         }
         Err(e) => {
             #[cfg(target_os = "linux")]
@@ -117,7 +105,7 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 #[cfg(target_os = "linux")]
 fn try_wsl_clipboard_fallback(
     error: &PasteImageError,
-) -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
+) -> Result<PathBuf, PasteImageError> {
     use PasteImageError::ClipboardUnavailable;
     use PasteImageError::NoImage;
 
@@ -133,11 +121,11 @@ fn try_wsl_clipboard_fallback(
         return Err(error.clone());
     };
 
-    let Ok((w, h)) = image::image_dimensions(&mapped) else {
+    if image::image_dimensions(&mapped).is_err() {
         return Err(error.clone());
     };
 
-    Ok((mapped, PastedImageInfo { width: w, height: h }))
+    Ok(mapped)
 }
 
 #[cfg(target_os = "linux")]

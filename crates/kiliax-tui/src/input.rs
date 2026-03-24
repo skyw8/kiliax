@@ -1,5 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+const IMAGE_PLACEHOLDER_PREFIX: &str = "[img#";
+
 #[derive(Debug, Default, Clone)]
 pub struct InputLine {
     text: String,
@@ -93,6 +95,30 @@ impl InputLine {
         if self.cursor == 0 {
             return;
         }
+
+        if let Some((start, end)) = image_placeholder_range_ending_at(&self.text, self.cursor) {
+            self.delete_char_range(start, end);
+            self.cursor = start;
+            return;
+        }
+
+        // If the cursor is after a space that was inserted after an image placeholder, treat
+        // the placeholder as a single editable unit.
+        if self
+            .text
+            .chars()
+            .nth(self.cursor.saturating_sub(1))
+            .is_some_and(|ch| ch == ' ')
+        {
+            if let Some((start, end)) =
+                image_placeholder_range_ending_at(&self.text, self.cursor.saturating_sub(1))
+            {
+                self.delete_char_range(start, end.saturating_add(1));
+                self.cursor = start;
+                return;
+            }
+        }
+
         let start = char_to_byte_index(&self.text, self.cursor.saturating_sub(1));
         let end = char_to_byte_index(&self.text, self.cursor);
         self.text.replace_range(start..end, "");
@@ -104,18 +130,57 @@ impl InputLine {
         if self.cursor >= len {
             return;
         }
+
+        if let Some((start, end)) = image_placeholder_range_starting_at(&self.text, self.cursor) {
+            let mut end = end;
+            if self.text.chars().nth(end).is_some_and(|ch| ch == ' ') {
+                end = end.saturating_add(1);
+            }
+            self.delete_char_range(start, end);
+            return;
+        }
+
         let start = char_to_byte_index(&self.text, self.cursor);
         let end = char_to_byte_index(&self.text, self.cursor.saturating_add(1));
         self.text.replace_range(start..end, "");
     }
 
     fn move_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        if let Some((start, end)) = image_placeholder_range_ending_at(&self.text, self.cursor) {
+            if end == self.cursor {
+                self.cursor = start;
+                return;
+            }
+        }
+
         self.cursor = self.cursor.saturating_sub(1);
     }
 
     fn move_right(&mut self) {
         let len = self.text.chars().count();
+        if self.cursor >= len {
+            return;
+        }
+
+        if let Some((_, end)) = image_placeholder_range_starting_at(&self.text, self.cursor) {
+            self.cursor = end.min(len);
+            return;
+        }
+
         self.cursor = (self.cursor + 1).min(len);
+    }
+
+    fn delete_char_range(&mut self, start_char: usize, end_char: usize) {
+        if start_char >= end_char {
+            return;
+        }
+        let start = char_to_byte_index(&self.text, start_char);
+        let end = char_to_byte_index(&self.text, end_char);
+        self.text.replace_range(start..end, "");
     }
 }
 
@@ -127,6 +192,46 @@ fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
         .nth(char_idx)
         .map(|(idx, _)| idx)
         .unwrap_or_else(|| s.len())
+}
+
+fn image_placeholder_range_ending_at(text: &str, end_char: usize) -> Option<(usize, usize)> {
+    let end_byte = char_to_byte_index(text, end_char);
+    let start_byte = text[..end_byte].rfind(IMAGE_PLACEHOLDER_PREFIX)?;
+    let slice = text.get(start_byte..end_byte)?;
+    if !slice.ends_with(']') {
+        return None;
+    }
+
+    let digits = slice.get(IMAGE_PLACEHOLDER_PREFIX.len()..slice.len().saturating_sub(1))?;
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+
+    let start_char = text[..start_byte].chars().count();
+    let len_chars = slice.chars().count();
+    let end_char_calc = start_char.saturating_add(len_chars);
+    if end_char_calc != end_char {
+        return None;
+    }
+    Some((start_char, end_char_calc))
+}
+
+fn image_placeholder_range_starting_at(text: &str, start_char: usize) -> Option<(usize, usize)> {
+    let start_byte = char_to_byte_index(text, start_char);
+    let rest = text.get(start_byte..)?;
+    if !rest.starts_with(IMAGE_PLACEHOLDER_PREFIX) {
+        return None;
+    }
+
+    let close_rel = rest.find(']')?;
+    let slice = rest.get(..=close_rel)?;
+    let digits = slice.get(IMAGE_PLACEHOLDER_PREFIX.len()..slice.len().saturating_sub(1))?;
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+
+    let len_chars = slice.chars().count();
+    Some((start_char, start_char.saturating_add(len_chars)))
 }
 
 #[cfg(test)]
@@ -190,6 +295,40 @@ mod tests {
         let _ = input.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
         let _ = input.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(input.text(), "a");
+        assert_eq!(input.cursor(), 0);
+    }
+
+    #[test]
+    fn image_placeholder_is_deleted_atomically_with_backspace() {
+        let mut input = InputLine::default();
+        input.set_text("hi [img#12] there");
+
+        // Place cursor right after the placeholder.
+        input.cursor = "hi [img#12]".chars().count();
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(input.text(), "hi  there");
+        assert_eq!(input.cursor(), "hi ".chars().count());
+    }
+
+    #[test]
+    fn backspace_after_placeholder_trailing_space_deletes_placeholder_and_space() {
+        let mut input = InputLine::default();
+        input.set_text("[img#1] ");
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(input.text(), "");
+        assert_eq!(input.cursor(), 0);
+    }
+
+    #[test]
+    fn delete_at_placeholder_start_deletes_placeholder_and_trailing_space() {
+        let mut input = InputLine::default();
+        input.set_text("[img#7] ok");
+
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let _ = input.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        assert_eq!(input.text(), "ok");
         assert_eq!(input.cursor(), 0);
     }
 }
