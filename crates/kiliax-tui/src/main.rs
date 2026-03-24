@@ -127,6 +127,26 @@ async fn main() -> Result<()> {
     > = None;
 
     loop {
+        if app.should_quit {
+            break;
+        }
+
+        if agent_stream.is_none() && !app.running && app.model_picker().is_none() {
+            while let Some(queued) = app.pop_next_queued_submission() {
+                match app.handle_queued_submission(queued).await? {
+                    SubmitDisposition::Handled => {
+                        if app.model_picker().is_some() {
+                            break;
+                        }
+                    }
+                    SubmitDisposition::StartRun => {
+                        agent_stream = Some(app.start_run().await?);
+                        break;
+                    }
+                }
+            }
+        }
+
         let history_lines = app.drain_history_lines();
         if !history_lines.is_empty() {
             terminal.queue_history_lines(history_lines);

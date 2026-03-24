@@ -6,7 +6,7 @@ use ratatui::text::Span;
 use tokio_stream::wrappers::ReceiverStream;
 use unicode_width::UnicodeWidthChar;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -389,6 +389,12 @@ pub struct PendingImage {
     pub height: Option<u32>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct QueuedSubmission {
+    pub text: String,
+    pub images: Vec<PendingImage>,
+}
+
 pub struct App {
     pub input: InputLine,
     pub should_quit: bool,
@@ -429,6 +435,7 @@ pub struct App {
     saw_delta_in_step: bool,
 
     pending_images: Vec<PendingImage>,
+    queued_submissions: VecDeque<QueuedSubmission>,
 }
 
 impl App {
@@ -484,6 +491,7 @@ impl App {
             step_output_tokens: OutputTokenCounter::default(),
             saw_delta_in_step: false,
             pending_images: Vec::new(),
+            queued_submissions: VecDeque::new(),
         }
     }
 
@@ -505,6 +513,18 @@ impl App {
 
     pub fn pending_images(&self) -> &[PendingImage] {
         &self.pending_images
+    }
+
+    pub fn queued_len(&self) -> usize {
+        self.queued_submissions.len()
+    }
+
+    pub(crate) fn pop_next_queued_submission(&mut self) -> Option<QueuedSubmission> {
+        self.queued_submissions.pop_front()
+    }
+
+    pub(crate) fn pop_last_queued_submission(&mut self) -> Option<QueuedSubmission> {
+        self.queued_submissions.pop_back()
     }
 
     pub fn slash_popup(&self) -> &SlashPopupState {
@@ -644,11 +664,21 @@ impl App {
         }
     }
 
-    fn handle_chat_key(&mut self, key: KeyEvent) -> AppAction {
-        if self.running && key.code == KeyCode::Enter {
-            return AppAction::None;
+    fn enqueue_submission(&mut self, text: String, images: Vec<PendingImage>) {
+        let text = text.trim().to_string();
+        if text.is_empty() && images.is_empty() {
+            return;
         }
 
+        if !text.is_empty() && parse_known_slash_command(&text).is_none() {
+            self.prompt_history.push(text.clone());
+        }
+        self.reset_history_nav();
+        self.queued_submissions
+            .push_back(QueuedSubmission { text, images });
+    }
+
+    fn handle_chat_key(&mut self, key: KeyEvent) -> AppAction {
         if key.code == KeyCode::Esc {
             if self.slash_popup.visible() {
                 self.slash_popup.hide();
@@ -659,6 +689,11 @@ impl App {
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            if self.pop_last_queued_submission().is_some() {
+                self.reset_history_nav();
+                self.slash_popup.hide();
+                return AppAction::None;
+            }
             self.input.clear();
             self.clear_pending_images();
             self.reset_history_nav();
@@ -724,7 +759,12 @@ impl App {
                     // Dispatch bare commands like `/model` directly from the popup.
                     self.slash_popup.hide();
                     self.input.clear();
-                    return AppAction::Submitted(format!("/{}", selected.command()));
+                    let text = format!("/{}", selected.command());
+                    if self.running {
+                        self.enqueue_submission(text, Vec::new());
+                        return AppAction::None;
+                    }
+                    return AppAction::Submitted(text);
                 }
                 _ => {}
             }
@@ -759,6 +799,15 @@ impl App {
                 let text = text.trim().to_string();
                 if !text.is_empty() || !self.pending_images.is_empty() {
                     self.slash_popup.hide();
+                    if self.running {
+                        let images = if parse_known_slash_command(&text).is_some() {
+                            Vec::new()
+                        } else {
+                            std::mem::take(&mut self.pending_images)
+                        };
+                        self.enqueue_submission(text, images);
+                        return AppAction::None;
+                    }
                     return AppAction::Submitted(text);
                 }
             }
@@ -795,43 +844,70 @@ impl App {
 
     pub async fn handle_submit(&mut self, text: String) -> Result<SubmitDisposition> {
         if let Some((cmd, args)) = parse_known_slash_command(&text) {
-            match cmd {
-                crate::slash_command::SlashCommand::Model => {
-                    self.open_model_picker(args);
-                }
-                crate::slash_command::SlashCommand::Agent => {
-                    let agent = args.split_whitespace().next().unwrap_or("");
-                    if agent.is_empty() {
-                        self.pending_history_lines.extend(render_error_lines(
-                            "usage: /agent <plan|general> (alias: /a)",
-                        ));
-                        return Ok(SubmitDisposition::Handled);
-                    }
-                    if let Err(err) = self.switch_agent(agent).await {
-                        self.pending_history_lines
-                            .extend(render_error_lines(&err.to_string()));
-                    }
-                }
-            }
+            self.handle_known_slash_command(cmd, args).await?;
             return Ok(SubmitDisposition::Handled);
         }
 
-        self.submit_user_message(text).await?;
+        let images = std::mem::take(&mut self.pending_images);
+        self.submit_user_message(text, images, true).await?;
         Ok(SubmitDisposition::StartRun)
     }
 
-    pub async fn submit_user_message(&mut self, text: String) -> Result<()> {
+    pub async fn handle_queued_submission(&mut self, queued: QueuedSubmission) -> Result<SubmitDisposition> {
+        if let Some((cmd, args)) = parse_known_slash_command(&queued.text) {
+            self.handle_known_slash_command(cmd, args).await?;
+            return Ok(SubmitDisposition::Handled);
+        }
+
+        self.submit_user_message(queued.text, queued.images, false).await?;
+        Ok(SubmitDisposition::StartRun)
+    }
+
+    async fn handle_known_slash_command(
+        &mut self,
+        cmd: crate::slash_command::SlashCommand,
+        args: String,
+    ) -> Result<()> {
+        match cmd {
+            crate::slash_command::SlashCommand::Model => {
+                self.open_model_picker(args);
+            }
+            crate::slash_command::SlashCommand::Agent => {
+                let agent = args.split_whitespace().next().unwrap_or("");
+                if agent.is_empty() {
+                    self.pending_history_lines.extend(render_error_lines(
+                        "usage: /agent <plan|general> (alias: /a)",
+                    ));
+                    return Ok(());
+                }
+                if let Err(err) = self.switch_agent(agent).await {
+                    self.pending_history_lines
+                        .extend(render_error_lines(&err.to_string()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn submit_user_message(
+        &mut self,
+        text: String,
+        images: Vec<PendingImage>,
+        record_prompt_history: bool,
+    ) -> Result<()> {
         let text = text.trim().to_string();
-        if !text.is_empty() {
+        if record_prompt_history && !text.is_empty() {
             self.prompt_history.push(text.clone());
         }
-        self.reset_history_nav();
+        if record_prompt_history {
+            self.reset_history_nav();
+        }
 
         let attachments_dir = self
             .store
             .session_dir(&self.session.meta.id)
             .join("attachments");
-        if !self.pending_images.is_empty() {
+        if !images.is_empty() {
             tokio::fs::create_dir_all(&attachments_dir).await?;
         }
 
@@ -841,7 +917,7 @@ impl App {
             parts.push(UserContentPart::Text { text });
         }
 
-        for (idx, img) in self.pending_images.iter().enumerate() {
+        for (idx, img) in images.iter().enumerate() {
             let src = &img.source_path;
             let ext = src
                 .extension()
@@ -889,7 +965,6 @@ impl App {
         let msg = Message::User { content };
         self.messages.push(msg.clone());
         self.store.record_message(&mut self.session, msg).await?;
-        self.clear_pending_images();
         Ok(())
     }
 

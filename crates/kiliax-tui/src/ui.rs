@@ -328,6 +328,11 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::from(" · ").dim());
     spans.push(Span::from(format!("{} tok", app.turn_output_tokens())).dim());
 
+    if app.queued_len() > 0 {
+        spans.push(Span::from(" · ").dim());
+        spans.push(Span::from(format!("queued {}", app.queued_len())).dim());
+    }
+
     if let Some((tool, elapsed)) = app.active_tool_elapsed() {
         spans.push(Span::from(" · ").dim());
         let (name, rest) = match tool.split_once(' ') {
@@ -663,15 +668,21 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::from("model: ").dim(),
         Span::from(app.model_id().to_string()).cyan(),
     ]);
-    let keys = Line::from(vec![
-        Span::styled(indent, Style::default()),
-        status,
+    let mut spans = vec![Span::styled(indent, Style::default()), status];
+    if app.queued_len() > 0 {
+        spans.push(Span::styled(
+            format!("  queued {}", app.queued_len()),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    spans.extend([
         Span::styled("  ↑/↓ history", Style::default().fg(Color::DarkGray)),
         Span::styled("  / commands", Style::default().fg(Color::DarkGray)),
         Span::styled("  Tab complete", Style::default().fg(Color::DarkGray)),
-        Span::styled("  Ctrl+C clear", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Ctrl+C unqueue/clear", Style::default().fg(Color::DarkGray)),
         Span::styled("  Ctrl+V image", Style::default().fg(Color::DarkGray)),
         Span::styled("  Esc stop/quit", Style::default().fg(Color::DarkGray)),
     ]);
+    let keys = Line::from(spans);
     frame.render_widget(Paragraph::new(Text::from(vec![model, keys])), area);
 }
