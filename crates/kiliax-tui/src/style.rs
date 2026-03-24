@@ -8,6 +8,14 @@ pub fn composer_background_style() -> Style {
     Style::default().bg(bg)
 }
 
+pub fn model_picker_providers_panel_style() -> Style {
+    let bg = match terminal_theme_hint() {
+        TerminalTheme::Light => Color::Rgb(230, 230, 230),
+        TerminalTheme::Dark | TerminalTheme::Unknown => Color::Rgb(58, 58, 58),
+    };
+    Style::default().bg(bg)
+}
+
 pub fn diff_insert_style() -> Style {
     match terminal_theme_hint() {
         TerminalTheme::Light => Style::default()

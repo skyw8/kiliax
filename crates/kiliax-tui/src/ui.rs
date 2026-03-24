@@ -37,8 +37,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
     frame.render_widget(Clear, area);
 
     if app.model_picker().is_some() {
-        draw_model_picker(frame, app, area);
         frame.render_widget(Block::default().style(composer_style), area);
+        draw_model_picker(frame, app, area);
         return;
     }
 
@@ -80,10 +80,10 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let [search_area, main_area, help_area] = Layout::vertical([
+    let [search_area, _gap_area, main_area] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(1),
     ])
     .areas(area);
 
@@ -108,6 +108,11 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
         Constraint::Percentage(66),
     ])
     .areas(main_area);
+
+    frame.render_widget(
+        Block::default().style(crate::style::model_picker_providers_panel_style()),
+        providers_area,
+    );
 
     let [providers_header, providers_list] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(providers_area);
@@ -146,22 +151,6 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     draw_model_picker_providers(frame, picker, providers_list);
     draw_model_picker_models(frame, app, picker, models_list);
-
-    let mut help = vec![
-        Span::from("↑/↓").dim(),
-        Span::from(" navigate  ").dim(),
-        Span::from("Tab").dim(),
-        Span::from(" switch  ").dim(),
-        Span::from("Enter").dim(),
-        Span::from(" select  ").dim(),
-        Span::from("Esc").dim(),
-        Span::from(" back").dim(),
-    ];
-    if let Some(model) = picker.selected_model() {
-        help.push(Span::from("  ·  ").dim());
-        help.push(Span::from(model.id.clone()).dim());
-    }
-    frame.render_widget(Paragraph::new(Line::from(help)), help_area);
 }
 
 fn draw_model_picker_providers(
