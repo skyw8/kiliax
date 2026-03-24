@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
@@ -76,13 +76,7 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Model")
-        .border_style(Style::default().dim());
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.is_empty() {
+    if area.is_empty() {
         return;
     }
 
@@ -91,11 +85,11 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
         Constraint::Min(1),
         Constraint::Length(1),
     ])
-    .areas(inner);
+    .areas(area);
 
     let search_prefix = "Search: ";
     let search_line = Line::from(vec![
-        Span::from(search_prefix).dim(),
+        Span::styled(search_prefix, Style::default().fg(Color::White)),
         Span::from(picker.search_text().to_string()),
     ]);
     frame.render_widget(Paragraph::new(search_line), search_area);
@@ -115,8 +109,43 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
     ])
     .areas(main_area);
 
-    draw_model_picker_providers(frame, picker, providers_area);
-    draw_model_picker_models(frame, app, picker, models_area);
+    let [providers_header, providers_list] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(providers_area);
+    let [models_header, models_list] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(models_area);
+
+    let header_style = Style::default().fg(Color::LightBlue);
+    let focused_style = header_style.bold();
+    let unfocused_style = header_style.dim();
+
+    let providers_focused = picker.focus() == ModelPickerFocus::Providers;
+    let models_focused = picker.focus() == ModelPickerFocus::Models;
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Providers",
+            if providers_focused {
+                focused_style
+            } else {
+                unfocused_style
+            },
+        ))),
+        providers_header,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Models",
+            if models_focused {
+                focused_style
+            } else {
+                unfocused_style
+            },
+        ))),
+        models_header,
+    );
+
+    draw_model_picker_providers(frame, picker, providers_list);
+    draw_model_picker_models(frame, app, picker, models_list);
 
     let mut help = vec![
         Span::from("↑/↓").dim(),
@@ -144,14 +173,6 @@ fn draw_model_picker_providers(
         return;
     }
 
-    let focused = picker.focus() == ModelPickerFocus::Providers;
-    let mut block = Block::default().borders(Borders::ALL).title("Providers");
-    block = if focused {
-        block.border_style(Style::default().fg(Color::Cyan).bold())
-    } else {
-        block.border_style(Style::default().dim())
-    };
-
     let items = picker
         .filtered_providers()
         .iter()
@@ -170,7 +191,7 @@ fn draw_model_picker_providers(
     } else {
         Some(picker.provider_cursor())
     };
-    let visible = area.height.saturating_sub(2) as usize;
+    let visible = area.height as usize;
     let offset = selected
         .map(|s| list_offset(s, items.len(), visible))
         .unwrap_or(0);
@@ -179,7 +200,6 @@ fn draw_model_picker_providers(
         .with_offset(offset);
 
     let list = List::new(items)
-        .block(block)
         .highlight_symbol("› ")
         .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
 
@@ -195,14 +215,6 @@ fn draw_model_picker_models(
     if area.is_empty() {
         return;
     }
-
-    let focused = picker.focus() == ModelPickerFocus::Models;
-    let mut block = Block::default().borders(Borders::ALL).title("Models");
-    block = if focused {
-        block.border_style(Style::default().fg(Color::Cyan).bold())
-    } else {
-        block.border_style(Style::default().dim())
-    };
 
     let current_model_id = app.model_id();
     let provider_idx = picker.selected_provider_index();
@@ -233,7 +245,7 @@ fn draw_model_picker_models(
     } else {
         Some(picker.model_cursor())
     };
-    let visible = area.height.saturating_sub(2) as usize;
+    let visible = area.height as usize;
     let offset = selected
         .map(|s| list_offset(s, items.len(), visible))
         .unwrap_or(0);
@@ -242,7 +254,6 @@ fn draw_model_picker_models(
         .with_offset(offset);
 
     let list = List::new(items)
-        .block(block)
         .highlight_symbol("› ")
         .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
 
@@ -525,7 +536,7 @@ fn textarea_rect(area: Rect) -> Rect {
 }
 
 fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect) {
-    if area.height < 3 || area.width <= LIVE_PREFIX_COLS {
+    if area.height == 0 || area.width <= LIVE_PREFIX_COLS {
         return;
     }
 
@@ -534,7 +545,7 @@ fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect) {
         .width
         .saturating_sub(LIVE_PREFIX_COLS + COMPOSER_PAD_RIGHT);
     let rect = Rect::new(x, area.y, width, area.height);
-    if rect.is_empty() || rect.height < 3 {
+    if rect.is_empty() || rect.height == 0 {
         return;
     }
 
@@ -560,15 +571,9 @@ fn draw_slash_popup(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect::<Vec<_>>();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Commands")
-        .border_style(Style::default().dim());
-
     let mut state = ListState::default();
     state.select(Some(popup.selected_index()));
     let list = List::new(items)
-        .block(block)
         .highlight_symbol("› ")
         .highlight_style(Style::default().bg(Color::Rgb(70, 70, 70)));
 

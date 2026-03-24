@@ -132,8 +132,7 @@ impl SlashPopupState {
             return 0;
         }
         let n = self.items.len().min(max_items).min(u16::MAX as usize) as u16;
-        // 2 for borders.
-        n.saturating_add(2)
+        n
     }
 
     pub fn sync_from_input(&mut self, text: &str, cursor: usize) {
@@ -219,4 +218,3 @@ mod tests {
         assert!(!popup.visible());
     }
 }
-
