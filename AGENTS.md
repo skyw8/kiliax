@@ -70,7 +70,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - `crates/kiliax-tui/src/slash_command.rs`: slash command 定义 + popup 状态（/new、/agent、/model、/mcp；↑/↓ 选择、Tab 补全、/a alias；popup 高度按 item 数，UI 无边框）
 - `crates/kiliax-tui/src/model_picker.rs`: model picker 状态（provider/model 列表、模糊搜索、键盘导航；返回值总是 provider-qualified model id，兼容带 `/` 的模型名）
 - `crates/kiliax-tui/src/style.rs`: composer 无背景样式、prompt 双彩箭头配色（按终端主题 hint），slash popup/model picker 选中高亮配色，以及 diff 行背景
-- `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
+- `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`；不启用 GFM tables，表格按原文 `|` 展示以保证终端稳定性）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
 - `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect + VS Code Dark+ 配色；用 LinesWithEndings 保证注释/多行状态不串行，并剥离 CR/LF 避免渲染异常）
 - `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行（含宽字符/样式保持单元测试）
 - `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；`[img#N]` token 原子移动/删除；支持整行替换（历史回填）；包含 Unicode/快捷键单元测试

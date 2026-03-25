@@ -52,8 +52,6 @@ enum PrefixContext {
 pub fn render_markdown_lines(input: &str) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_TASKLISTS);
     let parser = Parser::new_ext(input, options);
 
     let mut writer = Writer::new(parser);
@@ -123,6 +121,25 @@ Just let me know what changes you'd like to make!
                 );
             }
         }
+    }
+
+    #[test]
+    fn renders_gfm_tables_as_pipe_separated_rows() {
+        let input = "\
+| 文件名 | 类型 | 描述 |
+| --- | --- | --- |
+| killiax.yaml | 配置 | 项目配置 |
+";
+
+        let lines = to_plain_lines(render_markdown_lines(input));
+        assert_eq!(
+            lines,
+            vec![
+                "| 文件名 | 类型 | 描述 |".to_string(),
+                "| --- | --- | --- |".to_string(),
+                "| killiax.yaml | 配置 | 项目配置 |".to_string(),
+            ]
+        );
     }
 }
 
@@ -365,6 +382,7 @@ where
             self.code_block_buf.push_str(&code);
             return;
         }
+
         self.ensure_line_started();
         self.current.push(Span::styled(code, self.styles.code));
     }
