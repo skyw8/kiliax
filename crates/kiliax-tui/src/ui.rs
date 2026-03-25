@@ -706,7 +706,7 @@ fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(Color::LightGreen).bold(),
         )
     } else if status.starts_with("step ") {
-        Span::styled(status, Style::default().fg(Color::LightYellow))
+        Span::styled(status, Style::default().fg(Color::Rgb(255, 165, 0)))
     } else if status.starts_with("running") {
         Span::styled(
             "running".to_string(),
