@@ -1,11 +1,11 @@
 use std::io::{self, Stdout, Write};
 
-use crossterm::{ExecutableCommand, QueueableCommand};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
-use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use crossterm::terminal::ScrollUp;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+use crossterm::{ExecutableCommand, QueueableCommand};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Rect, Size};

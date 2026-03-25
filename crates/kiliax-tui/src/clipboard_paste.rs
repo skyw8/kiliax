@@ -83,7 +83,8 @@ pub fn paste_image_to_temp_png() -> Result<PathBuf, PasteImageError> {
                 .suffix(".png")
                 .tempfile()
                 .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-            std::fs::write(tmp.path(), &png).map_err(|e| PasteImageError::IoError(e.to_string()))?;
+            std::fs::write(tmp.path(), &png)
+                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
             let (_file, path) = tmp
                 .keep()
                 .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
@@ -103,9 +104,7 @@ pub fn paste_image_to_temp_png() -> Result<PathBuf, PasteImageError> {
 }
 
 #[cfg(target_os = "linux")]
-fn try_wsl_clipboard_fallback(
-    error: &PasteImageError,
-) -> Result<PathBuf, PasteImageError> {
+fn try_wsl_clipboard_fallback(error: &PasteImageError) -> Result<PathBuf, PasteImageError> {
     use PasteImageError::ClipboardUnavailable;
     use PasteImageError::NoImage;
 
@@ -238,9 +237,7 @@ fn normalize_windows_path(input: &str) -> Option<PathBuf> {
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic())
         && input.get(1..2) == Some(":")
-        && input
-            .get(2..3)
-            .is_some_and(|s| s == "\\" || s == "/");
+        && input.get(2..3).is_some_and(|s| s == "\\" || s == "/");
     let unc = input.starts_with("\\\\");
     if !drive && !unc {
         return None;

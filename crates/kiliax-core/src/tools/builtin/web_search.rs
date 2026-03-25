@@ -189,9 +189,8 @@ pub(super) async fn execute(
         )));
     }
 
-    let parsed: TavilySearchResponse = serde_json::from_str(&text).map_err(|e| {
-        ToolError::InvalidCommand(format!("invalid tavily JSON response: {e}"))
-    })?;
+    let parsed: TavilySearchResponse = serde_json::from_str(&text)
+        .map_err(|e| ToolError::InvalidCommand(format!("invalid tavily JSON response: {e}")))?;
 
     let out = simplify_response(parsed, args.include_answer, args.include_raw_content);
     Ok(serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string()))
@@ -245,7 +244,11 @@ fn simplify_response(
         });
     }
 
-    WebSearchOutput { query, answer, results }
+    WebSearchOutput {
+        query,
+        answer,
+        results,
+    }
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -264,7 +267,10 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 fn to_io_error<E: std::fmt::Display>(err: E) -> ToolError {
-    ToolError::Io(std::io::Error::new(std::io::ErrorKind::Other, err.to_string()))
+    ToolError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        err.to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -298,12 +304,6 @@ mod tests {
         assert!(out.answer.unwrap().chars().count() <= 1_201);
         assert_eq!(out.results.len(), 1);
         assert!(out.results[0].content.chars().count() <= 801);
-        assert!(out.results[0]
-            .raw_content
-            .as_ref()
-            .unwrap()
-            .chars()
-            .count()
-            <= 2_001);
+        assert!(out.results[0].raw_content.as_ref().unwrap().chars().count() <= 2_001);
     }
 }

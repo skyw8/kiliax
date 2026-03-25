@@ -186,7 +186,12 @@ impl ThinkingStreamCollector {
         out
     }
 
-    fn emit_wrapped_text(&mut self, mut text: String, max_width: usize, out: &mut Vec<Line<'static>>) {
+    fn emit_wrapped_text(
+        &mut self,
+        mut text: String,
+        max_width: usize,
+        out: &mut Vec<Line<'static>>,
+    ) {
         if max_width == 0 {
             self.emit_line(text, out);
             return;
@@ -369,14 +374,32 @@ struct PendingToolCall {
 
 #[derive(Debug, Clone)]
 enum PendingToolCallKind {
-    ReadFile { path: String },
-    ListDir { path: String },
-    GrepFiles { pattern: String, path: Option<String> },
-    ViewImage { path: String },
-    ShellCommand { argv: Vec<String>, cwd: Option<String> },
-    WriteStdin { session_id: u64 },
-    ApplyPatch { files: Vec<String> },
-    UpdatePlan { steps: usize },
+    ReadFile {
+        path: String,
+    },
+    ListDir {
+        path: String,
+    },
+    GrepFiles {
+        pattern: String,
+        path: Option<String>,
+    },
+    ViewImage {
+        path: String,
+    },
+    ShellCommand {
+        argv: Vec<String>,
+        cwd: Option<String>,
+    },
+    WriteStdin {
+        session_id: u64,
+    },
+    ApplyPatch {
+        files: Vec<String>,
+    },
+    UpdatePlan {
+        steps: usize,
+    },
     Other,
 }
 
@@ -584,7 +607,8 @@ impl App {
 
     pub fn interrupt_run(&mut self) {
         if let Some(stream) = self.assistant_stream.as_mut() {
-            self.pending_history_lines.extend(stream.finalize_and_drain());
+            self.pending_history_lines
+                .extend(stream.finalize_and_drain());
         }
         self.assistant_stream = None;
         self.close_thinking_stream();
@@ -676,11 +700,7 @@ impl App {
             if text.contains(img.placeholder.as_str()) {
                 continue;
             }
-            if text
-                .chars()
-                .last()
-                .is_some_and(|ch| !ch.is_whitespace())
-            {
+            if text.chars().last().is_some_and(|ch| !ch.is_whitespace()) {
                 text.push(' ');
             }
             text.push_str(img.placeholder.as_str());
@@ -752,7 +772,9 @@ impl App {
         }
 
         if key.code == KeyCode::Char('v')
-            && key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
             match clipboard_paste::paste_image_to_temp_png() {
                 Ok(path) => {
@@ -928,14 +950,18 @@ impl App {
         Ok(SubmitDisposition::StartRun)
     }
 
-    pub async fn handle_queued_submission(&mut self, queued: QueuedSubmission) -> Result<SubmitDisposition> {
+    pub async fn handle_queued_submission(
+        &mut self,
+        queued: QueuedSubmission,
+    ) -> Result<SubmitDisposition> {
         if let Some((cmd, args)) = parse_known_slash_command(&queued.text) {
             self.handle_known_slash_command(cmd, args).await?;
             self.ensure_pending_image_placeholders();
             return Ok(SubmitDisposition::Handled);
         }
 
-        self.submit_user_message(queued.text, queued.images, false).await?;
+        self.submit_user_message(queued.text, queued.images, false)
+            .await?;
         Ok(SubmitDisposition::StartRun)
     }
 
@@ -972,8 +998,22 @@ impl App {
                         .extend(render_error_lines(&err.to_string()));
                 }
             }
+            crate::slash_command::SlashCommand::Mcp => {
+                if !args.trim().is_empty() {
+                    self.pending_history_lines
+                        .extend(render_error_lines("usage: /mcp"));
+                    return Ok(());
+                }
+                self.show_mcp_status().await;
+            }
         }
         Ok(())
+    }
+
+    async fn show_mcp_status(&mut self) {
+        let statuses = self.runtime.tools().mcp_status().await;
+        self.pending_history_lines
+            .extend(render_mcp_status_lines(&statuses));
     }
 
     async fn start_new_session(&mut self) -> Result<()> {
@@ -982,7 +1022,13 @@ impl App {
         }
 
         let prev = self.session.meta.id.to_string();
-        let preamble = build_preamble(&self.profile, &self.model_id, &self.workspace_root);
+        let preamble = build_preamble(
+            &self.profile,
+            &self.model_id,
+            &self.workspace_root,
+            self.runtime.tools(),
+        )
+        .await;
         let session = self
             .store
             .create(
@@ -1073,7 +1119,10 @@ impl App {
                 .and_then(|e| e.to_str())
                 .unwrap_or("png")
                 .trim();
-            let filename = format!("img_{ts}_{idx}.{}", if ext.is_empty() { "png" } else { ext });
+            let filename = format!(
+                "img_{ts}_{idx}.{}",
+                if ext.is_empty() { "png" } else { ext }
+            );
             let dest = attachments_dir.join(filename);
 
             let path_for_message = if src.starts_with(&attachments_dir) || src == &dest {
@@ -1082,10 +1131,11 @@ impl App {
                 match tokio::fs::copy(src, &dest).await {
                     Ok(_) => dest,
                     Err(err) => {
-                        self.pending_history_lines.extend(render_error_lines(&format!(
-                            "failed to copy image `{}`: {err}",
-                            src.display()
-                        )));
+                        self.pending_history_lines
+                            .extend(render_error_lines(&format!(
+                                "failed to copy image `{}`: {err}",
+                                src.display()
+                            )));
                         src.clone()
                     }
                 }
@@ -1152,7 +1202,13 @@ impl App {
         self.session.meta.agent = self.profile.name.to_string();
         self.session.meta.updated_at_ms = now_ms();
 
-        let new_preamble = build_preamble(&self.profile, &self.model_id, &self.workspace_root);
+        let new_preamble = build_preamble(
+            &self.profile,
+            &self.model_id,
+            &self.workspace_root,
+            self.runtime.tools(),
+        )
+        .await;
         replace_preamble(&mut self.session.messages, new_preamble);
         self.session.meta.message_count = self.session.messages.len();
         self.messages = self.session.messages.clone();
@@ -1236,7 +1292,13 @@ impl App {
             self.session.meta.model_id = Some(self.model_id.clone());
             self.session.meta.updated_at_ms = now_ms();
 
-            let new_preamble = build_preamble(&self.profile, &self.model_id, &self.workspace_root);
+            let new_preamble = build_preamble(
+                &self.profile,
+                &self.model_id,
+                &self.workspace_root,
+                self.runtime.tools(),
+            )
+            .await;
             replace_preamble(&mut self.session.messages, new_preamble);
             self.session.meta.message_count = self.session.messages.len();
             self.messages = self.session.messages.clone();
@@ -1413,17 +1475,15 @@ impl App {
                         let elapsed = started_at.map(|t| t.elapsed());
                         let pending = self.pending_tool_calls.remove(&tool_call_id);
                         if let Some(pending) = pending {
-                            self.pending_history_lines.extend(render_tool_result_lines(
-                                &pending,
-                                elapsed,
-                                &content,
-                            ));
+                            self.pending_history_lines
+                                .extend(render_tool_result_lines(&pending, elapsed, &content));
                         } else {
-                            self.pending_history_lines.extend(render_tool_result_fallback_lines(
-                                &tool_call_id,
-                                elapsed,
-                                &content,
-                            ));
+                            self.pending_history_lines
+                                .extend(render_tool_result_fallback_lines(
+                                    &tool_call_id,
+                                    elapsed,
+                                    &content,
+                                ));
                         }
                     }
                     Message::User { content } => {
@@ -1452,7 +1512,8 @@ impl App {
                     out.steps, out.finish_reason
                 ));
                 if let Some(stream) = self.assistant_stream.as_mut() {
-                    self.pending_history_lines.extend(stream.finalize_and_drain());
+                    self.pending_history_lines
+                        .extend(stream.finalize_and_drain());
                 }
                 self.assistant_stream = None;
                 self.close_thinking_stream();
@@ -1478,8 +1539,7 @@ impl App {
             .record_error(&mut self.session, text.clone())
             .await;
         self.close_thinking_stream();
-        self.pending_history_lines
-            .extend(render_error_lines(&text));
+        self.pending_history_lines.extend(render_error_lines(&text));
         if let Some(started_at) = self.turn_started_at.take() {
             self.turn_output_tokens.finish_segment();
             let output_tokens = self.turn_output_tokens.estimate();
@@ -1541,9 +1601,7 @@ impl App {
     }
 }
 
-fn parse_known_slash_command(
-    text: &str,
-) -> Option<(crate::slash_command::SlashCommand, String)> {
+fn parse_known_slash_command(text: &str) -> Option<(crate::slash_command::SlashCommand, String)> {
     let first_line = text.lines().next().unwrap_or("");
     let trimmed = first_line.trim_start();
     let rest = trimmed.strip_prefix('/')?.trim_start();
@@ -1580,8 +1638,18 @@ fn replace_preamble(messages: &mut Vec<Message>, new_preamble: Vec<Message>) {
     *messages = out;
 }
 
-fn build_preamble(profile: &AgentProfile, model_id: &str, workspace_root: &PathBuf) -> Vec<Message> {
+async fn build_preamble(
+    profile: &AgentProfile,
+    model_id: &str,
+    workspace_root: &PathBuf,
+    tools: &kiliax_core::tools::ToolEngine,
+) -> Vec<Message> {
     let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
+        .with_tools({
+            let mut tool_defs = profile.tools.clone();
+            tool_defs.extend(tools.extra_tool_definitions().await);
+            tool_defs
+        })
         .with_model_id(model_id.to_string())
         .with_workspace_root(workspace_root);
     if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
@@ -1681,14 +1749,8 @@ struct ToolSummary {
 
 fn tool_name_span(tool: &str) -> Span<'static> {
     let style = match tool {
-        "read_file"
-        | "list_dir"
-        | "grep_files"
-        | "view_image"
-        | "shell_command"
-        | "write_stdin"
-        | "apply_patch"
-        | "update_plan" => Style::default().fg(Color::Cyan).bold(),
+        "read_file" | "list_dir" | "grep_files" | "view_image" | "shell_command"
+        | "write_stdin" | "apply_patch" | "update_plan" => Style::default().fg(Color::Cyan).bold(),
         _ => Style::default().bold(),
     };
     Span::styled(tool.to_string(), style)
@@ -1700,7 +1762,9 @@ fn render_tool_result_fallback_lines(
     content: &str,
 ) -> Vec<Line<'static>> {
     let summary_style = Style::default().dim();
-    let duration = elapsed.map(fmt_duration_compact).unwrap_or_else(|| "—".to_string());
+    let duration = elapsed
+        .map(fmt_duration_compact)
+        .unwrap_or_else(|| "—".to_string());
     let spans = vec![
         Span::from("• ").dim(),
         Span::from("Tool").bold(),
@@ -1742,7 +1806,10 @@ fn render_tool_result_lines(
     }
     if let Some(duration) = duration {
         header.push(Span::from(" "));
-        header.push(Span::styled(format!("({duration})"), Style::default().dim()));
+        header.push(Span::styled(
+            format!("({duration})"),
+            Style::default().dim(),
+        ));
     }
 
     let mut out = vec![Line::from(header)];
@@ -1771,7 +1838,10 @@ fn render_apply_patch_tool_result_lines(
     }
     if let Some(duration) = duration {
         header.push(Span::from(" "));
-        header.push(Span::styled(format!("({duration})"), Style::default().dim()));
+        header.push(Span::styled(
+            format!("({duration})"),
+            Style::default().dim(),
+        ));
     }
 
     let mut out = vec![Line::from(header)];
@@ -1831,7 +1901,10 @@ fn render_update_plan_tool_result_lines(
     }
     if let Some(duration) = duration {
         header.push(Span::from(" "));
-        header.push(Span::styled(format!("({duration})"), Style::default().dim()));
+        header.push(Span::styled(
+            format!("({duration})"),
+            Style::default().dim(),
+        ));
     }
 
     let mut out = vec![Line::from(header)];
@@ -1883,10 +1956,7 @@ fn render_diff_block_with_prefix(
         first = false;
 
         let style = diff_line_style(raw);
-        let mut line = Line::from(vec![
-            Span::from(prefix).dim(),
-            Span::from(raw.to_string()),
-        ]);
+        let mut line = Line::from(vec![Span::from(prefix).dim(), Span::from(raw.to_string())]);
         line.style = style;
         out.push(line);
     }
@@ -1931,6 +2001,189 @@ fn render_error_lines(text: &str) -> Vec<Line<'static>> {
         Span::from(": "),
         Span::from(text.to_string()),
     ])]
+}
+
+fn render_mcp_status_lines(statuses: &[kiliax_core::tools::McpServerStatus]) -> Vec<Line<'static>> {
+    use kiliax_core::tools::McpServerConnectionState as State;
+
+    if statuses.is_empty() {
+        return vec![Line::from(vec![
+            Span::from("• ").dim(),
+            Span::from("mcp").bold(),
+            Span::from(": ").dim(),
+            Span::styled(
+                "(no servers configured)".to_string(),
+                Style::default().dim(),
+            ),
+        ])];
+    }
+
+    let total = statuses.len();
+    let connected = statuses
+        .iter()
+        .filter(|s| matches!(s.state, State::Connected))
+        .count();
+    let connecting = statuses
+        .iter()
+        .filter(|s| matches!(s.state, State::Connecting))
+        .count();
+    let retry = statuses
+        .iter()
+        .filter(|s| matches!(s.state, State::Retry { .. }))
+        .count();
+    let disconnected = total.saturating_sub(connected + connecting + retry);
+
+    let mut summary = format!("{connected}/{total} connected");
+    if connecting > 0 {
+        summary.push_str(&format!(", {connecting} connecting"));
+    }
+    if retry > 0 {
+        summary.push_str(&format!(", {retry} retry"));
+    }
+    if disconnected > 0 {
+        summary.push_str(&format!(", {disconnected} disconnected"));
+    }
+
+    let mut out = Vec::new();
+    out.push(Line::from(vec![
+        Span::from("• ").dim(),
+        Span::from("mcp").bold(),
+        Span::from(": ").dim(),
+        Span::styled(summary, Style::default().dim()),
+    ]));
+
+    for server in statuses {
+        let (state_text, state_style, retry_err): (String, Style, Option<&str>) =
+            match &server.state {
+                State::Connected => (
+                    "connected".to_string(),
+                    Style::default().fg(Color::Green).dim(),
+                    None,
+                ),
+                State::Connecting => (
+                    "connecting".to_string(),
+                    Style::default().fg(Color::Cyan).dim(),
+                    None,
+                ),
+                State::Retry {
+                    attempt,
+                    retry_in,
+                    error,
+                } => (
+                    format!(
+                        "retry in {} (attempt {})",
+                        fmt_duration_compact(*retry_in),
+                        attempt
+                    ),
+                    Style::default().fg(Color::Yellow).dim(),
+                    Some(error.as_str()),
+                ),
+                State::Disconnected => (
+                    "disconnected".to_string(),
+                    Style::default().fg(Color::DarkGray).dim(),
+                    None,
+                ),
+            };
+
+        let mut header = vec![
+            Span::from("  └ ").dim(),
+            Span::from(server.name.clone()).bold(),
+            Span::from(": ").dim(),
+            Span::styled(state_text, state_style),
+        ];
+
+        if let Some(n) = server.tool_count {
+            header.push(Span::from(" ").dim());
+            header.push(Span::styled(format!("(tools {n})"), Style::default().dim()));
+        }
+
+        out.push(Line::from(header));
+
+        let cmd = fmt_command_with_redactions(&server.command, &server.args);
+        out.push(Line::from(vec![
+            Span::from("    └ ").dim(),
+            Span::styled("cmd: ".to_string(), Style::default().dim()),
+            Span::styled(truncate_one_line(&cmd, 120), Style::default().dim()),
+        ]));
+
+        if let Some(err) = retry_err {
+            out.push(Line::from(vec![
+                Span::from("    └ ").dim(),
+                Span::styled("err: ".to_string(), Style::default().dim()),
+                Span::styled(
+                    truncate_one_line(err, 140),
+                    Style::default().fg(Color::LightRed).dim(),
+                ),
+            ]));
+        }
+    }
+
+    out
+}
+
+fn fmt_command_with_redactions(command: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        return command.to_string();
+    }
+
+    let args = redact_mcp_args(args);
+    format!("{command} {}", args.join(" "))
+}
+
+fn redact_mcp_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut redact_next = false;
+
+    for arg in args {
+        if redact_next {
+            out.push("<redacted>".to_string());
+            redact_next = false;
+            continue;
+        }
+
+        let lower = arg.to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "--api-key"
+                | "--api_key"
+                | "--apikey"
+                | "--token"
+                | "--access-token"
+                | "--access_token"
+                | "--secret"
+                | "--password"
+        ) {
+            out.push(arg.clone());
+            redact_next = true;
+            continue;
+        }
+
+        out.push(redact_inline_secret(arg));
+    }
+
+    out
+}
+
+fn redact_inline_secret(arg: &str) -> String {
+    let lower = arg.to_ascii_lowercase();
+    for prefix in ["sk-", "ctx7sk-", "tvly-"] {
+        if lower.starts_with(prefix) {
+            return format!("{prefix}<redacted>");
+        }
+    }
+
+    if let Some((flag, value)) = arg.split_once('=') {
+        let lower_flag = flag.to_ascii_lowercase();
+        if matches!(
+            lower_flag.as_str(),
+            "--api-key" | "--api_key" | "--apikey" | "--token" | "--access-token" | "--secret"
+        ) && !value.trim().is_empty()
+        {
+            return format!("{flag}=<redacted>");
+        }
+    }
+
+    arg.to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2044,13 +2297,18 @@ fn classify_tool_call(call: &kiliax_core::llm::ToolCall) -> PendingToolCallKind 
             .unwrap_or(PendingToolCallKind::Other),
         "update_plan" => serde_json::from_str::<UpdatePlanArgs>(&call.arguments)
             .ok()
-            .map(|args| PendingToolCallKind::UpdatePlan { steps: args.plan.len() })
+            .map(|args| PendingToolCallKind::UpdatePlan {
+                steps: args.plan.len(),
+            })
             .unwrap_or(PendingToolCallKind::Other),
         _ => PendingToolCallKind::Other,
     }
 }
 
-fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (ToolSummary, Option<String>) {
+fn summarize_tool_result(
+    pending: &PendingToolCall,
+    tool_content: &str,
+) -> (ToolSummary, Option<String>) {
     match &pending.kind {
         PendingToolCallKind::ReadFile { path } => {
             let line_count = tool_content.lines().count();
@@ -2063,7 +2321,10 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Tool
             )
         }
         PendingToolCallKind::ListDir { path } => {
-            let entry_count = tool_content.lines().filter(|l| !l.trim().is_empty()).count();
+            let entry_count = tool_content
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count();
             (
                 ToolSummary {
                     tool: "list_dir".to_string(),
@@ -2073,7 +2334,10 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Tool
             )
         }
         PendingToolCallKind::GrepFiles { pattern, path } => {
-            let match_count = tool_content.lines().filter(|l| !l.trim().is_empty()).count();
+            let match_count = tool_content
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count();
             let mut rest = pattern.clone();
             if let Some(path) = path.as_deref() {
                 if !path.is_empty() && path != "." {
@@ -2122,7 +2386,11 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Tool
                     tool: "shell_command".to_string(),
                     rest: cmd,
                 },
-                if detail.is_empty() { None } else { Some(detail) },
+                if detail.is_empty() {
+                    None
+                } else {
+                    Some(detail)
+                },
             )
         }
         PendingToolCallKind::WriteStdin { session_id } => {
@@ -2141,7 +2409,11 @@ fn summarize_tool_result(pending: &PendingToolCall, tool_content: &str) -> (Tool
                     tool: "write_stdin".to_string(),
                     rest: format!("session {session_id}"),
                 },
-                if detail.is_empty() { None } else { Some(detail) },
+                if detail.is_empty() {
+                    None
+                } else {
+                    Some(detail)
+                },
             )
         }
         PendingToolCallKind::ApplyPatch { files } => {
@@ -2181,7 +2453,9 @@ fn tool_status_label(pending: &PendingToolCall) -> String {
         PendingToolCallKind::ListDir { path } => format!("list_dir {path}"),
         PendingToolCallKind::GrepFiles { pattern, .. } => format!("grep_files {pattern}"),
         PendingToolCallKind::ViewImage { path } => format!("view_image {path}"),
-        PendingToolCallKind::ShellCommand { argv, .. } => format!("shell_command {}", argv.join(" ")),
+        PendingToolCallKind::ShellCommand { argv, .. } => {
+            format!("shell_command {}", argv.join(" "))
+        }
         PendingToolCallKind::WriteStdin { session_id } => format!("write_stdin {session_id}"),
         PendingToolCallKind::ApplyPatch { files } => match files.len() {
             0 => "apply_patch".to_string(),
@@ -2232,8 +2506,8 @@ struct PatchedFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kiliax_core::config::{Config, ProviderConfig};
     use kiliax_core::config::ResolvedModel;
+    use kiliax_core::config::{Config, ProviderConfig};
     use kiliax_core::llm::LlmClient;
     use kiliax_core::tools::ToolEngine;
     use ratatui::style::Modifier;

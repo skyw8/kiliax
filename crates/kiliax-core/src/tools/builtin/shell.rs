@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,9 @@ pub fn shell_command_tool_definition() -> ToolDefinition {
 pub fn write_stdin_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_WRITE_STDIN.to_string(),
-        description: Some("Write to stdin of a running shell session (or poll output).".to_string()),
+        description: Some(
+            "Write to stdin of a running shell session (or poll output).".to_string(),
+        ),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
@@ -64,7 +66,9 @@ impl ShellSessions {
     }
 
     fn alloc_id(&self) -> u64 {
-        self.next_id.fetch_add(1, Ordering::Relaxed).saturating_add(1)
+        self.next_id
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1)
     }
 
     async fn insert(&self, id: u64, sess: Arc<ShellSession>) {
@@ -346,4 +350,3 @@ fn drain_with_limit(buf: &mut String, max_bytes: usize) -> String {
     buf.drain(..split_idx);
     out
 }
-

@@ -1,5 +1,5 @@
-use std::sync::LazyLock;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use ratatui::style::{Color as TuiColor, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -64,7 +64,10 @@ fn vscode_dark_plus_theme() -> Theme {
                 "constant.language, constant.character, constant.other",
                 fg(0x569CD6),
             ),
-            theme_item("keyword, storage, storage.type, storage.modifier", fg(0x569CD6)),
+            theme_item(
+                "keyword, storage, storage.type, storage.modifier",
+                fg(0x569CD6),
+            ),
             theme_item(
                 "entity.name.type, entity.other.inherited-class, support.type, support.class",
                 fg(0x4EC9B0),

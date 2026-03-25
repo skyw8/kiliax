@@ -145,8 +145,13 @@ pub(super) async fn execute(
 
 #[derive(Debug)]
 enum PatchOp {
-    AddFile { path: String, content: String },
-    DeleteFile { path: String },
+    AddFile {
+        path: String,
+        content: String,
+    },
+    DeleteFile {
+        path: String,
+    },
     UpdateFile {
         path: String,
         move_to: Option<String>,
@@ -618,4 +623,3 @@ mod tests {
         assert_eq!(ops.len(), 3);
     }
 }
-

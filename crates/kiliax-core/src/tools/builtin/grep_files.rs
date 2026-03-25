@@ -241,4 +241,3 @@ fn strip_line_terminator(mut bytes: &[u8]) -> &[u8] {
     }
     bytes
 }
-

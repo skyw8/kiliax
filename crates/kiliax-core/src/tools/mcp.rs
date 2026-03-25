@@ -2,25 +2,164 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
-use modelcontextprotocol_client::{
-    transport::StdioTransport,
-    Client as McpClient,
-    ClientBuilder as McpClientBuilder,
-};
+use async_trait::async_trait;
+use mcp_protocol::messages::JsonRpcMessage;
+use modelcontextprotocol_client::{Client as McpClient, ClientBuilder as McpClientBuilder};
 use tokio::sync::Mutex;
 
+use crate::config::McpServerConfig;
 use crate::llm::ToolDefinition;
 use crate::tools::ToolError;
 
 const MCP_PREFIX: &str = "mcp__";
 const MCP_SEP: &str = "__";
+const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Debug, Clone)]
-pub struct McpServerConfig {
-    pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
+/// Stdio transport that drains server stderr to avoid corrupting the TUI.
+///
+/// Some MCP servers log to stderr; inheriting it can break our terminal UI.
+pub struct QuietStdioTransport {
+    child_process: Arc<Mutex<Option<tokio::process::Child>>>,
+    tx: tokio::sync::mpsc::Sender<JsonRpcMessage>,
+    command: String,
+    args: Vec<String>,
+    stdin: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+}
+
+impl QuietStdioTransport {
+    pub fn new(
+        command: &str,
+        args: Vec<String>,
+    ) -> (Self, tokio::sync::mpsc::Receiver<JsonRpcMessage>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        (
+            Self {
+                child_process: Arc::new(Mutex::new(None)),
+                tx,
+                command: command.to_string(),
+                args,
+                stdin: Arc::new(Mutex::new(None)),
+            },
+            rx,
+        )
+    }
+}
+
+#[async_trait]
+impl modelcontextprotocol_client::transport::Transport for QuietStdioTransport {
+    async fn start(&self) -> anyhow::Result<()> {
+        use std::process::Stdio;
+        use tokio::io::AsyncBufReadExt;
+        use tokio::io::BufReader;
+        use tokio::process::Command;
+
+        let mut child = Command::new(&self.command)
+            .args(&self.args)
+            .kill_on_drop(true)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let stdout = child.stdout.take().expect("mcp stdout piped");
+        let stderr = child.stderr.take().expect("mcp stderr piped");
+        let stdin = child.stdin.take().expect("mcp stdin piped");
+
+        {
+            let mut guard = self.child_process.lock().await;
+            *guard = Some(child);
+        }
+
+        {
+            let mut stdin_guard = self.stdin.lock().await;
+            *stdin_guard = Some(stdin);
+        }
+
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                match serde_json::from_str::<JsonRpcMessage>(&line) {
+                    Ok(message) => {
+                        if tx.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("mcp stdout parse error: {err}");
+                    }
+                }
+                line.clear();
+            }
+        });
+
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                // Drain server stderr so it doesn't corrupt the terminal UI.
+                line.clear();
+            }
+        });
+
+        Ok(())
+    }
+
+    async fn send(&self, message: JsonRpcMessage) -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let mut stdin_guard = self.stdin.lock().await;
+        let stdin = stdin_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Child process not started"))?;
+
+        let serialized = serde_json::to_string(&message)?;
+        stdin.write_all(serialized.as_bytes()).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.flush().await?;
+        Ok(())
+    }
+
+    async fn close(&self) -> anyhow::Result<()> {
+        {
+            let mut stdin_guard = self.stdin.lock().await;
+            *stdin_guard = None;
+        }
+
+        let mut guard = self.child_process.lock().await;
+        if let Some(mut child) = guard.take() {
+            let wait_future = child.wait();
+            match tokio::time::timeout(std::time::Duration::from_secs(1), wait_future).await {
+                Ok(Ok(_)) => return Ok(()),
+                _ => {
+                    child.kill().await?;
+                    child.wait().await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn box_clone(&self) -> Box<dyn modelcontextprotocol_client::transport::Transport> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for QuietStdioTransport {
+    fn clone(&self) -> Self {
+        Self {
+            child_process: self.child_process.clone(),
+            tx: self.tx.clone(),
+            command: self.command.clone(),
+            args: self.args.clone(),
+            stdin: self.stdin.clone(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -51,6 +190,12 @@ struct McpServer {
     tools: Vec<modelcontextprotocol_client::mcp_protocol::types::tool::Tool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerSummary {
+    pub name: String,
+    pub tool_count: usize,
+}
+
 #[derive(Clone, Default)]
 pub struct McpHub {
     servers: Arc<Mutex<BTreeMap<String, Arc<McpServer>>>>,
@@ -63,8 +208,9 @@ impl McpHub {
 
     pub async fn connect_stdio(&self, cfg: McpServerConfig) -> Result<(), ToolError> {
         validate_component(&cfg.name)?;
+        let name = cfg.name.clone();
 
-        let (transport, mut rx) = StdioTransport::new(&cfg.command, cfg.args.clone());
+        let (transport, mut rx) = QuietStdioTransport::new(&cfg.command, cfg.args.clone());
         let client = Arc::new(
             McpClientBuilder::new("kiliax", "0.1.0")
                 .with_transport(transport)
@@ -82,16 +228,28 @@ impl McpHub {
             }
         });
 
-        client
-            .initialize()
-            .await
-            .map_err(|e| ToolError::Mcp(e.to_string()))?;
-
-        let result = client
-            .list_tools()
-            .await
-            .map_err(|e| ToolError::Mcp(e.to_string()))?;
-        let tools = result.tools;
+        let tools = match tokio::time::timeout(MCP_CONNECT_TIMEOUT, async {
+            client
+                .initialize()
+                .await
+                .map_err(|e| ToolError::Mcp(e.to_string()))?;
+            client
+                .list_tools()
+                .await
+                .map_err(|e| ToolError::Mcp(e.to_string()))
+                .map(|result| result.tools)
+        })
+        .await
+        {
+            Ok(Ok(tools)) => tools,
+            Ok(Err(err)) => return Err(err),
+            Err(_) => {
+                return Err(ToolError::Mcp(format!(
+                    "connect timed out after {}s",
+                    MCP_CONNECT_TIMEOUT.as_secs()
+                )));
+            }
+        };
 
         let server = Arc::new(McpServer {
             client: McpClientHandle::new(client),
@@ -99,8 +257,38 @@ impl McpHub {
         });
 
         let mut map = self.servers.lock().await;
-        map.insert(cfg.name, server);
+        map.insert(name, server);
         Ok(())
+    }
+
+    pub async fn shutdown_server(&self, name: &str) {
+        let server = {
+            let mut map = self.servers.lock().await;
+            map.remove(name)
+        };
+
+        let Some(server) = server else {
+            return;
+        };
+
+        let res = tokio::time::timeout(MCP_SHUTDOWN_TIMEOUT, server.client.shutdown()).await;
+        if let Err(err) = res.unwrap_or_else(|_| Err(anyhow::anyhow!("shutdown timed out"))) {
+            tracing::warn!("mcp shutdown_server({name:?}) error: {err}");
+        }
+    }
+
+    pub async fn shutdown_all(&self) {
+        let servers = {
+            let mut map = self.servers.lock().await;
+            std::mem::take(&mut *map)
+        };
+
+        for (name, server) in servers {
+            let res = tokio::time::timeout(MCP_SHUTDOWN_TIMEOUT, server.client.shutdown()).await;
+            if let Err(err) = res.unwrap_or_else(|_| Err(anyhow::anyhow!("shutdown timed out"))) {
+                tracing::warn!("mcp shutdown_all({name:?}) error: {err}");
+            }
+        }
     }
 
     pub async fn tool_definitions(&self) -> Vec<ToolDefinition> {
@@ -124,6 +312,16 @@ impl McpHub {
             }
         }
         out
+    }
+
+    pub async fn server_summaries(&self) -> Vec<McpServerSummary> {
+        let map = self.servers.lock().await;
+        map.iter()
+            .map(|(name, server)| McpServerSummary {
+                name: name.clone(),
+                tool_count: server.tools.len(),
+            })
+            .collect()
     }
 
     pub async fn call_exposed_tool(
@@ -151,6 +349,10 @@ impl McpHub {
 
     pub fn is_mcp_tool_name(name: &str) -> bool {
         name.starts_with(MCP_PREFIX) && name.matches(MCP_SEP).count() >= 2
+    }
+
+    pub fn parse_exposed_tool_name(name: &str) -> Option<(&str, &str)> {
+        parse_mcp_tool_name(name)
     }
 }
 

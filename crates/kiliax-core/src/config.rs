@@ -48,6 +48,20 @@ pub struct WebSearchConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct McpConfig {
+    #[serde(default)]
+    pub servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Config {
     #[serde(default)]
     pub default_model: Option<String>,
@@ -65,6 +79,9 @@ pub struct Config {
     /// Per-agent runtime overrides (applied after `runtime`).
     #[serde(default)]
     pub agents: AgentsConfig,
+
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,7 +156,11 @@ impl Config {
                             continue;
                         }
                         let qualified = format!("{name}/{model_id}");
-                        if provider.models.iter().any(|m| m == model_id || m == &qualified) {
+                        if provider
+                            .models
+                            .iter()
+                            .any(|m| m == model_id || m == &qualified)
+                        {
                             matches.push(name.as_str());
                         }
                     }
@@ -206,6 +227,9 @@ struct ConfigFile {
 
     #[serde(default)]
     pub agents: AgentsConfig,
+
+    #[serde(default)]
+    pub mcp: McpConfig,
 
     // Shorthand for single-provider config:
     //
@@ -320,6 +344,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         tools,
         runtime,
         agents,
+        mcp,
         provider,
     } = file;
 
@@ -346,6 +371,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         web_search,
         runtime,
         agents,
+        mcp,
     })
 }
 
@@ -390,6 +416,35 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
     validate_agent_runtime_config("runtime", &config.runtime)?;
     validate_agent_runtime_config("agents.plan", &config.agents.plan)?;
     validate_agent_runtime_config("agents.general", &config.agents.general)?;
+
+    validate_mcp_config(&config.mcp)?;
+
+    Ok(())
+}
+
+fn validate_mcp_config(cfg: &McpConfig) -> Result<(), ConfigError> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+
+    for (idx, server) in cfg.servers.iter().enumerate() {
+        let label = format!("mcp.servers[{idx}]");
+
+        if server.name.trim().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "{label}.name must not be empty"
+            )));
+        }
+        if server.command.trim().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "{label}.command must not be empty"
+            )));
+        }
+        if !seen.insert(server.name.trim()) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate mcp server name: {:?}",
+                server.name.trim()
+            )));
+        }
+    }
 
     Ok(())
 }
@@ -578,7 +633,10 @@ mod tests {
         .unwrap();
 
         let loaded = load_from_locations(&cwd, None).unwrap();
-        assert_eq!(loaded.config.web_search.api_key.as_deref(), Some("tvly-test"));
+        assert_eq!(
+            loaded.config.web_search.api_key.as_deref(),
+            Some("tvly-test")
+        );
         assert_eq!(
             loaded.config.web_search.base_url.as_deref(),
             Some("https://api.tavily.com")
@@ -638,9 +696,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolved = cfg
-            .resolve_model("openrouter/openai/gpt-4o-mini")
-            .unwrap();
+        let resolved = cfg.resolve_model("openrouter/openai/gpt-4o-mini").unwrap();
         assert_eq!(resolved.provider, "openrouter");
         assert_eq!(resolved.model, "openai/gpt-4o-mini");
 

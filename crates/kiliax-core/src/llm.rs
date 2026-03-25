@@ -12,9 +12,9 @@ use async_openai::{
         ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType, CompletionUsage,
-        CreateChatCompletionRequestArgs, CreateChatCompletionResponse, FinishReason, FunctionCall,
-        FunctionName, FunctionObject, ImageDetail, ImageUrl,
+        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType,
+        CompletionUsage, CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
+        FinishReason, FunctionCall, FunctionName, FunctionObject, ImageDetail, ImageUrl,
     },
     Client,
 };
@@ -78,7 +78,8 @@ impl LlmClient {
     }
 
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let mut messages: Vec<ChatCompletionRequestMessage> = Vec::with_capacity(req.messages.len());
+        let mut messages: Vec<ChatCompletionRequestMessage> =
+            Vec::with_capacity(req.messages.len());
         for msg in &req.messages {
             messages.push(to_openai_message(msg).await?);
         }
@@ -114,7 +115,8 @@ impl LlmClient {
     }
 
     pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
-        let mut messages: Vec<ChatCompletionRequestMessage> = Vec::with_capacity(req.messages.len());
+        let mut messages: Vec<ChatCompletionRequestMessage> =
+            Vec::with_capacity(req.messages.len());
         for msg in &req.messages {
             messages.push(to_openai_message(msg).await?);
         }
@@ -171,7 +173,10 @@ impl LlmClient {
                             break;
                         }
 
-                        let response = match serde_json::from_str::<ByotCreateChatCompletionStreamResponse>(data) {
+                        let response = match serde_json::from_str::<
+                            ByotCreateChatCompletionStreamResponse,
+                        >(data)
+                        {
                             Ok(resp) => Ok(chat_stream_chunk_from_byot(resp)),
                             Err(err) => Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(err))),
                         };
@@ -191,7 +196,9 @@ impl LlmClient {
             event_source.close();
         });
 
-        Ok(Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx)))
+        Ok(Box::pin(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+        ))
     }
 }
 
@@ -260,12 +267,17 @@ async fn map_eventsource_error(err: reqwest_eventsource::Error) -> OpenAIError {
         reqwest_eventsource::Error::InvalidContentType(_ct, response) => {
             map_api_error_response(response.status(), response).await
         }
-        reqwest_eventsource::Error::StreamEnded => OpenAIError::StreamError("Stream ended".to_string()),
+        reqwest_eventsource::Error::StreamEnded => {
+            OpenAIError::StreamError("Stream ended".to_string())
+        }
         other => OpenAIError::StreamError(other.to_string()),
     }
 }
 
-async fn map_api_error_response(status: reqwest::StatusCode, response: reqwest::Response) -> OpenAIError {
+async fn map_api_error_response(
+    status: reqwest::StatusCode,
+    response: reqwest::Response,
+) -> OpenAIError {
     #[derive(Debug, Deserialize)]
     struct ErrorWrapper {
         error: async_openai::error::ApiError,
@@ -391,7 +403,9 @@ impl UserMessageContent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserContentPart {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     Image {
         /// Local filesystem path or URL.
         path: String,
@@ -403,9 +417,15 @@ pub enum UserContentPart {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
-    Developer { content: String },
-    System { content: String },
-    User { content: UserMessageContent },
+    Developer {
+        content: String,
+    },
+    System {
+        content: String,
+    },
+    User {
+        content: UserMessageContent,
+    },
     Assistant {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content: Option<String>,
@@ -517,36 +537,39 @@ fn to_openai_tool_choice(choice: &ToolChoice) -> ChatCompletionToolChoiceOption 
         ToolChoice::None => ChatCompletionToolChoiceOption::None,
         ToolChoice::Auto => ChatCompletionToolChoiceOption::Auto,
         ToolChoice::Required => ChatCompletionToolChoiceOption::Required,
-        ToolChoice::Named { name } => ChatCompletionToolChoiceOption::Named(
-            ChatCompletionNamedToolChoice {
+        ToolChoice::Named { name } => {
+            ChatCompletionToolChoiceOption::Named(ChatCompletionNamedToolChoice {
                 r#type: ChatCompletionToolType::Function,
                 function: FunctionName { name: name.clone() },
-            },
-        ),
+            })
+        }
     }
 }
 
 async fn to_openai_message(msg: &Message) -> Result<ChatCompletionRequestMessage, LlmError> {
     Ok(match msg {
-        Message::Developer { content } => ChatCompletionRequestMessage::Developer(
-            ChatCompletionRequestDeveloperMessage {
+        Message::Developer { content } => {
+            ChatCompletionRequestMessage::Developer(ChatCompletionRequestDeveloperMessage {
                 content: ChatCompletionRequestDeveloperMessageContent::Text(content.clone()),
                 name: None,
-            },
-        ),
-        Message::System { content } => ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessage {
+            })
+        }
+        Message::System { content } => {
+            ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
                 content: ChatCompletionRequestSystemMessageContent::Text(content.clone()),
                 name: None,
-            },
-        ),
+            })
+        }
         Message::User { content } => {
             ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
                 content: to_openai_user_content(content).await?,
                 name: None,
             })
         }
-        Message::Assistant { content, tool_calls } => {
+        Message::Assistant {
+            content,
+            tool_calls,
+        } => {
             let tool_calls = if tool_calls.is_empty() {
                 None
             } else {
@@ -586,16 +609,18 @@ async fn to_openai_user_content(
     content: &UserMessageContent,
 ) -> Result<ChatCompletionRequestUserMessageContent, LlmError> {
     match content {
-        UserMessageContent::Text(text) => Ok(ChatCompletionRequestUserMessageContent::Text(text.clone())),
+        UserMessageContent::Text(text) => {
+            Ok(ChatCompletionRequestUserMessageContent::Text(text.clone()))
+        }
         UserMessageContent::Parts(parts) => {
             let mut out: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
             for part in parts {
                 match part {
-                    UserContentPart::Text { text } => out.push(
-                        ChatCompletionRequestUserMessageContentPart::Text(
+                    UserContentPart::Text { text } => {
+                        out.push(ChatCompletionRequestUserMessageContentPart::Text(
                             ChatCompletionRequestMessageContentPartText { text: text.clone() },
-                        ),
-                    ),
+                        ))
+                    }
                     UserContentPart::Image { path, detail } => {
                         let image_url = image_url_from_path(path, detail.clone()).await?;
                         out.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
@@ -624,7 +649,10 @@ async fn to_openai_user_content(
 
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
-async fn image_url_from_path(path: &str, detail: Option<ImageDetail>) -> Result<ImageUrl, LlmError> {
+async fn image_url_from_path(
+    path: &str,
+    detail: Option<ImageDetail>,
+) -> Result<ImageUrl, LlmError> {
     let path = path.trim();
     if path.is_empty() {
         return Err(LlmError::InvalidImage("path must not be empty".to_string()));

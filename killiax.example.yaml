@@ -21,6 +21,22 @@ web_search:
   base_url: https://api.tavily.com
   api_key: tvly-your-key
 
+# MCP servers (optional).
+#
+# Kiliax currently supports MCP over stdio (command + args). Each server's tools
+# will be exposed as: `mcp__<server>__<tool>`.
+mcp:
+  servers:
+    # Context7 (docs / library API reference). Requires Node.js + `npx`.
+    # Install/usage: https://context7.com/docs/installation
+    - name: context7
+      command: npx
+      args:
+        - -y
+        - "@upstash/context7-mcp@latest"
+        - --api-key
+        - ctx7-your-api-key
+
 providers:
   moonshot_cn:
     base_url: https://api.moonshot.cn/v1

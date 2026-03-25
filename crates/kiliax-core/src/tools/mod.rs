@@ -3,7 +3,7 @@ pub mod engine;
 pub mod mcp;
 pub mod skills;
 
-pub use engine::ToolEngine;
+pub use engine::{McpServerConnectionState, McpServerStatus, ToolEngine};
 
 use serde::{Deserialize, Serialize};
 

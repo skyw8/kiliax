@@ -296,23 +296,27 @@ impl ModelPicker {
                 self.provider_cursor = 0;
             }
         } else {
-            self.provider_cursor = self.provider_cursor.min(self.filtered_providers.len().saturating_sub(1));
+            self.provider_cursor = self
+                .provider_cursor
+                .min(self.filtered_providers.len().saturating_sub(1));
         }
 
         self.refresh_filtered_models();
 
         if let Some(id) = selected_model_id {
-            if let Some(pos) = self
-                .filtered_models
-                .iter()
-                .position(|&idx| self.selected_provider_models().get(idx).is_some_and(|m| m.id == id))
-            {
+            if let Some(pos) = self.filtered_models.iter().position(|&idx| {
+                self.selected_provider_models()
+                    .get(idx)
+                    .is_some_and(|m| m.id == id)
+            }) {
                 self.model_cursor = pos;
             } else {
                 self.model_cursor = 0;
             }
         } else {
-            self.model_cursor = self.model_cursor.min(self.filtered_models.len().saturating_sub(1));
+            self.model_cursor = self
+                .model_cursor
+                .min(self.filtered_models.len().saturating_sub(1));
         }
 
         if self.focus == ModelPickerFocus::Models && self.filtered_models.is_empty() {
@@ -409,7 +413,10 @@ mod tests {
         assert_eq!(picker.providers().len(), 1);
         assert_eq!(picker.providers()[0].name, "openrouter");
         assert_eq!(picker.providers()[0].models.len(), 1);
-        assert_eq!(picker.providers()[0].models[0].display, "openai/gpt-4o-mini");
+        assert_eq!(
+            picker.providers()[0].models[0].display,
+            "openai/gpt-4o-mini"
+        );
         assert_eq!(
             picker.providers()[0].models[0].id,
             "openrouter/openai/gpt-4o-mini"

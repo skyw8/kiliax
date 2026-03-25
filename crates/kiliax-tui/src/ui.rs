@@ -42,8 +42,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
         return;
     }
 
-    let footer_height = desired_footer_height(app)
-        .min(area.height.saturating_sub(1));
+    let footer_height = desired_footer_height(app).min(area.height.saturating_sub(1));
     let [composer_area, footer_area] = if footer_height == 0 {
         [area, Rect::ZERO]
     } else {
@@ -94,20 +93,17 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
     ]);
     frame.render_widget(Paragraph::new(search_line), search_area);
 
-    let cursor_col = search_prefix.len().saturating_add(display_width(
-        picker.search_text(),
-        picker.search_cursor(),
-    ));
+    let cursor_col = search_prefix
+        .len()
+        .saturating_add(display_width(picker.search_text(), picker.search_cursor()));
     frame.set_cursor_position((
         search_area.x.saturating_add(cursor_col as u16),
         search_area.y,
     ));
 
-    let [providers_area, models_area] = Layout::horizontal([
-        Constraint::Percentage(34),
-        Constraint::Percentage(66),
-    ])
-    .areas(main_area);
+    let [providers_area, models_area] =
+        Layout::horizontal([Constraint::Percentage(34), Constraint::Percentage(66)])
+            .areas(main_area);
 
     frame.render_widget(
         Block::default().style(crate::style::model_picker_providers_panel_style()),
@@ -319,7 +315,10 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let indent = " ".repeat(LIVE_PREFIX_COLS as usize);
-    let mut spans = vec![Span::styled(indent, Style::default()), Span::from("working ").dim()];
+    let mut spans = vec![
+        Span::styled(indent, Style::default()),
+        Span::from("working ").dim(),
+    ];
 
     if let Some(elapsed) = app.turn_elapsed() {
         spans.push(Span::from(fmt_duration_compact(elapsed)).dim());
@@ -378,13 +377,12 @@ fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut remaining = textarea;
     let available_non_input = remaining.height.saturating_sub(1);
-    let queue_height = (queue.len().min(u16::MAX as usize) as u16)
-        .min(available_non_input);
+    let queue_height = (queue.len().min(u16::MAX as usize) as u16).min(available_non_input);
 
     let mut queue_area = Rect::ZERO;
     if queue_height > 0 {
-        let [q, rest] =
-            Layout::vertical([Constraint::Length(queue_height), Constraint::Min(1)]).areas(remaining);
+        let [q, rest] = Layout::vertical([Constraint::Length(queue_height), Constraint::Min(1)])
+            .areas(remaining);
         queue_area = q;
         remaining = rest;
     }

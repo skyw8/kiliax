@@ -67,7 +67,11 @@ async fn main() -> Result<()> {
 
     let profile = profile_override
         .and_then(AgentProfile::from_name)
-        .or_else(|| resumed.as_ref().and_then(|s| AgentProfile::from_name(&s.meta.agent)))
+        .or_else(|| {
+            resumed
+                .as_ref()
+                .and_then(|s| AgentProfile::from_name(&s.meta.agent))
+        })
         .unwrap_or_else(AgentProfile::general);
 
     let (session, messages) = match resumed {
@@ -76,10 +80,14 @@ async fn main() -> Result<()> {
             (session, messages)
         }
         None => {
-            let mut builder =
-                PromptBuilder::for_agent(&profile)
-                    .with_model_id(runtime.llm().route().model_id())
-                    .with_workspace_root(&workspace_root);
+            let mut builder = PromptBuilder::for_agent(&profile)
+                .with_tools({
+                    let mut tools = profile.tools.clone();
+                    tools.extend(runtime.tools().extra_tool_definitions().await);
+                    tools
+                })
+                .with_model_id(runtime.llm().route().model_id())
+                .with_workspace_root(&workspace_root);
             if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
                 builder = builder.add_skills(skills);
             }

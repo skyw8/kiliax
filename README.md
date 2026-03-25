@@ -23,4 +23,7 @@ See `killiax.example.yaml`.
 
 ```bash
 cargo run -p kiliax-tui
+
+
+cd workspace && cargo run -p kiliax-tui --manifest-path=../Cargo.toml                  
 ```

@@ -61,7 +61,14 @@ pub(super) async fn execute(
     let root = workspace_root.to_path_buf();
 
     let mut entries = tokio::task::spawn_blocking(move || {
-        list_dir_blocking(&root, &base, recursive, max_depth, include_hidden, max_entries)
+        list_dir_blocking(
+            &root,
+            &base,
+            recursive,
+            max_depth,
+            include_hidden,
+            max_entries,
+        )
     })
     .await
     .map_err(|e| ToolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
@@ -122,16 +129,16 @@ fn list_dir_blocking(
             if out.len() >= max_entries {
                 break;
             }
-            let rel = crate::prompt::workspace_relative_path(workspace_root, d)
-                .unwrap_or(d.as_path());
+            let rel =
+                crate::prompt::workspace_relative_path(workspace_root, d).unwrap_or(d.as_path());
             out.push(format!("{}/", rel.to_string_lossy().replace('\\', "/")));
         }
         for f in &files {
             if out.len() >= max_entries {
                 break;
             }
-            let rel = crate::prompt::workspace_relative_path(workspace_root, f)
-                .unwrap_or(f.as_path());
+            let rel =
+                crate::prompt::workspace_relative_path(workspace_root, f).unwrap_or(f.as_path());
             out.push(rel.to_string_lossy().replace('\\', "/"));
         }
 
@@ -144,4 +151,3 @@ fn list_dir_blocking(
 
     Ok(out)
 }
-

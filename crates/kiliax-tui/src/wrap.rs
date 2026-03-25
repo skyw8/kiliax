@@ -87,10 +87,7 @@ mod tests {
         let a = Style::default().fg(Color::Red);
         let b = Style::default().fg(Color::Blue);
 
-        let line = Line::from(vec![
-            Span::styled("ab", a),
-            Span::styled("cd", b),
-        ]);
+        let line = Line::from(vec![Span::styled("ab", a), Span::styled("cd", b)]);
 
         let wrapped = wrap_lines(&[line], 3);
         assert_eq!(wrapped.len(), 2);

@@ -77,4 +77,3 @@ pub(super) fn resolve_read_path(workspace_root: &Path, path: &str) -> Result<Pat
         ),
     })
 }
-

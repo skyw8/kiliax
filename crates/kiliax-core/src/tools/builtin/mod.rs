@@ -14,14 +14,14 @@ pub use list_dir::list_dir_tool_definition;
 pub use read_file::read_file_tool_definition;
 pub use shell::{shell_command_tool_definition, write_stdin_tool_definition, ShellSessions};
 pub use update_plan::update_plan_tool_definition;
+pub(crate) use view_image::execute_with_attachment as execute_view_image_with_attachment;
 pub use view_image::view_image_tool_definition;
 pub use web_search::web_search_tool_definition;
-pub(crate) use view_image::execute_with_attachment as execute_view_image_with_attachment;
 
 use std::path::Path;
 
-use crate::llm::ToolCall;
 use crate::config::Config;
+use crate::llm::ToolCall;
 use crate::tools::{Permissions, ToolError};
 
 pub const TOOL_READ_FILE: &str = "read_file";

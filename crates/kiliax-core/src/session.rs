@@ -11,8 +11,9 @@ use crate::llm::Message;
 const SESSION_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_CHECKPOINT_EVERY: u64 = 32;
 
-const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] =
-    time::macros::format_description!("[year][month][day]T[hour][minute][second]Z_[subsecond digits:3]");
+const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
+    "[year][month][day]T[hour][minute][second]Z_[subsecond digits:3]"
+);
 
 /// Session identifier used as the on-disk directory name.
 ///
@@ -39,7 +40,9 @@ impl SessionId {
     pub fn parse(s: impl AsRef<str>) -> Result<Self, SessionError> {
         let s = s.as_ref().trim();
         if s.is_empty() {
-            return Err(SessionError::InvalidId("session id must not be empty".to_string()));
+            return Err(SessionError::InvalidId(
+                "session id must not be empty".to_string(),
+            ));
         }
         if !s
             .chars()
@@ -392,14 +395,22 @@ impl FileSessionStore {
         apply_event(state, event, ts_ms, seq);
         self.write_meta(&state.meta).await?;
 
-        if state.meta.last_seq.saturating_sub(state.meta.last_snapshot_seq) >= self.checkpoint_every {
+        if state
+            .meta
+            .last_seq
+            .saturating_sub(state.meta.last_snapshot_seq)
+            >= self.checkpoint_every
+        {
             self.checkpoint(state).await?;
         }
 
         Ok(())
     }
 
-    async fn replay_events_after_snapshot(&self, state: &mut SessionState) -> Result<(), SessionError> {
+    async fn replay_events_after_snapshot(
+        &self,
+        state: &mut SessionState,
+    ) -> Result<(), SessionError> {
         let id = state.meta.id.clone();
         let path = self.events_path(&id);
         let file = match tokio::fs::File::open(&path).await {
@@ -450,7 +461,11 @@ impl FileSessionStore {
         Ok(())
     }
 
-    async fn append_event_line(&self, id: &SessionId, line: &SessionEventLine) -> Result<(), SessionError> {
+    async fn append_event_line(
+        &self,
+        id: &SessionId,
+        line: &SessionEventLine,
+    ) -> Result<(), SessionError> {
         let text = serde_json::to_string(line).map_err(SessionError::Serialize)?;
         let path = self.events_path(id);
 
@@ -470,7 +485,11 @@ impl FileSessionStore {
         write_json_atomic(&path, meta).await
     }
 
-    async fn write_snapshot(&self, meta: &SessionMeta, messages: &[Message]) -> Result<(), SessionError> {
+    async fn write_snapshot(
+        &self,
+        meta: &SessionMeta,
+        messages: &[Message],
+    ) -> Result<(), SessionError> {
         let path = self.snapshot_path(&meta.id);
         let snapshot = SessionSnapshot {
             schema_version: SESSION_SCHEMA_VERSION,
@@ -489,7 +508,8 @@ impl FileSessionStore {
                 e.into()
             }
         })?;
-        let snapshot: SessionSnapshot = serde_json::from_str(&text).map_err(SessionError::Deserialize)?;
+        let snapshot: SessionSnapshot =
+            serde_json::from_str(&text).map_err(SessionError::Deserialize)?;
         if snapshot.schema_version > SESSION_SCHEMA_VERSION {
             return Err(SessionError::UnsupportedSchema(snapshot.schema_version));
         }

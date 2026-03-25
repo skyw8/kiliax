@@ -113,12 +113,12 @@ impl AgentRuntime {
         mut messages: Vec<Message>,
         options: AgentRuntimeOptions,
     ) -> Result<AgentRunOutput, AgentRuntimeError> {
-        let tool_defs = self.tool_definitions(profile).await;
         let perms = std::sync::Arc::new(profile.permissions.clone());
 
         for step in 0..options.max_steps {
+            let tool_defs = tool_definitions_for(profile, &self.tools).await;
             let mut req = ChatRequest::new(messages.clone());
-            req.tools = tool_defs.clone();
+            req.tools = tool_defs;
             req.tool_choice = options.tool_choice.clone();
             req.parallel_tool_calls = options.parallel_tool_calls;
             req.temperature = options.temperature;
@@ -238,7 +238,6 @@ impl AgentRuntime {
     > {
         use tokio_stream::wrappers::ReceiverStream;
 
-        let tool_defs = self.tool_definitions(profile).await;
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(64);
 
         let llm = self.llm.clone();
@@ -257,7 +256,7 @@ impl AgentRuntime {
                 }
 
                 let mut req = ChatRequest::new(messages.clone());
-                req.tools = tool_defs.clone();
+                req.tools = tool_definitions_for(&profile, &tools).await;
                 req.tool_choice = options.tool_choice.clone();
                 req.parallel_tool_calls = options.parallel_tool_calls;
                 req.temperature = options.temperature;
@@ -350,7 +349,8 @@ impl AgentRuntime {
 
                                     if calls.len() == 1 {
                                         let call = &calls[0];
-                                        match tools.execute_to_messages(perms.as_ref(), call).await {
+                                        match tools.execute_to_messages(perms.as_ref(), call).await
+                                        {
                                             Ok(tool_msgs) => {
                                                 for msg in tool_msgs {
                                                     let _ = tx
@@ -390,13 +390,15 @@ impl AgentRuntime {
                                         let tools = tools.clone();
                                         let perms = perms.clone();
                                         set.spawn(async move {
-                                            let res =
-                                                tools.execute_to_messages(perms.as_ref(), &call).await;
+                                            let res = tools
+                                                .execute_to_messages(perms.as_ref(), &call)
+                                                .await;
                                             (idx, call, res)
                                         });
                                     }
 
-                                    let mut results: Vec<Option<Vec<Message>>> = vec![None; calls.len()];
+                                    let mut results: Vec<Option<Vec<Message>>> =
+                                        vec![None; calls.len()];
                                     while let Some(joined) = set.join_next().await {
                                         if tx.is_closed() {
                                             return;
@@ -472,13 +474,15 @@ impl AgentRuntime {
 
         Ok(ReceiverStream::new(rx))
     }
+}
 
-    async fn tool_definitions(&self, profile: &AgentProfile) -> Vec<crate::llm::ToolDefinition> {
-        let mut tools = profile.tools.clone();
-        let extra = self.tools.extra_tool_definitions().await;
-        tools.extend(extra);
-        tools
-    }
+async fn tool_definitions_for(
+    profile: &AgentProfile,
+    tools: &ToolEngine,
+) -> Vec<crate::llm::ToolDefinition> {
+    let mut tool_defs = profile.tools.clone();
+    tool_defs.extend(tools.extra_tool_definitions().await);
+    tool_defs
 }
 
 #[derive(Debug, Clone)]
@@ -792,8 +796,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn drive_stream_step_generates_tool_call_id_and_unknown_name_when_missing() {
-        let (tx, _rx) =
-            tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
 
         let chunks = vec![Ok(ChatStreamChunk {
             id: "chat_1".to_string(),

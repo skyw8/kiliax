@@ -81,12 +81,12 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
             out.insert(
                 id.clone(),
                 Skill {
-                id,
-                name,
-                path: md,
-                description,
-                content: parsed.content,
-            },
+                    id,
+                    name,
+                    path: md,
+                    description,
+                    content: parsed.content,
+                },
             );
         }
     }

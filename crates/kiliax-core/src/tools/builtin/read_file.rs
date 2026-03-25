@@ -98,4 +98,3 @@ fn slice_lines(text: &str, start_line: Option<usize>, end_line: Option<usize>) -
     }
     out
 }
-

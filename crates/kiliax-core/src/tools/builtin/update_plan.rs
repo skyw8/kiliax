@@ -54,4 +54,3 @@ struct UpdatePlanItem {
     #[allow(dead_code)]
     status: String,
 }
-

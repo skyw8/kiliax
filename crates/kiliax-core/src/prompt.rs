@@ -2,13 +2,16 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::AgentProfile;
 use crate::llm::{Message, ToolDefinition, UserMessageContent};
-use crate::tools::{tool_parallelism, ToolParallelism};
 use crate::tools::skills::Skill;
+use crate::tools::{tool_parallelism, ToolParallelism};
 
 const CODEX_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/codex.md"));
 const TOOLS_RULES_PROMPT: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools.md"));
-const SKILLS_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/how_to_use_skills.md"));
+const SKILLS_PROMPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/how_to_use_skills.md"
+));
 const SKILLS_INSTRUCTIONS_OPEN_TAG: &str = "<skills_instructions>";
 const SKILLS_INSTRUCTIONS_CLOSE_TAG: &str = "</skills_instructions>";
 const ENV_OPEN_TAG: &str = "<env>";
@@ -288,7 +291,10 @@ fn render_tools_prompt(tools: &[ToolDefinition]) -> String {
         lines.push(format!("- Parallel-safe: {}", parallel.join(", ")));
     }
     if !exclusive.is_empty() {
-        lines.push(format!("- Serial-only (won't run concurrently): {}", exclusive.join(", ")));
+        lines.push(format!(
+            "- Serial-only (won't run concurrently): {}",
+            exclusive.join(", ")
+        ));
     }
     lines.push(
         "- You MAY include multiple tool calls in one assistant message; parallel-safe calls may run concurrently."
@@ -364,8 +370,12 @@ mod tests {
         assert_eq!(msgs.len(), 4);
         assert!(matches!(&msgs[0], Message::System { content } if content.contains("Codex CLI")));
         assert!(matches!(&msgs[1], Message::System { content } if content == "agent"));
-        assert!(matches!(&msgs[2], Message::System { content } if content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG)));
-        assert!(matches!(&msgs[3], Message::User { content: UserMessageContent::Text(content) } if content == "hi"));
+        assert!(
+            matches!(&msgs[2], Message::System { content } if content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG))
+        );
+        assert!(
+            matches!(&msgs[3], Message::User { content: UserMessageContent::Text(content) } if content == "hi")
+        );
     }
 
     #[test]

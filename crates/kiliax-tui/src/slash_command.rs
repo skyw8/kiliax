@@ -3,6 +3,7 @@ pub enum SlashCommand {
     New,
     Model,
     Agent,
+    Mcp,
 }
 
 impl SlashCommand {
@@ -11,6 +12,7 @@ impl SlashCommand {
             SlashCommand::New => "new",
             SlashCommand::Model => "model",
             SlashCommand::Agent => "agent",
+            SlashCommand::Mcp => "mcp",
         }
     }
 
@@ -19,6 +21,7 @@ impl SlashCommand {
             SlashCommand::New => &[],
             SlashCommand::Model => &[],
             SlashCommand::Agent => &["a"],
+            SlashCommand::Mcp => &[],
         }
     }
 
@@ -27,6 +30,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new session",
             SlashCommand::Model => "choose provider/model",
             SlashCommand::Agent => "switch agent (plan/general)",
+            SlashCommand::Mcp => "show MCP server status",
         }
     }
 
@@ -37,7 +41,12 @@ impl SlashCommand {
 
 pub fn all_commands() -> &'static [SlashCommand] {
     // Order is presentation order in the popup.
-    &[SlashCommand::New, SlashCommand::Model, SlashCommand::Agent]
+    &[
+        SlashCommand::New,
+        SlashCommand::Model,
+        SlashCommand::Agent,
+        SlashCommand::Mcp,
+    ]
 }
 
 pub fn find_command(name: &str) -> Option<SlashCommand> {
@@ -50,11 +59,7 @@ pub fn find_command(name: &str) -> Option<SlashCommand> {
         if name.eq_ignore_ascii_case(cmd.command()) {
             return Some(*cmd);
         }
-        if cmd
-            .aliases()
-            .iter()
-            .any(|a| name.eq_ignore_ascii_case(a))
-        {
+        if cmd.aliases().iter().any(|a| name.eq_ignore_ascii_case(a)) {
             return Some(*cmd);
         }
     }
@@ -213,6 +218,7 @@ mod tests {
         assert_eq!(find_command("agent"), Some(SlashCommand::Agent));
         assert_eq!(find_command("a"), Some(SlashCommand::Agent));
         assert_eq!(find_command("model"), Some(SlashCommand::Model));
+        assert_eq!(find_command("mcp"), Some(SlashCommand::Mcp));
         assert_eq!(find_command("unknown"), None);
     }
 

@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use crossterm::cursor::{MoveDown, MoveTo, MoveToColumn, RestorePosition, SavePosition};
 use crossterm::queue;
-use crossterm::style::{Attribute, Color as CColor, Print, SetAttribute, SetForegroundColor};
 use crossterm::style::SetBackgroundColor;
+use crossterm::style::{Attribute, Color as CColor, Print, SetAttribute, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use ratatui::layout::{Rect, Size};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::style::Stylize;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
@@ -86,14 +86,16 @@ pub fn insert_history_lines(
         // Some terminals can character-wrap long lines onto continuation rows. Pre-clear those
         // rows so stale content from a previously longer line is erased. This should usually be
         // a no-op because we pre-wrap, but is kept for codex parity.
-        let physical_rows = line
-            .width()
-            .max(1)
-            .div_ceil(render_width.max(1));
+        let physical_rows = line.width().max(1).div_ceil(render_width.max(1));
         if physical_rows > 1 {
             queue!(out, SavePosition)?;
             for _ in 1..physical_rows {
-                queue!(out, MoveDown(1), MoveToColumn(0), Clear(ClearType::UntilNewLine))?;
+                queue!(
+                    out,
+                    MoveDown(1),
+                    MoveToColumn(0),
+                    Clear(ClearType::UntilNewLine)
+                )?;
             }
             queue!(out, RestorePosition)?;
         }
@@ -161,7 +163,11 @@ fn parse_divider_marker(line: &Line<'static>) -> Option<DividerMarker> {
     Some(DividerMarker { ms, output_tokens })
 }
 
-fn render_divider_block(elapsed: Duration, output_tokens: Option<u64>, width: usize) -> Vec<Line<'static>> {
+fn render_divider_block(
+    elapsed: Duration,
+    output_tokens: Option<u64>,
+    width: usize,
+) -> Vec<Line<'static>> {
     vec![
         Line::from(""),
         render_divider_line(elapsed, output_tokens, width),
@@ -169,7 +175,11 @@ fn render_divider_block(elapsed: Duration, output_tokens: Option<u64>, width: us
     ]
 }
 
-fn render_divider_line(elapsed: Duration, output_tokens: Option<u64>, width: usize) -> Line<'static> {
+fn render_divider_line(
+    elapsed: Duration,
+    output_tokens: Option<u64>,
+    width: usize,
+) -> Line<'static> {
     let mut label = format!("Worked for {}", fmt_elapsed_compact(elapsed));
     if let Some(output_tokens) = output_tokens {
         label.push_str(&format!(" · {output_tokens} tok"));
