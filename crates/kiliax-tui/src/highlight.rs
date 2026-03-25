@@ -9,6 +9,7 @@ use syntect::highlighting::{
     ThemeItem, ThemeSettings,
 };
 use syntect::parsing::{SyntaxReference, SyntaxSet};
+use syntect::util::LinesWithEndings;
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME: LazyLock<Theme> = LazyLock::new(vscode_dark_plus_theme);
@@ -26,16 +27,29 @@ pub fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'static>> {
     let mut highlighter = HighlightLines::new(syntax, &THEME);
     let mut out = Vec::new();
 
-    for line in code.lines() {
+    for line in LinesWithEndings::from(code) {
         match highlighter.highlight_line(line, &SYNTAX_SET) {
             Ok(ranges) => {
                 let spans: Vec<Span<'static>> = ranges
                     .into_iter()
-                    .map(|(style, text)| Span::styled(text.to_string(), syntect_style(style)))
+                    .filter_map(|(style, text)| {
+                        let text = text
+                            .strip_suffix('\n')
+                            .unwrap_or(text)
+                            .strip_suffix('\r')
+                            .unwrap_or(text);
+                        if text.is_empty() {
+                            return None;
+                        }
+                        Some(Span::styled(text.to_string(), syntect_style(style)))
+                    })
                     .collect();
                 out.push(Line::from(spans));
             }
-            Err(_) => out.push(Line::from(line.to_string())),
+            Err(_) => out.push(Line::from(
+                line.trim_end_matches(|ch| ch == '\n' || ch == '\r')
+                    .to_string(),
+            )),
         }
     }
 
@@ -153,5 +167,49 @@ fn hex_color(rgb: u32) -> SyntectColor {
         g: ((rgb >> 8) & 0xFF) as u8,
         b: (rgb & 0xFF) as u8,
         a: 0xFF,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    fn line_contains_style(line: &Line<'static>, needle: &str) -> Option<Style> {
+        line.spans
+            .iter()
+            .find(|span| span.content.as_ref().contains(needle))
+            .map(|span| span.style)
+    }
+
+    #[test]
+    fn comment_does_not_bleed_into_next_line() {
+        let code = "# comment\nclass A:\n    pass\n";
+        let lines = highlight_code_to_lines(code, "python");
+        assert!(lines.len() >= 2, "expected at least 2 lines, got {}", lines.len());
+
+        let comment_style = Style::default().fg(Color::Rgb(0x6A, 0x99, 0x55));
+        let class_style =
+            line_contains_style(&lines[1], "class").expect("expected 'class' to be highlighted");
+
+        assert_ne!(
+            class_style, comment_style,
+            "expected 'class' not to use comment style"
+        );
+    }
+
+    #[test]
+    fn highlighted_output_never_includes_newline_characters() {
+        let code = "# c\r\nx = 1\r\n";
+        let lines = highlight_code_to_lines(code, "python");
+        for line in lines {
+            for span in line.spans {
+                let text = span.content.as_ref();
+                assert!(
+                    !text.contains('\n') && !text.contains('\r'),
+                    "span contains newline characters: {text:?}"
+                );
+            }
+        }
     }
 }
