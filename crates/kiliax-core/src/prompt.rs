@@ -6,8 +6,6 @@ use crate::tools::skills::Skill;
 use crate::tools::{tool_parallelism, ToolParallelism};
 
 const CODEX_PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/codex.md"));
-const TOOLS_RULES_PROMPT: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools.md"));
 const SKILLS_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/how_to_use_skills.md"
@@ -301,11 +299,6 @@ fn render_tools_prompt(tools: &[ToolDefinition]) -> String {
             .to_string(),
     );
     lines.push("- Only parallelize independent tool calls.".to_string());
-
-    if !TOOLS_RULES_PROMPT.trim().is_empty() {
-        lines.push(String::new());
-        lines.push(TOOLS_RULES_PROMPT.trim().to_string());
-    }
 
     lines.join("\n")
 }

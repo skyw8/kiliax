@@ -17,12 +17,15 @@ use super::{TOOL_SHELL_COMMAND, TOOL_WRITE_STDIN};
 pub fn shell_command_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_SHELL_COMMAND.to_string(),
-        description: Some("Run a command in the workspace (argv form).".to_string()),
+        description: Some(
+            "Run a command in the workspace (argv array; no shell quoting). If the result includes `session_id`, use `write_stdin` to interact/poll."
+                .to_string(),
+        ),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
-                "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-                "cwd": { "type": "string", "description": "Optional working dir relative to workspace root." },
+                "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Command argv array. Do not pass a single shell-quoted string." },
+                "cwd": { "type": "string", "description": "Optional working dir relative to workspace root (no `..`)." },
                 "yield_time_ms": { "type": "integer", "minimum": 0, "description": "If >0, return after this time with partial output and a session_id if still running." },
                 "max_output_bytes": { "type": "integer", "minimum": 1, "description": "Maximum bytes to return per call (stdout+stderr best effort)." }
             },

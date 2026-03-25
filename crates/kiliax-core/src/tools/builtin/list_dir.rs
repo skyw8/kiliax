@@ -15,7 +15,7 @@ pub fn list_dir_tool_definition() -> ToolDefinition {
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Directory path relative to workspace root." },
+                "path": { "type": "string", "description": "Directory path relative to workspace root (no `..`)." },
                 "recursive": { "type": "boolean", "description": "Recurse into subdirectories.", "default": false },
                 "max_depth": { "type": "integer", "minimum": 1, "description": "Maximum recursion depth (when recursive)." },
                 "include_hidden": { "type": "boolean", "description": "Include entries starting with '.'.", "default": false },

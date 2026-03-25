@@ -12,13 +12,13 @@ pub fn view_image_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_VIEW_IMAGE.to_string(),
         description: Some(
-            "View (attach) a local image from the filesystem. Use this when you need to look at an image file that exists locally."
+            "View (attach) a local image from the filesystem. Supported: png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif."
                 .to_string(),
         ),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Image path relative to workspace root, or an absolute path within an allowed skills directory." }
+                "path": { "type": "string", "description": "Image path relative to workspace root (no `..`), or an absolute path within an allowed skills root." }
             },
             "required": ["path"],
             "additionalProperties": false

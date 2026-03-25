@@ -13,13 +13,13 @@ pub fn read_file_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_READ_FILE.to_string(),
         description: Some(
-            "Read a UTF-8 text file from the workspace (or allowed skills directories)."
+            "Read a UTF-8 text file from the workspace (or allowed skills roots)."
                 .to_string(),
         ),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Path relative to workspace root, or an absolute path within an allowed skills directory." },
+                "path": { "type": "string", "description": "Path relative to workspace root (no `..`), or an absolute path within an allowed skills root. Prefer workspace-relative paths; for skill files use the absolute path under the skill directory." },
                 "start_line": { "type": "integer", "minimum": 1, "description": "1-based start line (inclusive)." },
                 "end_line": { "type": "integer", "minimum": 1, "description": "1-based end line (inclusive)." },
                 "max_bytes": { "type": "integer", "minimum": 1, "description": "Maximum bytes to read (best effort)." }

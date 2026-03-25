@@ -19,7 +19,7 @@ pub fn grep_files_tool_definition() -> ToolDefinition {
             "type": "object",
             "properties": {
                 "pattern": { "type": "string", "description": "Rust regex pattern to search for." },
-                "path": { "type": "string", "description": "Directory path relative to workspace root.", "default": "." },
+                "path": { "type": "string", "description": "Directory path relative to workspace root (no `..`).", "default": "." },
                 "case_sensitive": { "type": "boolean", "description": "Case-sensitive search.", "default": true },
                 "max_results": { "type": "integer", "minimum": 1, "description": "Maximum matches to return." },
                 "max_bytes_per_file": { "type": "integer", "minimum": 1, "description": "Skip files larger than this size in bytes." },

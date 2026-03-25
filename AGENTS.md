@@ -28,7 +28,6 @@ minimal
   - `codex.md`: 模型层提示词（默认，用于 gpt 系列）
   - `plan.md`: plan agent 提示词（只读/受限命令）
   - `general.md`: general agent 提示词（可写/可执行）
-  - `tools.md`: 工具使用规则（工具列表/并行能力由 `PromptBuilder` 动态注入）
   - `how_to_use_skills.md`: skills 使用规范（与 skills 列表一起注入）
 - `crates/kiliax-core/examples/`: 可运行示例
   - `chat_hello.rs`: 非流式 chat 示例
@@ -38,7 +37,7 @@ minimal
 - `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、model 路由（按首个 `/` 分割，支持 `openrouter/openai/gpt-4o-mini` 这类 model id）；多 provider 时可按 `providers.*.models` 反查唯一 provider；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；MCP 配置（`mcp.servers`: stdio command+args）；包含 config 优先级/resolve_model 单元测试
 - `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；User 输入支持 `UserMessageContent`（text + local image path → data URL base64）；流式用 `reqwest-eventsource` 直连 SSE（4xx 会读取 body 并转换为 `ApiError`），并解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`；工具 schema 默认不发送 `strict` 以提升兼容性
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
-- `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染，并标注可并行工具）
+- `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 动态刷新 tool definitions 以便 MCP tools 就绪后可进入后续 step）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
