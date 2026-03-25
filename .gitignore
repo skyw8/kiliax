@@ -11,3 +11,5 @@ killiax.yaml
 .killiax/sessions
 
 tmp
+.killiax
+workspace
