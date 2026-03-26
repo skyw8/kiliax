@@ -5,7 +5,7 @@ set -e
 # Usage: curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/main/install.sh | bash
 
 REPO="skyw8/kiliax"
-BINARY_NAME="kiliax-tui"
+BINARY_NAME="kiliax"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 # Detect platform
@@ -106,7 +106,17 @@ main() {
         echo ""
         "$BINARY_NAME" --version 2>/dev/null || true
         echo ""
-        echo "Run '$BINARY_NAME --help' to get started"
+
+        # Create ki alias
+        ki_path="$INSTALL_DIR/ki"
+        if [ -w "$INSTALL_DIR" ]; then
+            ln -sf "$INSTALL_DIR/$BINARY_NAME" "$ki_path"
+        else
+            sudo ln -sf "$INSTALL_DIR/$BINARY_NAME" "$ki_path"
+        fi
+        echo "✅ Created alias: ki -> $BINARY_NAME"
+        echo ""
+        echo "Run 'kiliax --help' or 'ki --help' to get started"
     else
         echo "⚠️  Installation complete, but $INSTALL_DIR is not in your PATH"
         echo "Add this to your ~/.bashrc or ~/.zshrc:"

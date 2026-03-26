@@ -1,10 +1,10 @@
-# kiliax-tui installation script for Windows
+# kiliax installation script for Windows
 # Usage: iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
 $Repo = "skyw8/kiliax"
-$BinaryName = "kiliax-tui"
+$BinaryName = "kiliax"
 $InstallDir = $env:INSTALL_DIR
 if (-not $InstallDir) {
     $InstallDir = "$env:LOCALAPPDATA\Programs\kiliax"
@@ -84,7 +84,13 @@ function Main {
         Write-Host ""
         & "$InstallDir\$BinaryName.exe" --version 2>$null
         Write-Host ""
-        Write-Host "Run '$BinaryName --help' to get started" -ForegroundColor Cyan
+
+        # Create ki alias
+        $kiPath = "$InstallDir\ki.exe"
+        Copy-Item "$InstallDir\$BinaryName.exe" $kiPath -Force
+        Write-Host "✅ Created alias: ki -> $BinaryName" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Run 'kiliax --help' or 'ki --help' to get started" -ForegroundColor Cyan
     }
     finally {
         Remove-Item -Path $tmpDir\* -Recurse -Force -ErrorAction SilentlyContinue

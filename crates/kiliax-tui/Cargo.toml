@@ -1,5 +1,5 @@
 [package]
-name = "kiliax-tui"
+name = "kiliax"
 edition.workspace = true
 version.workspace = true
 

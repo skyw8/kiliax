@@ -17,20 +17,20 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary_name: kiliax-tui
-            asset_name: kiliax-tui-linux-x64
+            binary_name: kiliax
+            asset_name: kiliax-linux-x64
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary_name: kiliax-tui
-            asset_name: kiliax-tui-macos-arm64
+            binary_name: kiliax
+            asset_name: kiliax-macos-arm64
           - os: macos-13
             target: x86_64-apple-darwin
-            binary_name: kiliax-tui
-            asset_name: kiliax-tui-macos-x64
+            binary_name: kiliax
+            asset_name: kiliax-macos-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_name: kiliax-tui.exe
-            asset_name: kiliax-tui-windows-x64.exe
+            binary_name: kiliax.exe
+            asset_name: kiliax-windows-x64.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build (release)
-        run: cargo build --release -p kiliax-tui --target ${{ matrix.target }}
+        run: cargo build --release -p kiliax --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'

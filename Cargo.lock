@@ -1199,6 +1199,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiliax"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "crossterm",
+ "futures-util",
+ "image",
+ "kiliax-core",
+ "pulldown-cmark",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "shlex",
+ "syntect",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "unicode-width 0.2.0",
+ "url",
+]
+
+[[package]]
 name = "kiliax-core"
 version = "0.1.0"
 dependencies = [
@@ -1225,29 +1248,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
-]
-
-[[package]]
-name = "kiliax-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "crossterm",
- "futures-util",
- "image",
- "kiliax-core",
- "pulldown-cmark",
- "ratatui",
- "serde",
- "serde_json",
- "shlex",
- "syntect",
- "tempfile",
- "tokio",
- "tokio-stream",
- "unicode-width 0.2.0",
- "url",
 ]
 
 [[package]]
