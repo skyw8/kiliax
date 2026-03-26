@@ -45,34 +45,13 @@ main() {
     platform=$(detect_platform)
     echo "[+] Platform: $platform"
 
-    # Check current version
-    current_version=""
-    if command -v "$BINARY_NAME" &> /dev/null; then
-        current_version=$($BINARY_NAME --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
-        if [ -n "$current_version" ]; then
-            echo "[i] Current version: $current_version"
-        fi
-    fi
-
     echo "[*] Fetching latest version..."
     version=$(get_latest_version)
     if [ -z "$version" ]; then
         echo "[!] Failed to get latest version"
         exit 1
     fi
-
-    # Compare versions
-    if [ "$current_version" = "$version" ] && [ -z "$FORCE" ]; then
-        echo "[+] Already up to date ($version)"
-        echo "    Use FORCE=1 to reinstall anyway"
-        exit 0
-    fi
-
-    if [ -n "$current_version" ]; then
-        echo "[^] Updating: $current_version -> $version"
-    else
-        echo "[+] Version: $version"
-    fi
+    echo "[+] Version: $version"
 
     # Build download URL
     download_url="https://github.com/$REPO/releases/download/$version/${BINARY_NAME}-${platform}"
@@ -94,10 +73,10 @@ main() {
     # Install
     echo "[*] Installing to: $INSTALL_DIR"
     if [ -w "$INSTALL_DIR" ]; then
-        mv "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
+        mv -f "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
     else
         echo "[*] Elevated permissions required..."
-        sudo mv "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
+        sudo mv -f "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
     fi
 
     # Verify

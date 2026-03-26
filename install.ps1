@@ -29,34 +29,9 @@ function Main {
     $platform = Detect-Platform
     Write-Host "[+] Platform: $platform" -ForegroundColor Green
 
-    # Check current version
-    $currentVersion = $null
-    $installedPath = "$InstallDir\$BinaryName.exe"
-    if (Test-Path $installedPath) {
-        try {
-            $versionOutput = & $installedPath --version 2>$null
-            if ($versionOutput -match 'v?(\d+\.\d+\.\d+)') {
-                $currentVersion = "v" + $Matches[1]
-                Write-Host "[i] Current version: $currentVersion" -ForegroundColor Gray
-            }
-        } catch { }
-    }
-
     Write-Host "[*] Fetching latest version..." -ForegroundColor Cyan
     $version = Get-LatestVersion
-
-    # Compare versions
-    if ($currentVersion -eq $version -and -not $env:FORCE) {
-        Write-Host "[+] Already up to date ($version)" -ForegroundColor Green
-        Write-Host "    Set `$env:FORCE=1 to reinstall anyway" -ForegroundColor Gray
-        return
-    }
-
-    if ($currentVersion) {
-        Write-Host "[^] Updating: $currentVersion -> $version" -ForegroundColor Yellow
-    } else {
-        Write-Host "[+] Version: $version" -ForegroundColor Green
-    }
+    Write-Host "[+] Version: $version" -ForegroundColor Green
 
     $downloadUrl = "https://github.com/$Repo/releases/download/$version/${BinaryName}-${platform}.exe"
     Write-Host "[v] Downloading from: $downloadUrl" -ForegroundColor Cyan
@@ -70,7 +45,18 @@ function Main {
         Write-Host "[*] Installing to: $InstallDir" -ForegroundColor Cyan
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-        Move-Item -Path $tmpFile -Destination "$InstallDir\$BinaryName.exe" -Force
+        $targetPath = "$InstallDir\$BinaryName.exe"
+        if (Test-Path $targetPath) {
+            # Stop running process if any
+            $process = Get-Process -Name $BinaryName -ErrorAction SilentlyContinue
+            if ($process) {
+                Write-Host "[*] Stopping running $BinaryName..." -ForegroundColor Cyan
+                Stop-Process -Name $BinaryName -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 500
+            }
+            Remove-Item -Path $targetPath -Force
+        }
+        Move-Item -Path $tmpFile -Destination $targetPath -Force
 
         # Add to PATH if not already present
         $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
