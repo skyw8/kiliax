@@ -128,7 +128,7 @@ Just let me know what changes you'd like to make!
         let input = "\
 | 文件名 | 类型 | 描述 |
 | --- | --- | --- |
-| killiax.yaml | 配置 | 项目配置 |
+| kiliax.yaml | 配置 | 项目配置 |
 ";
 
         let lines = to_plain_lines(render_markdown_lines(input));
@@ -137,7 +137,7 @@ Just let me know what changes you'd like to make!
             vec![
                 "| 文件名 | 类型 | 描述 |".to_string(),
                 "| --- | --- | --- |".to_string(),
-                "| killiax.yaml | 配置 | 项目配置 |".to_string(),
+                "| kiliax.yaml | 配置 | 项目配置 |".to_string(),
             ]
         );
     }

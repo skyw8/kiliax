@@ -858,7 +858,9 @@ struct ByotFunctionCall {
     pub arguments: Option<String>,
 }
 
-fn chat_response_from_byot(resp: ByotCreateChatCompletionResponse) -> Result<ChatResponse, LlmError> {
+fn chat_response_from_byot(
+    resp: ByotCreateChatCompletionResponse,
+) -> Result<ChatResponse, LlmError> {
     let ByotCreateChatCompletionResponse {
         id,
         created,

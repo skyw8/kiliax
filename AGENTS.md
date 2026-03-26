@@ -39,7 +39,7 @@ minimal
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 动态刷新 tool definitions 以便 MCP tools 就绪后可进入后续 step）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`，并在 tool_calls step 中累积为 assistant 的 `reasoning_content` 以便下一轮回放
-- `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
+- `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.kiliax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`；定义 `ToolParallelism` 与并行能力判定
   - `builtin/`: codex 风格内置工具 schema + 执行（按工具拆分）
@@ -48,7 +48,7 @@ minimal
     - `read_file.rs`: `read_file`
     - `list_dir.rs`: `list_dir`
     - `grep_files.rs`: `grep_files`（ignore/grep-searcher；尊重 ignore）
-    - `web_search.rs`: `web_search`（Tavily API；从 `killiax.yaml` 的 `web_search.*` 加载，兼容 `tools.tavily.*` 与 env `TAVILY_API_KEY` / `TAVILY_API_BASE_URL`）
+    - `web_search.rs`: `web_search`（Tavily API；从 `kiliax.yaml` 的 `web_search.*` 加载，兼容 `tools.tavily.*` 与 env `TAVILY_API_KEY` / `TAVILY_API_BASE_URL`）
     - `view_image.rs`: `view_image`（读取并 attach 本地图片到下一轮上下文）
     - `shell.rs`: `shell_command`/`write_stdin`（argv allowlist + sessions）
     - `apply_patch.rs`: `apply_patch`（Begin/End Patch）
@@ -63,7 +63,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
 - `crates/kiliax-tui/src/main.rs`: 入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `killiax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable` 并 checkpoint session（刷新 system preamble）
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable` 并 checkpoint session（刷新 system preamble）
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；slash command popup（无框线；选中蓝色高亮/未选中灰字）；model picker（无框线；无灰底；选中紫色高亮）；底部 footer 仅显示 status + agent + model_id（去 provider）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/clipboard_paste.rs`: 剪切板图片读取→临时 PNG 路径（arboard + WSL PowerShell fallback）；粘贴路径规范化（file://、Windows/UNC、WSL 映射）

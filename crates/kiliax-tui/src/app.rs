@@ -2676,7 +2676,7 @@ mod tests {
             session,
             messages,
             tmp.path().to_path_buf(),
-            tmp.path().join("killiax.yaml"),
+            tmp.path().join("kiliax.yaml"),
             config,
         );
         app.set_screen_width(40);

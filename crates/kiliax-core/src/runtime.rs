@@ -57,7 +57,7 @@ impl Default for AgentRuntimeOptions {
 }
 
 impl AgentRuntimeOptions {
-    /// Build runtime options from `killiax.yaml`.
+    /// Build runtime options from `kiliax.yaml`.
     ///
     /// Precedence:
     /// 1) `runtime.*` (global defaults)

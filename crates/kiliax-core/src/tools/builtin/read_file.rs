@@ -13,8 +13,7 @@ pub fn read_file_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_READ_FILE.to_string(),
         description: Some(
-            "Read a UTF-8 text file from the workspace (or allowed skills roots)."
-                .to_string(),
+            "Read a UTF-8 text file from the workspace (or allowed skills roots).".to_string(),
         ),
         parameters: Some(serde_json::json!({
             "type": "object",

@@ -184,11 +184,11 @@ impl FileSessionStore {
     }
 
     pub fn project(workspace_root: &Path) -> Self {
-        Self::new(workspace_root.join(".killiax").join("sessions"))
+        Self::new(workspace_root.join(".kiliax").join("sessions"))
     }
 
     pub fn global() -> Option<Self> {
-        dirs::home_dir().map(|home| Self::new(home.join(".killiax").join("sessions")))
+        dirs::home_dir().map(|home| Self::new(home.join(".kiliax").join("sessions")))
     }
 
     pub fn root_dir(&self) -> &Path {

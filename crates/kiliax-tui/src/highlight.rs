@@ -186,7 +186,11 @@ mod tests {
     fn comment_does_not_bleed_into_next_line() {
         let code = "# comment\nclass A:\n    pass\n";
         let lines = highlight_code_to_lines(code, "python");
-        assert!(lines.len() >= 2, "expected at least 2 lines, got {}", lines.len());
+        assert!(
+            lines.len() >= 2,
+            "expected at least 2 lines, got {}",
+            lines.len()
+        );
 
         let comment_style = Style::default().fg(Color::Rgb(0x6A, 0x99, 0x55));
         let class_style =

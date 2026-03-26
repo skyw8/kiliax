@@ -12,7 +12,7 @@ pub fn web_search_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_WEB_SEARCH.to_string(),
         description: Some(
-            "Search the web via Tavily. Configure `web_search.api_key` (or `tools.tavily.api_key`) in killiax.yaml (fallback: `TAVILY_API_KEY`). Returns JSON results."
+            "Search the web via Tavily. Configure `web_search.api_key` (or `tools.tavily.api_key`) in kiliax.yaml (fallback: `TAVILY_API_KEY`). Returns JSON results."
                 .to_string(),
         ),
         parameters: Some(serde_json::json!({
@@ -139,7 +139,7 @@ pub(super) async fn execute(
         .or_else(|| std::env::var("TAVILY_API_KEY").ok())
         .ok_or_else(|| {
             ToolError::InvalidCommand(
-                "missing web_search.api_key (or tools.tavily.api_key) in killiax.yaml (or env var TAVILY_API_KEY)"
+                "missing web_search.api_key (or tools.tavily.api_key) in kiliax.yaml (or env var TAVILY_API_KEY)"
                     .to_string(),
             )
         })?;

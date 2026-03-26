@@ -7,9 +7,9 @@ target
 .env
 .env.*
 
-killiax.yaml
-.killiax/sessions
+kiliax.yaml
+.kiliax/sessions
+.kiliax
 
 tmp
-.killiax
 workspace

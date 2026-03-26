@@ -1,8 +1,10 @@
 
+<p align="center">
+  <img src="assets/kiliax.png" width="120" alt="Kiliax logo">
+</p>
+
 Kiliax is a high-performance, cross-platform AI agent tool (Rust).
 
-- Design: `docs/design.md`
-- Tooling (skills / tools / MCP): `docs/tooling.md`
 
 ## Installation
 
@@ -51,7 +53,7 @@ cargo run -p kiliax-core --example agent_loop
 
 ## config
 
-See `killiax.example.yaml`.
+See `kiliax.example.yaml`.
 
 - `runtime.max_steps`: default max steps for all agents
 - `agents.plan.max_steps` / `agents.general.max_steps`: per-agent overrides
@@ -71,4 +73,3 @@ This project is inspired by and built in the spirit of the following open-source
 
 - **[OpenAI Codex CLI](https://github.com/openai/codex)** - OpenAI's official Rust-based terminal coding agent
 - **[OpenCode](https://opencode.ai/)** - Open-source, model-agnostic CLI coding agent supporting 75+ LLM providers
-

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-const CONFIG_FILENAME: &str = "killiax.yaml";
+const CONFIG_FILENAME: &str = "kiliax.yaml";
 
 fn default_true() -> bool {
     true
@@ -297,9 +297,9 @@ fn split_qualified_model_id(model_id: &str) -> Result<Option<(&str, &str)>, Stri
 pub fn candidate_paths(cwd: &Path, home_dir: Option<&Path>) -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(3);
     paths.push(cwd.join(CONFIG_FILENAME));
-    paths.push(cwd.join(".killiax").join(CONFIG_FILENAME));
+    paths.push(cwd.join(".kiliax").join(CONFIG_FILENAME));
     if let Some(home) = home_dir {
-        paths.push(home.join(".killiax").join(CONFIG_FILENAME));
+        paths.push(home.join(".kiliax").join(CONFIG_FILENAME));
     }
     paths
 }
@@ -505,9 +505,9 @@ mod tests {
         fs::create_dir_all(&cwd).unwrap();
         fs::create_dir_all(&home).unwrap();
 
-        write_yaml(&home.join(".killiax").join("killiax.yaml"), "home");
-        write_yaml(&cwd.join(".killiax").join("killiax.yaml"), "localdir");
-        write_yaml(&cwd.join("killiax.yaml"), "root");
+        write_yaml(&home.join(".kiliax").join("kiliax.yaml"), "home");
+        write_yaml(&cwd.join(".kiliax").join("kiliax.yaml"), "localdir");
+        write_yaml(&cwd.join("kiliax.yaml"), "root");
 
         let loaded = load_from_locations(&cwd, Some(&home)).unwrap();
         assert_eq!(loaded.config.providers["p"].base_url, "root");
@@ -521,8 +521,8 @@ mod tests {
         fs::create_dir_all(&cwd).unwrap();
         fs::create_dir_all(&home).unwrap();
 
-        write_yaml(&home.join(".killiax").join("killiax.yaml"), "home");
-        write_yaml(&cwd.join(".killiax").join("killiax.yaml"), "localdir");
+        write_yaml(&home.join(".kiliax").join("kiliax.yaml"), "home");
+        write_yaml(&cwd.join(".kiliax").join("kiliax.yaml"), "localdir");
 
         let loaded = load_from_locations(&cwd, Some(&home)).unwrap();
         assert_eq!(loaded.config.providers["p"].base_url, "localdir");
@@ -541,9 +541,9 @@ mod tests {
             panic!("unexpected error: {err:?}");
         };
         assert_eq!(paths.len(), 3);
-        assert_eq!(paths[0], cwd.join("killiax.yaml"));
-        assert_eq!(paths[1], cwd.join(".killiax").join("killiax.yaml"));
-        assert_eq!(paths[2], home.join(".killiax").join("killiax.yaml"));
+        assert_eq!(paths[0], cwd.join("kiliax.yaml"));
+        assert_eq!(paths[1], cwd.join(".kiliax").join("kiliax.yaml"));
+        assert_eq!(paths[2], home.join(".kiliax").join("kiliax.yaml"));
     }
 
     #[test]
@@ -552,7 +552,7 @@ mod tests {
         let cwd = tmp.path().join("proj");
         fs::create_dir_all(&cwd).unwrap();
 
-        let path = cwd.join("killiax.yaml");
+        let path = cwd.join("kiliax.yaml");
         fs::write(
             &path,
             "provider:\n  base_url: https://example.com/v1\n  apikey: sk-test\n  models:\n    - gpt-test\n",
@@ -631,7 +631,7 @@ mod tests {
         let cwd = tmp.path().join("proj");
         fs::create_dir_all(&cwd).unwrap();
 
-        let path = cwd.join("killiax.yaml");
+        let path = cwd.join("kiliax.yaml");
         fs::write(
             &path,
             "providers:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - gpt-test\n\ntools:\n  tavily:\n    api_key: tvly-test\n    base_url: https://api.tavily.com\n",
