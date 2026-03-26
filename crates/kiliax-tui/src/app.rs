@@ -1412,11 +1412,7 @@ impl App {
                     .record_message(&mut self.session, message.clone())
                     .await?;
 
-                if let Message::Assistant {
-                    content,
-                    tool_calls: _,
-                } = message
-                {
+                if let Message::Assistant { content, .. } = message {
                     self.close_thinking_stream();
 
                     let content = content.unwrap_or_default();

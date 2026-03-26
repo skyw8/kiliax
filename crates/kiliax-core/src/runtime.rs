@@ -582,6 +582,7 @@ async fn drive_stream_step(
     tx: &tokio::sync::mpsc::Sender<Result<AgentEvent, AgentRuntimeError>>,
 ) -> Result<StreamStepOutput, AgentRuntimeError> {
     let mut assistant_content = String::new();
+    let mut assistant_reasoning = String::new();
     let mut tool_calls: BTreeMap<u32, ToolCallBuf> = BTreeMap::new();
     let mut finish_reason = None;
 
@@ -598,6 +599,7 @@ async fn drive_stream_step(
         let chunk = item?;
 
         if let Some(delta) = chunk.thinking_delta {
+            assistant_reasoning.push_str(&delta);
             if tx
                 .send(Ok(AgentEvent::AssistantThinkingDelta { delta }))
                 .await
@@ -650,6 +652,11 @@ async fn drive_stream_step(
             None
         } else {
             Some(assistant_content)
+        },
+        reasoning_content: if resolved_calls.is_empty() || assistant_reasoning.is_empty() {
+            None
+        } else {
+            Some(assistant_reasoning)
         },
         tool_calls: resolved_calls.clone(),
     };
@@ -719,6 +726,7 @@ mod tests {
         let Message::Assistant {
             content,
             tool_calls,
+            ..
         } = out.assistant
         else {
             panic!("expected assistant message");
@@ -785,6 +793,7 @@ mod tests {
         let Message::Assistant {
             content,
             tool_calls,
+            ..
         } = out.assistant
         else {
             panic!("expected assistant message");
@@ -820,6 +829,7 @@ mod tests {
         let Message::Assistant {
             content,
             tool_calls,
+            ..
         } = out.assistant
         else {
             panic!("expected assistant message");

@@ -4,7 +4,7 @@ use async_openai::{
     config::Config as OpenAIConfigTrait,
     error::OpenAIError,
     types::{
-        ChatChoice, ChatCompletionMessageToolCall, ChatCompletionNamedToolChoice,
+        ChatCompletionMessageToolCall, ChatCompletionNamedToolChoice,
         ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
         ChatCompletionRequestDeveloperMessage, ChatCompletionRequestDeveloperMessageContent,
         ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
@@ -13,8 +13,8 @@ use async_openai::{
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType,
-        CompletionUsage, CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
-        FinishReason, FunctionCall, FunctionName, FunctionObject, ImageDetail, ImageUrl,
+        CompletionUsage, CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName,
+        FunctionObject, ImageDetail, ImageUrl,
     },
     Client,
 };
@@ -78,75 +78,128 @@ impl LlmClient {
     }
 
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
+        let ChatRequest {
+            messages: internal_messages,
+            tools,
+            tool_choice,
+            parallel_tool_calls,
+            temperature,
+            max_completion_tokens,
+        } = req;
+
         let mut messages: Vec<ChatCompletionRequestMessage> =
-            Vec::with_capacity(req.messages.len());
-        for msg in &req.messages {
+            Vec::with_capacity(internal_messages.len());
+        for msg in &internal_messages {
             messages.push(to_openai_message(msg).await?);
         }
 
         let mut builder = CreateChatCompletionRequestArgs::default();
         builder.model(&self.route.model).messages(messages);
 
-        if !req.tools.is_empty() {
-            let tools: Vec<ChatCompletionTool> =
-                req.tools.into_iter().map(to_openai_tool).collect();
+        if !tools.is_empty() {
+            let tools: Vec<ChatCompletionTool> = tools.into_iter().map(to_openai_tool).collect();
             builder.tools(tools);
-            if req.tool_choice != ToolChoice::Auto {
-                builder.tool_choice(to_openai_tool_choice(&req.tool_choice));
+            if tool_choice != ToolChoice::Auto {
+                builder.tool_choice(to_openai_tool_choice(&tool_choice));
             }
         }
 
-        if let Some(parallel_tool_calls) = req.parallel_tool_calls {
+        if let Some(parallel_tool_calls) = parallel_tool_calls {
             builder.parallel_tool_calls(parallel_tool_calls);
         }
 
-        if let Some(temperature) = req.temperature {
+        if let Some(temperature) = temperature {
             builder.temperature(temperature);
         }
 
-        if let Some(max_completion_tokens) = req.max_completion_tokens {
+        if let Some(max_completion_tokens) = max_completion_tokens {
             builder.max_completion_tokens(max_completion_tokens);
         }
 
         let request = builder.build()?;
+        let mut body = serde_json::to_value(&request).map_err(|e| {
+            LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
+                "failed to serialize request: {e}"
+            )))
+        })?;
 
-        let response: CreateChatCompletionResponse = self.client.chat().create(request).await?;
-        chat_response_from_openai(response)
+        if should_inject_reasoning_content(&self.route) {
+            inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
+        }
+
+        let cfg = self.client.config();
+        let http = reqwest::Client::new();
+        let resp = http
+            .post(cfg.url("/chat/completions"))
+            .query(&cfg.query())
+            .headers(cfg.headers())
+            .json(&body)
+            .send()
+            .await
+            .map_err(OpenAIError::Reqwest)?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err = map_api_error_response(status, resp).await;
+            return Err(LlmError::OpenAI(err));
+        }
+
+        let bytes = resp.bytes().await.map_err(OpenAIError::Reqwest)?;
+        let parsed: ByotCreateChatCompletionResponse = serde_json::from_slice(&bytes)
+            .map_err(|e| LlmError::OpenAI(OpenAIError::JSONDeserialize(e)))?;
+        chat_response_from_byot(parsed)
     }
 
     pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
+        let ChatRequest {
+            messages: internal_messages,
+            tools,
+            tool_choice,
+            parallel_tool_calls,
+            temperature,
+            max_completion_tokens,
+        } = req;
+
         let mut messages: Vec<ChatCompletionRequestMessage> =
-            Vec::with_capacity(req.messages.len());
-        for msg in &req.messages {
+            Vec::with_capacity(internal_messages.len());
+        for msg in &internal_messages {
             messages.push(to_openai_message(msg).await?);
         }
 
         let mut builder = CreateChatCompletionRequestArgs::default();
         builder.model(&self.route.model).messages(messages);
 
-        if !req.tools.is_empty() {
-            let tools: Vec<ChatCompletionTool> =
-                req.tools.into_iter().map(to_openai_tool).collect();
+        if !tools.is_empty() {
+            let tools: Vec<ChatCompletionTool> = tools.into_iter().map(to_openai_tool).collect();
             builder.tools(tools);
-            if req.tool_choice != ToolChoice::Auto {
-                builder.tool_choice(to_openai_tool_choice(&req.tool_choice));
+            if tool_choice != ToolChoice::Auto {
+                builder.tool_choice(to_openai_tool_choice(&tool_choice));
             }
         }
 
-        if let Some(parallel_tool_calls) = req.parallel_tool_calls {
+        if let Some(parallel_tool_calls) = parallel_tool_calls {
             builder.parallel_tool_calls(parallel_tool_calls);
         }
 
-        if let Some(temperature) = req.temperature {
+        if let Some(temperature) = temperature {
             builder.temperature(temperature);
         }
 
-        if let Some(max_completion_tokens) = req.max_completion_tokens {
+        if let Some(max_completion_tokens) = max_completion_tokens {
             builder.max_completion_tokens(max_completion_tokens);
         }
 
         let mut request = builder.build()?;
         request.stream = Some(true);
+        let mut body = serde_json::to_value(&request).map_err(|e| {
+            LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
+                "failed to serialize request: {e}"
+            )))
+        })?;
+
+        if should_inject_reasoning_content(&self.route) {
+            inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
+        }
 
         let cfg = self.client.config();
         let http = reqwest::Client::new();
@@ -154,7 +207,7 @@ impl LlmClient {
             .post(cfg.url("/chat/completions"))
             .query(&cfg.query())
             .headers(cfg.headers())
-            .json(&request)
+            .json(&body)
             .eventsource()
             .map_err(|e| OpenAIError::StreamError(e.to_string()))?;
 
@@ -256,6 +309,42 @@ impl OpenAIConfigTrait for KiliaxOpenAIConfig {
 
 fn normalize_api_base(api_base: &str) -> String {
     api_base.trim().trim_end_matches('/').to_string()
+}
+
+fn should_inject_reasoning_content(route: &ResolvedModel) -> bool {
+    let provider = route.provider.to_ascii_lowercase();
+    let base_url = route.base_url.to_ascii_lowercase();
+    provider.contains("moonshot") || base_url.contains("moonshot")
+}
+
+fn inject_reasoning_content_for_tool_calls(body: &mut serde_json::Value, messages: &[Message]) {
+    let Some(body_messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+
+    for (idx, msg) in messages.iter().enumerate() {
+        let Message::Assistant {
+            reasoning_content,
+            tool_calls,
+            ..
+        } = msg
+        else {
+            continue;
+        };
+
+        if tool_calls.is_empty() {
+            continue;
+        }
+
+        let Some(obj) = body_messages.get_mut(idx).and_then(|v| v.as_object_mut()) else {
+            continue;
+        };
+
+        obj.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(reasoning_content.clone().unwrap_or_default()),
+        );
+    }
 }
 
 async fn map_eventsource_error(err: reqwest_eventsource::Error) -> OpenAIError {
@@ -429,6 +518,8 @@ pub enum Message {
     Assistant {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCall>,
     },
@@ -568,6 +659,7 @@ async fn to_openai_message(msg: &Message) -> Result<ChatCompletionRequestMessage
         }
         Message::Assistant {
             content,
+            reasoning_content: _,
             tool_calls,
         } => {
             let tool_calls = if tool_calls.is_empty() {
@@ -711,39 +803,124 @@ fn guess_image_mime_type(path: &std::path::Path) -> Option<&'static str> {
     }
 }
 
-fn chat_response_from_openai(resp: CreateChatCompletionResponse) -> Result<ChatResponse, LlmError> {
-    let CreateChatCompletionResponse {
+#[derive(Debug, Clone, Deserialize)]
+struct ByotCreateChatCompletionResponse {
+    pub id: String,
+    pub created: u32,
+    pub model: String,
+    #[serde(default)]
+    pub choices: Vec<ByotChatChoice>,
+    #[serde(default)]
+    pub usage: Option<CompletionUsage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ByotChatChoice {
+    pub message: ByotChatCompletionMessage,
+    #[serde(default)]
+    pub finish_reason: Option<FinishReason>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+struct ByotChatCompletionMessage {
+    #[serde(default)]
+    pub content: Option<String>,
+
+    #[serde(default, rename = "reasoning_content")]
+    pub reasoning_content: Option<String>,
+
+    #[serde(default)]
+    pub thinking: Option<String>,
+
+    #[serde(default)]
+    pub reasoning: Option<String>,
+
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ByotToolCall>>,
+
+    #[serde(default)]
+    pub function_call: Option<ByotFunctionCall>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+struct ByotToolCall {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub function: Option<ByotFunctionCall>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+struct ByotFunctionCall {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
+}
+
+fn chat_response_from_byot(resp: ByotCreateChatCompletionResponse) -> Result<ChatResponse, LlmError> {
+    let ByotCreateChatCompletionResponse {
         id,
         created,
         model,
         choices,
         usage,
-        ..
     } = resp;
 
-    let ChatChoice {
+    let choice = choices.into_iter().next().ok_or(LlmError::NoChoices)?;
+    let ByotChatChoice {
         message,
         finish_reason,
-        ..
-    } = choices.into_iter().next().ok_or(LlmError::NoChoices)?;
+    } = choice;
+    let ByotChatCompletionMessage {
+        content,
+        reasoning_content,
+        thinking,
+        reasoning,
+        tool_calls,
+        function_call,
+    } = message;
 
-    let tool_calls = message
-        .tool_calls
-        .unwrap_or_default()
-        .into_iter()
-        .map(|c| ToolCall {
-            id: c.id,
-            name: c.function.name,
-            arguments: c.function.arguments,
-        })
-        .collect();
+    let tool_calls = if let Some(calls) = tool_calls {
+        calls
+            .into_iter()
+            .map(|c| ToolCall {
+                id: c.id.unwrap_or_default(),
+                name: c
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.name.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                arguments: c
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.arguments.clone())
+                    .unwrap_or_default(),
+            })
+            .collect()
+    } else if let Some(call) = function_call {
+        vec![ToolCall {
+            id: String::new(),
+            name: call.name.unwrap_or_else(|| "unknown".to_string()),
+            arguments: call.arguments.unwrap_or_default(),
+        }]
+    } else {
+        Vec::new()
+    };
+
+    let reasoning_content = if tool_calls.is_empty() {
+        None
+    } else {
+        reasoning_content.or(thinking).or(reasoning)
+    };
 
     Ok(ChatResponse {
         id,
         created,
         model,
         message: Message::Assistant {
-            content: message.content,
+            content,
+            reasoning_content,
             tool_calls,
         },
         finish_reason,
@@ -876,6 +1053,7 @@ mod tests {
     async fn assistant_message_includes_tool_calls() {
         let msg = Message::Assistant {
             content: None,
+            reasoning_content: None,
             tool_calls: vec![ToolCall {
                 id: "call_1".to_string(),
                 name: "read".to_string(),

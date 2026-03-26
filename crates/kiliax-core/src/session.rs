@@ -625,6 +625,7 @@ mod tests {
                 &mut state,
                 Message::Assistant {
                     content: Some("hi".to_string()),
+                    reasoning_content: None,
                     tool_calls: Vec::new(),
                 },
             )

@@ -35,10 +35,10 @@ minimal
   - `agent_loop.rs`: AgentRuntime + PromptBuilder 的闭环示例（流式输出 + 自动执行工具）
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
 - `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、model 路由（按首个 `/` 分割，支持 `openrouter/openai/gpt-4o-mini` 这类 model id）；多 provider 时可按 `providers.*.models` 反查唯一 provider；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；MCP 配置（`mcp.servers`: stdio command+args）；包含 config 优先级/resolve_model 单元测试
-- `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义；User 输入支持 `UserMessageContent`（text + local image path → data URL base64）；流式用 `reqwest-eventsource` 直连 SSE（4xx 会读取 body 并转换为 `ApiError`），并解析 provider 扩展 `reasoning_content/thinking` → `ChatStreamChunk.thinking_delta`；工具 schema 默认不发送 `strict` 以提升兼容性
+- `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义（assistant 支持 `reasoning_content` 以兼容部分 provider 的 tool loop）；User 输入支持 `UserMessageContent`（text + local image path → data URL base64）；chat/流式均用 `reqwest` 直连 `/chat/completions`（4xx 会读取 body 并转换为 `ApiError`）；解析 provider 扩展 `reasoning_content/thinking/reasoning` → `ChatStreamChunk.thinking_delta`；Moonshot 等 provider 在 assistant tool_calls 消息中要求携带 `reasoning_content` 时自动注入
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
-- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 动态刷新 tool definitions 以便 MCP tools 就绪后可进入后续 step）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`
+- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 动态刷新 tool definitions 以便 MCP tools 就绪后可进入后续 step）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`，并在 tool_calls step 中累积为 assistant 的 `reasoning_content` 以便下一轮回放
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.killiax/sessions/<session_id>/`）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`；定义 `ToolParallelism` 与并行能力判定
