@@ -45,11 +45,15 @@ jobs:
       - name: Build (release)
         run: cargo build --release -p kiliax --target ${{ matrix.target }}
 
+      - name: Rename binary
+        run: |
+          mv target/${{ matrix.target }}/release/${{ matrix.binary_name }} target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.asset_name }}
           if-no-files-found: error
 
   release:
@@ -63,11 +67,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: false
+
+      - name: List artifacts
+        run: find artifacts -type f
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/kiliax*
+          files: |
+            artifacts/kiliax-linux-x64/kiliax-linux-x64
+            artifacts/kiliax-macos-arm64/kiliax-macos-arm64
+            artifacts/kiliax-windows-x64.exe/kiliax-windows-x64.exe
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
