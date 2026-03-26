@@ -25,9 +25,9 @@ function Get-LatestVersion {
 }
 
 function Main {
-    Write-Host "🔍 Detecting platform..." -ForegroundColor Cyan
+    Write-Host "[*] Detecting platform..." -ForegroundColor Cyan
     $platform = Detect-Platform
-    Write-Host "✅ Platform: $platform" -ForegroundColor Green
+    Write-Host "[+] Platform: $platform" -ForegroundColor Green
 
     # Check current version
     $currentVersion = $null
@@ -37,29 +37,29 @@ function Main {
             $versionOutput = & $installedPath --version 2>$null
             if ($versionOutput -match 'v?(\d+\.\d+\.\d+)') {
                 $currentVersion = "v" + $Matches[1]
-                Write-Host "📋 Current version: $currentVersion" -ForegroundColor Gray
+                Write-Host "[i] Current version: $currentVersion" -ForegroundColor Gray
             }
         } catch { }
     }
 
-    Write-Host "📦 Fetching latest version..." -ForegroundColor Cyan
+    Write-Host "[*] Fetching latest version..." -ForegroundColor Cyan
     $version = Get-LatestVersion
 
     # Compare versions
     if ($currentVersion -eq $version -and -not $env:FORCE) {
-        Write-Host "✅ Already up to date ($version)" -ForegroundColor Green
-        Write-Host "   Set `$env:FORCE=1 to reinstall anyway" -ForegroundColor Gray
+        Write-Host "[+] Already up to date ($version)" -ForegroundColor Green
+        Write-Host "    Set `$env:FORCE=1 to reinstall anyway" -ForegroundColor Gray
         return
     }
 
     if ($currentVersion) {
-        Write-Host "⬆️  Updating: $currentVersion → $version" -ForegroundColor Yellow
+        Write-Host "[^] Updating: $currentVersion -> $version" -ForegroundColor Yellow
     } else {
-        Write-Host "✅ Version: $version" -ForegroundColor Green
+        Write-Host "[+] Version: $version" -ForegroundColor Green
     }
 
     $downloadUrl = "https://github.com/$Repo/releases/download/$version/${BinaryName}-${platform}.exe"
-    Write-Host "⬇️  Downloading from: $downloadUrl" -ForegroundColor Cyan
+    Write-Host "[v] Downloading from: $downloadUrl" -ForegroundColor Cyan
 
     $tmpDir = New-TemporaryFile | ForEach-Object { $_.DirectoryName }
     $tmpFile = "$tmpDir\${BinaryName}.exe"
@@ -67,7 +67,7 @@ function Main {
     try {
         Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
 
-        Write-Host "📂 Installing to: $InstallDir" -ForegroundColor Cyan
+        Write-Host "[*] Installing to: $InstallDir" -ForegroundColor Cyan
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
         Move-Item -Path $tmpFile -Destination "$InstallDir\$BinaryName.exe" -Force
@@ -75,22 +75,23 @@ function Main {
         # Add to PATH if not already present
         $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
         if ($currentPath -notlike "*$InstallDir*") {
-            Write-Host "🔧 Adding to user PATH..." -ForegroundColor Cyan
+            Write-Host "[*] Adding to user PATH..." -ForegroundColor Cyan
             [Environment]::SetEnvironmentVariable("Path", "$currentPath;$InstallDir", "User")
-            Write-Host "⚠️  Please restart your terminal to use $BinaryName" -ForegroundColor Yellow
+            Write-Host "[!] Please restart your terminal to use $BinaryName" -ForegroundColor Yellow
         }
 
-        Write-Host "✅ Installation successful!" -ForegroundColor Green
-        Write-Host ""
-        & "$InstallDir\$BinaryName.exe" --version 2>$null
-        Write-Host ""
+        Write-Host "[+] Installation successful!" -ForegroundColor Green
+
 
         # Create ki alias
         $kiPath = "$InstallDir\ki.exe"
         Copy-Item "$InstallDir\$BinaryName.exe" $kiPath -Force
-        Write-Host "✅ Created alias: ki -> $BinaryName" -ForegroundColor Green
+        Write-Host "[+] Created alias: ki -> $BinaryName" -ForegroundColor Green
         Write-Host ""
         Write-Host "Run 'kiliax --help' or 'ki --help' to get started" -ForegroundColor Cyan
+        Write-Host ""
+        & "$InstallDir\$BinaryName.exe" --version 2>$null
+        Write-Host ""
     }
     finally {
         Remove-Item -Path $tmpDir\* -Recurse -Force -ErrorAction SilentlyContinue

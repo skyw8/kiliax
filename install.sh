@@ -41,42 +41,42 @@ get_latest_version() {
 
 # Download and install
 main() {
-    echo "🔍 Detecting platform..."
+    echo "[*] Detecting platform..."
     platform=$(detect_platform)
-    echo "✅ Platform: $platform"
+    echo "[+] Platform: $platform"
 
     # Check current version
     current_version=""
     if command -v "$BINARY_NAME" &> /dev/null; then
         current_version=$($BINARY_NAME --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
         if [ -n "$current_version" ]; then
-            echo "📋 Current version: $current_version"
+            echo "[i] Current version: $current_version"
         fi
     fi
 
-    echo "📦 Fetching latest version..."
+    echo "[*] Fetching latest version..."
     version=$(get_latest_version)
     if [ -z "$version" ]; then
-        echo "❌ Failed to get latest version"
+        echo "[!] Failed to get latest version"
         exit 1
     fi
 
     # Compare versions
     if [ "$current_version" = "$version" ] && [ -z "$FORCE" ]; then
-        echo "✅ Already up to date ($version)"
-        echo "   Use FORCE=1 to reinstall anyway"
+        echo "[+] Already up to date ($version)"
+        echo "    Use FORCE=1 to reinstall anyway"
         exit 0
     fi
 
     if [ -n "$current_version" ]; then
-        echo "⬆️  Updating: $current_version → $version"
+        echo "[^] Updating: $current_version -> $version"
     else
-        echo "✅ Version: $version"
+        echo "[+] Version: $version"
     fi
 
     # Build download URL
     download_url="https://github.com/$REPO/releases/download/$version/${BINARY_NAME}-${platform}"
-    echo "⬇️  Downloading from: $download_url"
+    echo "[v] Downloading from: $download_url"
 
     # Create temp directory
     tmp_dir=$(mktemp -d)
@@ -84,7 +84,7 @@ main() {
 
     # Download
     if ! curl -fsSL "$download_url" -o "$tmp_dir/$BINARY_NAME"; then
-        echo "❌ Download failed"
+        echo "[!] Download failed"
         exit 1
     fi
 
@@ -92,17 +92,17 @@ main() {
     chmod +x "$tmp_dir/$BINARY_NAME"
 
     # Install
-    echo "📂 Installing to: $INSTALL_DIR"
+    echo "[*] Installing to: $INSTALL_DIR"
     if [ -w "$INSTALL_DIR" ]; then
         mv "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
     else
-        echo "🔑 Elevated permissions required..."
+        echo "[*] Elevated permissions required..."
         sudo mv "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
     fi
 
     # Verify
     if command -v "$BINARY_NAME" &> /dev/null; then
-        echo "✅ Installation successful!"
+        echo "[+] Installation successful!"
         echo ""
         "$BINARY_NAME" --version 2>/dev/null || true
         echo ""
@@ -114,11 +114,11 @@ main() {
         else
             sudo ln -sf "$INSTALL_DIR/$BINARY_NAME" "$ki_path"
         fi
-        echo "✅ Created alias: ki -> $BINARY_NAME"
+        echo "[+] Created alias: ki -> $BINARY_NAME"
         echo ""
         echo "Run 'kiliax --help' or 'ki --help' to get started"
     else
-        echo "⚠️  Installation complete, but $INSTALL_DIR is not in your PATH"
+        echo "[!] Installation complete, but $INSTALL_DIR is not in your PATH"
         echo "Add this to your ~/.bashrc or ~/.zshrc:"
         echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
     fi

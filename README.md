@@ -12,12 +12,12 @@ Kiliax is a high-performance, cross-platform AI agent tool (Rust).
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/master/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/master/install.ps1 | iex
 ```
 
 The install script will detect if you already have kiliax-tui installed and update it to the latest version automatically. If already up to date, it will skip the installation.
@@ -25,10 +25,10 @@ The install script will detect if you already have kiliax-tui installed and upda
 To force reinstall (even if same version):
 ```bash
 # macOS/Linux
-FORCE=1 curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/main/install.sh | bash
+FORCE=1 curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/master/install.sh | bash
 
 # Windows
-$env:FORCE=1; iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/main/install.ps1 | iex
+$env:FORCE=1; iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/master/install.ps1 | iex
 ```
 
 ### Manual Install
