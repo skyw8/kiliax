@@ -7,6 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: build (${{ matrix.target }})
@@ -42,27 +45,11 @@ jobs:
       - name: Build (release)
         run: cargo build --release -p kiliax --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: matrix.os != 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.binary_name }}
-          sha256sum ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
-
-      - name: Package (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          Compress-Archive -Path ${{ matrix.binary_name }} -DestinationPath ${{ matrix.asset_name }}.zip
-          $hash = Get-FileHash ${{ matrix.asset_name }}.zip -Algorithm SHA256
-          $hash.Hash | Out-File ${{ matrix.asset_name }}.zip.sha256
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: |
-            target/${{ matrix.target }}/release/${{ matrix.asset_name }}.*
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
           if-no-files-found: error
 
   release:
@@ -80,7 +67,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: artifacts/**/kiliax*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
