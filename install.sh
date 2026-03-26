@@ -75,7 +75,7 @@ main() {
     fi
 
     # Build download URL
-    download_url="https://github.com/$REPO/releases/download/$version/${BINARY_NAME}-${platform}.tar.gz"
+    download_url="https://github.com/$REPO/releases/download/$version/${BINARY_NAME}-${platform}"
     echo "⬇️  Downloading from: $download_url"
 
     # Create temp directory
@@ -83,13 +83,13 @@ main() {
     trap "rm -rf $tmp_dir" EXIT
 
     # Download
-    if ! curl -fsSL "$download_url" -o "$tmp_dir/${BINARY_NAME}.tar.gz"; then
+    if ! curl -fsSL "$download_url" -o "$tmp_dir/$BINARY_NAME"; then
         echo "❌ Download failed"
         exit 1
     fi
 
-    # Extract
-    tar -xzf "$tmp_dir/${BINARY_NAME}.tar.gz" -C "$tmp_dir"
+    # Make executable
+    chmod +x "$tmp_dir/$BINARY_NAME"
 
     # Install
     echo "📂 Installing to: $INSTALL_DIR"

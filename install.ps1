@@ -58,19 +58,19 @@ function Main {
         Write-Host "✅ Version: $version" -ForegroundColor Green
     }
 
-    $downloadUrl = "https://github.com/$Repo/releases/download/$version/${BinaryName}-${platform}.zip"
+    $downloadUrl = "https://github.com/$Repo/releases/download/$version/${BinaryName}-${platform}.exe"
     Write-Host "⬇️  Downloading from: $downloadUrl" -ForegroundColor Cyan
 
     $tmpDir = New-TemporaryFile | ForEach-Object { $_.DirectoryName }
-    $zipPath = "$tmpDir\${BinaryName}.zip"
+    $tmpFile = "$tmpDir\${BinaryName}.exe"
 
     try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
 
         Write-Host "📂 Installing to: $InstallDir" -ForegroundColor Cyan
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-        Expand-Archive -Path $zipPath -DestinationPath $InstallDir -Force
+        Move-Item -Path $tmpFile -Destination "$InstallDir\$BinaryName.exe" -Force
 
         # Add to PATH if not already present
         $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
