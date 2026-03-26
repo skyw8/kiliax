@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 const CONFIG_FILENAME: &str = "killiax.yaml";
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentRuntimeConfig {
     /// Maximum number of ReAct steps in a single run.
@@ -56,6 +60,8 @@ pub struct McpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpServerConfig {
     pub name: String,
+    #[serde(default = "default_true", alias = "enabled")]
+    pub enable: bool,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,

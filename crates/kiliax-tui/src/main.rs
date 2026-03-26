@@ -6,6 +6,7 @@ mod highlight;
 mod history;
 mod input;
 mod markdown;
+mod mcp_picker;
 mod model_picker;
 mod slash_command;
 mod style;
@@ -139,11 +140,15 @@ async fn main() -> Result<()> {
             break;
         }
 
-        if agent_stream.is_none() && !app.running && app.model_picker().is_none() {
+        if agent_stream.is_none()
+            && !app.running
+            && app.model_picker().is_none()
+            && app.mcp_picker().is_none()
+        {
             while let Some(queued) = app.pop_next_queued_submission() {
                 match app.handle_queued_submission(queued).await? {
                     SubmitDisposition::Handled => {
-                        if app.model_picker().is_some() {
+                        if app.model_picker().is_some() || app.mcp_picker().is_some() {
                             break;
                         }
                     }
@@ -241,6 +246,9 @@ async fn main() -> Result<()> {
                                 }
                                 AppAction::ModelPicked(model_id) => {
                                     app.apply_model_selection(model_id).await?;
+                                }
+                                AppAction::McpToggled { server, enable } => {
+                                    app.apply_mcp_toggle(server, enable).await?;
                                 }
                             }
                         }

@@ -22,6 +22,7 @@ use kiliax_core::{
 use crate::clipboard_paste;
 use crate::input::{InputAction, InputLine};
 use crate::markdown::render_markdown_lines;
+use crate::mcp_picker::{McpPicker, McpPickerEvent};
 use crate::model_picker::{ModelPicker, ModelPickerEvent};
 use crate::slash_command::SlashPopupState;
 
@@ -30,6 +31,7 @@ pub enum AppAction {
     None,
     Submitted(String),
     ModelPicked(String),
+    McpToggled { server: String, enable: bool },
 }
 
 impl Default for AppAction {
@@ -42,6 +44,7 @@ impl Default for AppAction {
 enum UiMode {
     Chat,
     ModelPicker(ModelPicker),
+    McpPicker(McpPicker),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,7 +559,14 @@ impl App {
     pub fn model_picker(&self) -> Option<&ModelPicker> {
         match &self.ui_mode {
             UiMode::ModelPicker(picker) => Some(picker),
-            UiMode::Chat => None,
+            UiMode::Chat | UiMode::McpPicker(_) => None,
+        }
+    }
+
+    pub fn mcp_picker(&self) -> Option<&McpPicker> {
+        match &self.ui_mode {
+            UiMode::McpPicker(picker) => Some(picker),
+            UiMode::Chat | UiMode::ModelPicker(_) => None,
         }
     }
 
@@ -729,6 +739,16 @@ impl App {
                 ModelPickerEvent::Picked(id) => {
                     self.ui_mode = UiMode::Chat;
                     AppAction::ModelPicked(id)
+                }
+            },
+            UiMode::McpPicker(picker) => match picker.handle_key(key) {
+                McpPickerEvent::None => AppAction::None,
+                McpPickerEvent::Cancel => {
+                    self.ui_mode = UiMode::Chat;
+                    AppAction::None
+                }
+                McpPickerEvent::Toggle { server, enable } => {
+                    AppAction::McpToggled { server, enable }
                 }
             },
         }
@@ -935,6 +955,7 @@ impl App {
                     .sync_from_input(self.input.text(), self.input.cursor());
             }
             UiMode::ModelPicker(picker) => picker.handle_paste(text),
+            UiMode::McpPicker(_) => {}
         }
     }
 
@@ -1004,16 +1025,16 @@ impl App {
                         .extend(render_error_lines("usage: /mcp"));
                     return Ok(());
                 }
-                self.show_mcp_status().await;
+                self.open_mcp_picker().await;
             }
         }
         Ok(())
     }
 
-    async fn show_mcp_status(&mut self) {
+    async fn open_mcp_picker(&mut self) {
+        self.slash_popup.hide();
         let statuses = self.runtime.tools().mcp_status().await;
-        self.pending_history_lines
-            .extend(render_mcp_status_lines(&statuses));
+        self.ui_mode = UiMode::McpPicker(McpPicker::new(statuses));
     }
 
     async fn start_new_session(&mut self) -> Result<()> {
@@ -1241,6 +1262,14 @@ impl App {
         Ok(())
     }
 
+    pub async fn apply_mcp_toggle(&mut self, server: String, enable: bool) -> Result<()> {
+        if let Err(err) = self.apply_mcp_toggle_inner(server, enable).await {
+            self.pending_history_lines
+                .extend(render_error_lines(&err.to_string()));
+        }
+        Ok(())
+    }
+
     async fn apply_model_selection_inner(&mut self, model_id: String) -> Result<()> {
         let model_id = model_id.trim().to_string();
         if model_id.is_empty() {
@@ -1325,6 +1354,86 @@ impl App {
             self.runtime = prev_runtime;
             self.model_id = prev_model_id;
             self.options = prev_options;
+            self.config = prev_config;
+            let _ = self.runtime.tools().set_config(self.config.clone());
+            self.session = prev_session;
+            self.messages = prev_messages;
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+    async fn apply_mcp_toggle_inner(&mut self, server: String, enable: bool) -> Result<()> {
+        let server = server.trim().to_string();
+        if server.is_empty() {
+            anyhow::bail!("mcp server name must not be empty");
+        }
+        if self.running {
+            anyhow::bail!("cannot toggle MCP servers while a run is in progress");
+        }
+        if !self.config.mcp.servers.iter().any(|s| s.name == server) {
+            anyhow::bail!("unknown mcp server: {server:?}");
+        }
+
+        let prev_config = self.config.clone();
+        let prev_session = self.session.clone();
+        let prev_messages = self.messages.clone();
+
+        let original = tokio::fs::read_to_string(&self.config_path).await?;
+        let updated = update_mcp_server_enable_yaml(&original, &server, enable)?;
+        let wrote = updated != original;
+        if wrote {
+            tokio::fs::write(&self.config_path, &updated).await?;
+        }
+
+        let res: Result<()> = async {
+            let loaded = kiliax_core::config::load_from_path(self.config_path.clone())
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.config = loaded.config;
+
+            let tools = self.runtime.tools().clone();
+            tools
+                .set_config(self.config.clone())
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            let statuses = tools.mcp_status().await;
+            if let UiMode::McpPicker(picker) = &mut self.ui_mode {
+                picker.set_servers(statuses);
+            }
+
+            self.session.meta.updated_at_ms = now_ms();
+
+            let new_preamble = build_preamble(
+                &self.profile,
+                &self.model_id,
+                &self.workspace_root,
+                self.runtime.tools(),
+            )
+            .await;
+            replace_preamble(&mut self.session.messages, new_preamble);
+            self.session.meta.message_count = self.session.messages.len();
+            self.messages = self.session.messages.clone();
+            self.store.checkpoint(&mut self.session).await?;
+
+            let action = if enable { "enabled" } else { "disabled" };
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("mcp").bold(),
+                Span::from(": ").dim(),
+                Span::from(server.clone()).dim(),
+                Span::from(" ").dim(),
+                Span::from(action).dim(),
+            ]));
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = res {
+            if wrote {
+                let _ = tokio::fs::write(&self.config_path, &original).await;
+            }
             self.config = prev_config;
             let _ = self.runtime.tools().set_config(self.config.clone());
             self.session = prev_session;
@@ -1701,6 +1810,121 @@ fn update_default_model_yaml(text: &str, model_id: &str) -> String {
     out
 }
 
+fn update_mcp_server_enable_yaml(text: &str, server_name: &str, enable: bool) -> Result<String> {
+    let server_name = server_name.trim();
+    if server_name.is_empty() {
+        anyhow::bail!("mcp server name must not be empty");
+    }
+
+    let enable_value = if enable { "true" } else { "false" };
+    let mut lines: Vec<String> = text
+        .lines()
+        .map(|raw| raw.trim_end_matches('\r').to_string())
+        .collect();
+
+    let mut start_idx: Option<usize> = None;
+    let mut item_indent: usize = 0;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len().saturating_sub(trimmed.len());
+        let Some(rest) = trimmed.strip_prefix('-') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix("name:") else {
+            continue;
+        };
+        let raw_value = rest.split('#').next().unwrap_or("").trim();
+        let value = parse_yaml_scalar_string(raw_value);
+        if value == server_name {
+            start_idx = Some(idx);
+            item_indent = indent;
+            break;
+        }
+    }
+
+    let Some(start) = start_idx else {
+        anyhow::bail!("mcp server not found in config file: {server_name:?}");
+    };
+
+    let mut end = lines.len();
+    for idx in (start + 1)..lines.len() {
+        let line = &lines[idx];
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len().saturating_sub(trimmed.len());
+        if indent < item_indent || (indent == item_indent && trimmed.starts_with('-')) {
+            end = idx;
+            break;
+        }
+    }
+
+    let mut replaced = false;
+    for idx in (start + 1)..end {
+        let line = &lines[idx];
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if !trimmed.starts_with("enable:") && !trimmed.starts_with("enabled:") {
+            continue;
+        }
+
+        let indent_len = line.len().saturating_sub(trimmed.len());
+        let indent = &line[..indent_len];
+
+        let comment = comment_start(line).map(|pos| line[pos..].to_string());
+
+        let mut updated = format!("{indent}enable: {enable_value}");
+        if let Some(c) = comment {
+            updated.push_str(&c);
+        }
+        lines[idx] = updated;
+        replaced = true;
+        break;
+    }
+
+    if !replaced {
+        let field_indent = " ".repeat(item_indent.saturating_add(2));
+        lines.insert(start + 1, format!("{field_indent}enable: {enable_value}"));
+    }
+
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn parse_yaml_scalar_string(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.len() >= 2 {
+        let bytes = raw.as_bytes();
+        let first = bytes[0] as char;
+        let last = bytes[raw.len() - 1] as char;
+        if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+            return raw[1..raw.len().saturating_sub(1)].to_string();
+        }
+    }
+    raw.to_string()
+}
+
+fn comment_start(line: &str) -> Option<usize> {
+    let hash = line.find('#')?;
+    let bytes = line.as_bytes();
+    let mut start = hash;
+    while start > 0 && bytes[start - 1].is_ascii_whitespace() {
+        start = start.saturating_sub(1);
+    }
+    Some(start)
+}
+
 fn render_user_message_lines(content: &str) -> Vec<Line<'static>> {
     let payload = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_string());
     vec![Line::from(Span::from(format!(
@@ -1997,189 +2221,6 @@ fn render_error_lines(text: &str) -> Vec<Line<'static>> {
         Span::from(": "),
         Span::from(text.to_string()),
     ])]
-}
-
-fn render_mcp_status_lines(statuses: &[kiliax_core::tools::McpServerStatus]) -> Vec<Line<'static>> {
-    use kiliax_core::tools::McpServerConnectionState as State;
-
-    if statuses.is_empty() {
-        return vec![Line::from(vec![
-            Span::from("• ").dim(),
-            Span::from("mcp").bold(),
-            Span::from(": ").dim(),
-            Span::styled(
-                "(no servers configured)".to_string(),
-                Style::default().dim(),
-            ),
-        ])];
-    }
-
-    let total = statuses.len();
-    let connected = statuses
-        .iter()
-        .filter(|s| matches!(s.state, State::Connected))
-        .count();
-    let connecting = statuses
-        .iter()
-        .filter(|s| matches!(s.state, State::Connecting))
-        .count();
-    let retry = statuses
-        .iter()
-        .filter(|s| matches!(s.state, State::Retry { .. }))
-        .count();
-    let disconnected = total.saturating_sub(connected + connecting + retry);
-
-    let mut summary = format!("{connected}/{total} connected");
-    if connecting > 0 {
-        summary.push_str(&format!(", {connecting} connecting"));
-    }
-    if retry > 0 {
-        summary.push_str(&format!(", {retry} retry"));
-    }
-    if disconnected > 0 {
-        summary.push_str(&format!(", {disconnected} disconnected"));
-    }
-
-    let mut out = Vec::new();
-    out.push(Line::from(vec![
-        Span::from("• ").dim(),
-        Span::from("mcp").bold(),
-        Span::from(": ").dim(),
-        Span::styled(summary, Style::default().dim()),
-    ]));
-
-    for server in statuses {
-        let (state_text, state_style, retry_err): (String, Style, Option<&str>) =
-            match &server.state {
-                State::Connected => (
-                    "connected".to_string(),
-                    Style::default().fg(Color::Green).dim(),
-                    None,
-                ),
-                State::Connecting => (
-                    "connecting".to_string(),
-                    Style::default().fg(Color::Cyan).dim(),
-                    None,
-                ),
-                State::Retry {
-                    attempt,
-                    retry_in,
-                    error,
-                } => (
-                    format!(
-                        "retry in {} (attempt {})",
-                        fmt_duration_compact(*retry_in),
-                        attempt
-                    ),
-                    Style::default().fg(Color::Yellow).dim(),
-                    Some(error.as_str()),
-                ),
-                State::Disconnected => (
-                    "disconnected".to_string(),
-                    Style::default().fg(Color::DarkGray).dim(),
-                    None,
-                ),
-            };
-
-        let mut header = vec![
-            Span::from("  └ ").dim(),
-            Span::from(server.name.clone()).bold(),
-            Span::from(": ").dim(),
-            Span::styled(state_text, state_style),
-        ];
-
-        if let Some(n) = server.tool_count {
-            header.push(Span::from(" ").dim());
-            header.push(Span::styled(format!("(tools {n})"), Style::default().dim()));
-        }
-
-        out.push(Line::from(header));
-
-        let cmd = fmt_command_with_redactions(&server.command, &server.args);
-        out.push(Line::from(vec![
-            Span::from("    └ ").dim(),
-            Span::styled("cmd: ".to_string(), Style::default().dim()),
-            Span::styled(truncate_one_line(&cmd, 120), Style::default().dim()),
-        ]));
-
-        if let Some(err) = retry_err {
-            out.push(Line::from(vec![
-                Span::from("    └ ").dim(),
-                Span::styled("err: ".to_string(), Style::default().dim()),
-                Span::styled(
-                    truncate_one_line(err, 140),
-                    Style::default().fg(Color::LightRed).dim(),
-                ),
-            ]));
-        }
-    }
-
-    out
-}
-
-fn fmt_command_with_redactions(command: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        return command.to_string();
-    }
-
-    let args = redact_mcp_args(args);
-    format!("{command} {}", args.join(" "))
-}
-
-fn redact_mcp_args(args: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(args.len());
-    let mut redact_next = false;
-
-    for arg in args {
-        if redact_next {
-            out.push("<redacted>".to_string());
-            redact_next = false;
-            continue;
-        }
-
-        let lower = arg.to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "--api-key"
-                | "--api_key"
-                | "--apikey"
-                | "--token"
-                | "--access-token"
-                | "--access_token"
-                | "--secret"
-                | "--password"
-        ) {
-            out.push(arg.clone());
-            redact_next = true;
-            continue;
-        }
-
-        out.push(redact_inline_secret(arg));
-    }
-
-    out
-}
-
-fn redact_inline_secret(arg: &str) -> String {
-    let lower = arg.to_ascii_lowercase();
-    for prefix in ["sk-", "ctx7sk-", "tvly-"] {
-        if lower.starts_with(prefix) {
-            return format!("{prefix}<redacted>");
-        }
-    }
-
-    if let Some((flag, value)) = arg.split_once('=') {
-        let lower_flag = flag.to_ascii_lowercase();
-        if matches!(
-            lower_flag.as_str(),
-            "--api-key" | "--api_key" | "--apikey" | "--token" | "--access-token" | "--secret"
-        ) && !value.trim().is_empty()
-        {
-            return format!("{flag}=<redacted>");
-        }
-    }
-
-    arg.to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2687,5 +2728,21 @@ mod tests {
         let out = update_default_model_yaml(input, "p/m");
         assert!(out.lines().any(|l| l.trim() == "default_model: p/m"));
         assert!(out.contains("providers:"));
+    }
+
+    #[test]
+    fn update_mcp_server_enable_yaml_inserts_when_missing() {
+        let input = "mcp:\n  servers:\n    - name: context7\n      command: npx\n";
+        let out = update_mcp_server_enable_yaml(input, "context7", false).unwrap();
+        assert!(out.contains("- name: context7\n      enable: false\n      command: npx"));
+    }
+
+    #[test]
+    fn update_mcp_server_enable_yaml_replaces_existing_value() {
+        let input =
+            "mcp:\n  servers:\n    - name: \"context7\"\n      enable: true # keep\n      command: npx\n";
+        let out = update_mcp_server_enable_yaml(input, "context7", false).unwrap();
+        assert!(out.contains("enable: false # keep"));
+        assert!(!out.contains("enable: true"));
     }
 }

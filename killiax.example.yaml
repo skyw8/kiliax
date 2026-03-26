@@ -30,6 +30,8 @@ mcp:
     # Context7 (docs / library API reference). Requires Node.js + `npx`.
     # Install/usage: https://context7.com/docs/installation
     - name: context7
+      # Optional: disable without removing config.
+      enable: true
       command: npx
       args:
         - -y

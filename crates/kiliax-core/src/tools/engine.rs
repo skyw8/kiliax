@@ -130,7 +130,9 @@ impl ToolEngine {
             let signature = ConnectedMcpServer::from_cfg(server);
             let tool_count = tool_counts.get(&name).copied();
 
-            let status = if state.connected.get(&name) == Some(&signature) {
+            let status = if !server.enable {
+                McpServerConnectionState::Disabled
+            } else if state.connected.get(&name) == Some(&signature) {
                 McpServerConnectionState::Connected
             } else if state.connecting.contains_key(&name) {
                 McpServerConnectionState::Connecting
@@ -247,6 +249,9 @@ impl ToolEngine {
     async fn sync_mcp_servers_background(&self, config: &crate::config::Config) {
         let mut desired: BTreeMap<String, ConnectedMcpServer> = BTreeMap::new();
         for server in &config.mcp.servers {
+            if !server.enable {
+                continue;
+            }
             desired.insert(server.name.clone(), ConnectedMcpServer::from_cfg(server));
         }
 
@@ -273,6 +278,9 @@ impl ToolEngine {
 
             let mut to_connect = Vec::new();
             for server in &config.mcp.servers {
+                if !server.enable {
+                    continue;
+                }
                 if state.connected.contains_key(&server.name) {
                     continue;
                 }
@@ -306,30 +314,43 @@ impl ToolEngine {
             let signature = ConnectedMcpServer::from_cfg(&server);
             tokio::spawn(async move {
                 let res = mcp.connect_stdio(server).await;
-                let mut state = state.lock().await;
-                state.connecting.remove(&name);
-                match res {
-                    Ok(()) => {
-                        state.retry.remove(&name);
-                        state.connected.insert(name, signature);
+                let mut shutdown_after_connect = false;
+                {
+                    let mut state = state.lock().await;
+                    let still_desired = state.connecting.remove(&name).is_some();
+                    if !still_desired {
+                        shutdown_after_connect = res.is_ok();
+                    } else {
+                        match res {
+                            Ok(()) => {
+                                state.retry.remove(&name);
+                                state.connected.insert(name.clone(), signature);
+                            }
+                            Err(err) => {
+                                let next_attempt = state
+                                    .retry
+                                    .get(&name)
+                                    .map(|retry| retry.attempt.saturating_add(1))
+                                    .unwrap_or(0);
+                                let backoff = mcp_retry_backoff(next_attempt);
+                                state.retry.insert(
+                                    name.clone(),
+                                    McpRetry {
+                                        attempt: next_attempt,
+                                        next_attempt_at: Instant::now() + backoff,
+                                        last_error: err.to_string(),
+                                    },
+                                );
+                                tracing::warn!(
+                                    "mcp connect error: {name}: {err} (retry in {backoff:?})"
+                                );
+                            }
+                        }
                     }
-                    Err(err) => {
-                        let next_attempt = state
-                            .retry
-                            .get(&name)
-                            .map(|retry| retry.attempt.saturating_add(1))
-                            .unwrap_or(0);
-                        let backoff = mcp_retry_backoff(next_attempt);
-                        state.retry.insert(
-                            name.clone(),
-                            McpRetry {
-                                attempt: next_attempt,
-                                next_attempt_at: Instant::now() + backoff,
-                                last_error: err.to_string(),
-                            },
-                        );
-                        tracing::warn!("mcp connect error: {name}: {err} (retry in {backoff:?})");
-                    }
+                }
+
+                if shutdown_after_connect {
+                    mcp.shutdown_server(&name).await;
                 }
             });
         }
@@ -351,6 +372,11 @@ impl ToolEngine {
         else {
             return Err(ToolError::UnknownTool(server_name.to_string()));
         };
+        if !server_cfg.enable {
+            return Err(ToolError::Mcp(format!(
+                "mcp server {server_name:?} is disabled"
+            )));
+        }
         let signature = ConnectedMcpServer::from_cfg(&server_cfg);
 
         let should_shutdown = {
@@ -478,6 +504,7 @@ fn mcp_retry_backoff(attempt: u32) -> Duration {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerConnectionState {
+    Disabled,
     Connected,
     Connecting,
     Retry {

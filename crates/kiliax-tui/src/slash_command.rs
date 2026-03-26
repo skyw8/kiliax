@@ -30,7 +30,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new session",
             SlashCommand::Model => "choose provider/model",
             SlashCommand::Agent => "switch agent (plan/general)",
-            SlashCommand::Mcp => "show MCP server status",
+            SlashCommand::Mcp => "toggle MCP servers",
         }
     }
 

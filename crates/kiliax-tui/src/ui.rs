@@ -6,6 +6,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::App;
+use crate::mcp_picker::McpPicker;
 use crate::model_picker::ModelPickerFocus;
 
 const LIVE_PREFIX_COLS: u16 = 2;
@@ -19,10 +20,14 @@ const STATUS_HEIGHT: u16 = 1;
 const SLASH_POPUP_MAX_ITEMS: usize = 6;
 const QUEUE_MAX_ITEMS: usize = 4;
 const MODEL_PICKER_MIN_HEIGHT: u16 = 18;
+const MCP_PICKER_MIN_HEIGHT: u16 = 12;
 
 pub fn desired_viewport_height(app: &App, width: u16) -> u16 {
     if app.model_picker().is_some() {
         return MODEL_PICKER_MIN_HEIGHT;
+    }
+    if app.mcp_picker().is_some() {
+        return MCP_PICKER_MIN_HEIGHT;
     }
 
     let status_height = if app.running { STATUS_HEIGHT } else { 0 };
@@ -39,6 +44,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, composer_style: Style) {
     if app.model_picker().is_some() {
         frame.render_widget(Block::default().style(composer_style), area);
         draw_model_picker(frame, app, area);
+        return;
+    }
+    if app.mcp_picker().is_some() {
+        frame.render_widget(Block::default().style(composer_style), area);
+        draw_mcp_picker(frame, app, area);
         return;
     }
 
@@ -147,6 +157,108 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     draw_model_picker_providers(frame, picker, providers_list);
     draw_model_picker_models(frame, app, picker, models_list);
+}
+
+fn draw_mcp_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(picker) = app.mcp_picker() else {
+        return;
+    };
+
+    if area.is_empty() {
+        return;
+    }
+
+    let [header_area, list_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+
+    let header = Line::from(vec![
+        Span::styled("MCP", Style::default().fg(Color::LightBlue).bold()),
+        Span::from(" ").dim(),
+        Span::styled("↑↓", Style::default().dim()),
+        Span::from(" ").dim(),
+        Span::styled("toggle: Space/Enter", Style::default().dim()),
+        Span::from(" ").dim(),
+        Span::styled("close: Esc", Style::default().dim()),
+    ]);
+    frame.render_widget(Paragraph::new(header), header_area);
+
+    draw_mcp_picker_list(frame, picker, list_area);
+}
+
+fn draw_mcp_picker_list(frame: &mut Frame, picker: &McpPicker, area: Rect) {
+    if area.is_empty() {
+        return;
+    }
+
+    let items = picker
+        .servers()
+        .iter()
+        .map(|s| {
+            let (enabled, enabled_style) = match &s.state {
+                kiliax_core::tools::McpServerConnectionState::Disabled => {
+                    ("[ ]", Style::default().fg(Color::DarkGray).dim())
+                }
+                _ => ("[x]", Style::default().fg(Color::LightGreen).dim()),
+            };
+
+            let (state_text, state_style) = match &s.state {
+                kiliax_core::tools::McpServerConnectionState::Disabled => (
+                    "disabled".to_string(),
+                    Style::default().fg(Color::DarkGray).dim(),
+                ),
+                kiliax_core::tools::McpServerConnectionState::Connected => (
+                    "connected".to_string(),
+                    Style::default().fg(Color::Green).dim(),
+                ),
+                kiliax_core::tools::McpServerConnectionState::Connecting => (
+                    "connecting".to_string(),
+                    Style::default().fg(Color::Cyan).dim(),
+                ),
+                kiliax_core::tools::McpServerConnectionState::Retry { retry_in, .. } => (
+                    format!("retry in {}", fmt_duration_compact(*retry_in)),
+                    Style::default().fg(Color::Yellow).dim(),
+                ),
+                kiliax_core::tools::McpServerConnectionState::Disconnected => (
+                    "disconnected".to_string(),
+                    Style::default().fg(Color::DarkGray).dim(),
+                ),
+            };
+
+            let mut spans = vec![
+                Span::styled(enabled.to_string(), enabled_style),
+                Span::from(" ").dim(),
+                Span::from(s.name.clone()).bold(),
+                Span::from(": ").dim(),
+                Span::styled(state_text, state_style),
+            ];
+
+            if let Some(n) = s.tool_count {
+                spans.push(Span::from(" ").dim());
+                spans.push(Span::styled(format!("(tools {n})"), Style::default().dim()));
+            }
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect::<Vec<_>>();
+
+    let selected = if items.is_empty() {
+        None
+    } else {
+        Some(picker.cursor())
+    };
+    let visible = area.height as usize;
+    let offset = selected
+        .map(|s| list_offset(s, items.len(), visible))
+        .unwrap_or(0);
+    let mut state = ListState::default()
+        .with_selected(selected)
+        .with_offset(offset);
+
+    let list = List::new(items)
+        .highlight_symbol("› ")
+        .highlight_style(crate::style::model_picker_highlight_style());
+
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 fn draw_model_picker_providers(
