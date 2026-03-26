@@ -15,7 +15,7 @@ mod ui;
 mod wrap;
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use crossterm::{cursor::MoveTo, execute, terminal::Clear, terminal::ClearType};
 use futures_util::StreamExt;
 use kiliax_core::{
@@ -185,6 +185,9 @@ async fn main() -> Result<()> {
 
                     match event? {
                         Event::Key(key) => {
+                            if matches!(key.kind, KeyEventKind::Release) {
+                                continue;
+                            }
                             if key.code == KeyCode::Esc {
                                 app.interrupt_run();
                                 agent_stream = None;
@@ -234,6 +237,9 @@ async fn main() -> Result<()> {
 
                     match event? {
                         Event::Key(key) => {
+                            if matches!(key.kind, KeyEventKind::Release) {
+                                continue;
+                            }
                             match app.handle_key(key) {
                                 AppAction::None => {}
                                 AppAction::Submitted(text) => {
