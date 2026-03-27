@@ -337,6 +337,9 @@ fn apply_style(w: &mut impl io::Write, style: Style) -> io::Result<()> {
     if modifiers.contains(Modifier::UNDERLINED) {
         queue!(w, SetAttribute(Attribute::Underlined))?;
     }
+    if modifiers.contains(Modifier::CROSSED_OUT) {
+        queue!(w, SetAttribute(Attribute::CrossedOut))?;
+    }
     if modifiers.contains(Modifier::REVERSED) {
         queue!(w, SetAttribute(Attribute::Reverse))?;
     }

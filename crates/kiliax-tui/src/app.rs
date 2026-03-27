@@ -2140,15 +2140,15 @@ fn render_update_plan_tool_result_lines(
     };
 
     for item in args.plan.iter().take(8) {
-        let status_style = match item.status.as_str() {
-            "completed" => Style::default().fg(Color::Green).dim(),
+        let style = match item.status.as_str() {
+            "completed" => Style::default().fg(Color::Green).dim().crossed_out(),
             "in_progress" => Style::default().fg(Color::Cyan).dim(),
             _ => Style::default().dim(),
         };
         out.push(Line::from(vec![
             Span::from("  └ ").dim(),
-            Span::styled(format!("[{}] ", item.status), status_style),
-            Span::styled(item.step.clone(), Style::default().dim()),
+            Span::styled("[] ".to_string(), style),
+            Span::styled(item.step.clone(), style),
         ]));
     }
     if args.plan.len() > 8 {
@@ -2622,6 +2622,44 @@ mod tests {
         counter.push_str("你");
         counter.push_str("🙂");
         assert_eq!(counter.estimate(), 4);
+    }
+
+    #[test]
+    fn update_plan_tool_result_renders_as_checkbox_list() {
+        let pending = PendingToolCall {
+            name: "update_plan".to_string(),
+            arguments: serde_json::json!({
+                "plan": [
+                    { "step": "one", "status": "pending" },
+                    { "step": "two", "status": "in_progress" },
+                    { "step": "three", "status": "completed" }
+                ]
+            })
+            .to_string(),
+            started_at: Instant::now(),
+            kind: PendingToolCallKind::UpdatePlan { steps: 3 },
+        };
+
+        let lines = render_update_plan_tool_result_lines(&pending, None);
+        let text = lines.iter().map(plain).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("[] one"));
+        assert!(text.contains("[] two"));
+        assert!(text.contains("[] three"));
+
+        // Should not leak internal status strings into the UI.
+        assert!(!text.contains("pending"));
+        assert!(!text.contains("in_progress"));
+        assert!(!text.contains("completed"));
+
+        let completed_line = lines
+            .iter()
+            .find(|line| plain(line).contains("[] three"))
+            .expect("expected completed plan line");
+        assert!(completed_line.spans.iter().any(|span| {
+            let modifiers = span.style.add_modifier - span.style.sub_modifier;
+            modifiers.contains(Modifier::CROSSED_OUT)
+        }));
     }
 
     #[tokio::test(flavor = "current_thread")]
