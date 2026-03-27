@@ -5,6 +5,17 @@ pub fn composer_background_style() -> Style {
     Style::default()
 }
 
+pub fn primary_text_style() -> Style {
+    Style::default().fg(Color::White)
+}
+
+pub fn picker_disabled_style() -> Style {
+    match terminal_theme_hint() {
+        TerminalTheme::Light => Style::default().fg(Color::DarkGray),
+        TerminalTheme::Dark | TerminalTheme::Unknown => Style::default().fg(Color::Gray),
+    }
+}
+
 pub fn accent_colors() -> (Color, Color) {
     match terminal_theme_hint() {
         TerminalTheme::Light => (Color::Rgb(0, 92, 255), Color::Rgb(140, 0, 255)),
@@ -12,6 +23,21 @@ pub fn accent_colors() -> (Color, Color) {
             (Color::Rgb(97, 175, 239), Color::Rgb(198, 120, 221))
         }
     }
+}
+
+pub fn picker_title_style() -> Style {
+    let (_blue, purple) = accent_colors();
+    Style::default().fg(purple)
+}
+
+pub fn picker_hint_style() -> Style {
+    let (blue, _purple) = accent_colors();
+    Style::default().fg(blue)
+}
+
+pub fn picker_selected_style() -> Style {
+    let (blue, _purple) = accent_colors();
+    Style::default().fg(blue).bold()
 }
 
 pub fn composer_prompt_spans() -> [Span<'static>; 2] {
@@ -28,20 +54,15 @@ pub fn model_picker_providers_panel_style() -> Style {
 }
 
 pub fn slash_popup_item_style() -> Style {
-    match terminal_theme_hint() {
-        TerminalTheme::Light => Style::default().fg(Color::DarkGray),
-        TerminalTheme::Dark | TerminalTheme::Unknown => Style::default().fg(Color::Gray),
-    }
+    primary_text_style()
 }
 
 pub fn slash_popup_highlight_style() -> Style {
-    let (blue, _purple) = accent_colors();
-    Style::default().fg(blue).bold()
+    picker_selected_style()
 }
 
 pub fn model_picker_highlight_style() -> Style {
-    let (_blue, purple) = accent_colors();
-    Style::default().fg(purple).bold()
+    picker_selected_style()
 }
 
 pub fn diff_insert_style() -> Style {

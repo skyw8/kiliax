@@ -98,8 +98,11 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     let search_prefix = "Search: ";
     let search_line = Line::from(vec![
-        Span::styled(search_prefix, Style::default().fg(Color::White)),
-        Span::from(picker.search_text().to_string()),
+        Span::styled(search_prefix, crate::style::picker_title_style()),
+        Span::styled(
+            picker.search_text().to_string(),
+            crate::style::primary_text_style(),
+        ),
     ]);
     frame.render_widget(Paragraph::new(search_line), search_area);
 
@@ -125,7 +128,7 @@ fn draw_model_picker(frame: &mut Frame, app: &App, area: Rect) {
     let [models_header, models_list] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(models_area);
 
-    let header_style = Style::default().fg(Color::LightBlue);
+    let header_style = crate::style::picker_title_style();
     let focused_style = header_style.bold();
     let unfocused_style = header_style.dim();
 
@@ -171,14 +174,16 @@ fn draw_mcp_picker(frame: &mut Frame, app: &App, area: Rect) {
     let [header_area, list_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
 
+    let title_style = crate::style::picker_title_style().bold();
+    let hint_style = crate::style::picker_hint_style();
     let header = Line::from(vec![
-        Span::styled("MCP", Style::default().fg(Color::LightBlue).bold()),
-        Span::from(" ").dim(),
-        Span::styled("↑↓", Style::default().dim()),
-        Span::from(" ").dim(),
-        Span::styled("toggle: Space/Enter", Style::default().dim()),
-        Span::from(" ").dim(),
-        Span::styled("close: Esc", Style::default().dim()),
+        Span::styled("MCP", title_style),
+        Span::from(" "),
+        Span::styled("↑↓", hint_style),
+        Span::from(" "),
+        Span::styled("toggle: Space/Enter", hint_style),
+        Span::from(" "),
+        Span::styled("close: Esc", hint_style),
     ]);
     frame.render_widget(Paragraph::new(header), header_area);
 
@@ -194,50 +199,46 @@ fn draw_mcp_picker_list(frame: &mut Frame, picker: &McpPicker, area: Rect) {
         .servers()
         .iter()
         .map(|s| {
-            let (enabled, enabled_style) = match &s.state {
-                kiliax_core::tools::McpServerConnectionState::Disabled => {
-                    ("[ ]", Style::default().fg(Color::DarkGray).dim())
-                }
-                _ => ("[x]", Style::default().fg(Color::LightGreen).dim()),
+            let enabled = !matches!(
+                s.state,
+                kiliax_core::tools::McpServerConnectionState::Disabled
+            );
+            let checkbox = if enabled { "[x]" } else { "[ ]" };
+
+            let item_style = if enabled {
+                crate::style::primary_text_style()
+            } else {
+                crate::style::picker_disabled_style()
             };
 
-            let (state_text, state_style) = match &s.state {
-                kiliax_core::tools::McpServerConnectionState::Disabled => (
-                    "disabled".to_string(),
-                    Style::default().fg(Color::DarkGray).dim(),
-                ),
-                kiliax_core::tools::McpServerConnectionState::Connected => (
-                    "connected".to_string(),
-                    Style::default().fg(Color::Green).dim(),
-                ),
-                kiliax_core::tools::McpServerConnectionState::Connecting => (
-                    "connecting".to_string(),
-                    Style::default().fg(Color::Cyan).dim(),
-                ),
-                kiliax_core::tools::McpServerConnectionState::Retry { retry_in, .. } => (
-                    format!("retry in {}", fmt_duration_compact(*retry_in)),
-                    Style::default().fg(Color::Yellow).dim(),
-                ),
-                kiliax_core::tools::McpServerConnectionState::Disconnected => (
-                    "disconnected".to_string(),
-                    Style::default().fg(Color::DarkGray).dim(),
-                ),
+            let state_text = match &s.state {
+                kiliax_core::tools::McpServerConnectionState::Disabled => "disabled".to_string(),
+                kiliax_core::tools::McpServerConnectionState::Connected => "connected".to_string(),
+                kiliax_core::tools::McpServerConnectionState::Connecting => {
+                    "connecting".to_string()
+                }
+                kiliax_core::tools::McpServerConnectionState::Retry { retry_in, .. } => {
+                    format!("retry in {}", fmt_duration_compact(*retry_in))
+                }
+                kiliax_core::tools::McpServerConnectionState::Disconnected => {
+                    "disconnected".to_string()
+                }
             };
 
             let mut spans = vec![
-                Span::styled(enabled.to_string(), enabled_style),
-                Span::from(" ").dim(),
+                Span::from(checkbox),
+                Span::from(" "),
                 Span::from(s.name.clone()).bold(),
-                Span::from(": ").dim(),
-                Span::styled(state_text, state_style),
+                Span::from(": "),
+                Span::from(state_text),
             ];
 
             if let Some(n) = s.tool_count {
-                spans.push(Span::from(" ").dim());
-                spans.push(Span::styled(format!("(tools {n})"), Style::default().dim()));
+                spans.push(Span::from(" "));
+                spans.push(Span::from(format!("(tools {n})")));
             }
 
-            ListItem::new(Line::from(spans))
+            ListItem::new(Line::from(spans)).style(item_style)
         })
         .collect::<Vec<_>>();
 
@@ -278,7 +279,7 @@ fn draw_model_picker_providers(
             let count = p.models.len();
             ListItem::new(Line::from(vec![
                 Span::from(p.name.clone()),
-                Span::from(format!(" ({count})")).dim(),
+                Span::from(format!(" ({count})")),
             ]))
         })
         .collect::<Vec<_>>();
@@ -328,7 +329,7 @@ fn draw_model_picker_models(
             let is_current = m.id == current_model_id;
             let mut spans = Vec::new();
             if is_current {
-                spans.push(Span::from("• ").fg(Color::LightGreen));
+                spans.push(Span::from("• ").bold());
             } else {
                 spans.push(Span::from("  "));
             }
