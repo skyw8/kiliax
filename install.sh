@@ -2,7 +2,7 @@
 set -e
 
 # One-liner install script for kiliax-tui
-# Usage: curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/master/install.sh | bash
 
 REPO="skyw8/kiliax"
 BINARY_NAME="kiliax"

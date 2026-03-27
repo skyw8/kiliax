@@ -1,5 +1,5 @@
 # kiliax installation script for Windows
-# Usage: iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/main/install.ps1 | iex
+# Usage: iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/master/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
