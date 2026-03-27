@@ -14,7 +14,7 @@ mod terminal;
 mod ui;
 mod wrap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use crossterm::{cursor::MoveTo, execute, terminal::Clear, terminal::ClearType};
 use futures_util::StreamExt;
@@ -31,12 +31,73 @@ use kiliax_core::{
 use crate::app::App;
 use crate::app::{AppAction, SubmitDisposition};
 
+const EXAMPLE_CONFIG_YAML: &str = include_str!("../../../kiliax.example.yaml");
+
+fn print_help() {
+    let bin = env!("CARGO_PKG_NAME");
+    let version = env!("CARGO_PKG_VERSION");
+
+    println!("{bin} {version}");
+    println!();
+    println!("Usage:");
+    println!("  {bin} [plan|general|build] [--resume <SESSION_ID>]");
+    println!();
+    println!("Options:");
+    println!("  --resume <SESSION_ID>    Resume a session");
+    println!("  -h, --help               Show help");
+    println!("  -V, --version            Show version");
+    println!();
+    println!("Config search order:");
+    println!("  1) ./kiliax.yaml");
+    println!("  2) ./.kiliax/kiliax.yaml");
+    println!("  3) ~/.kiliax/kiliax.yaml");
+    println!();
+    println!("If no config is found, {bin} will write a template and exit.");
+}
+
+fn print_version() {
+    let bin = env!("CARGO_PKG_NAME");
+    let version = env!("CARGO_PKG_VERSION");
+    println!("{bin} {version}");
+}
+
+fn write_default_config(paths: &[std::path::PathBuf]) -> Result<std::path::PathBuf> {
+    let Some(target) = (if paths.len() >= 3 {
+        paths.last()
+    } else {
+        paths.first()
+    }) else {
+        anyhow::bail!("no config candidate paths available");
+    };
+
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("failed to create config dir: {}", dir.display()))?;
+    }
+
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .with_context(|| format!("failed to create config file: {}", target.display()))?;
+    f.write_all(EXAMPLE_CONFIG_YAML.as_bytes())
+        .with_context(|| format!("failed to write config file: {}", target.display()))?;
+    Ok(target.clone())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let workspace_root = std::env::current_dir()?;
-    let store = FileSessionStore::project(&workspace_root);
-
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print_help();
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "-V" || a == "--version") {
+        print_version();
+        return Ok(());
+    }
+
     let mut profile_override: Option<&str> = None;
     let mut resume_id: Option<SessionId> = None;
     let mut iter = args.iter().peekable();
@@ -53,12 +114,27 @@ async fn main() -> Result<()> {
         }
     }
 
+    let loaded = match config::load() {
+        Ok(loaded) => loaded,
+        Err(config::ConfigError::NotFound { paths }) => {
+            let path = write_default_config(&paths)?;
+            let bin = env!("CARGO_PKG_NAME");
+            println!("No `kiliax.yaml` found.");
+            println!("Created template config at: {}", path.display());
+            println!("Edit it, then rerun `{bin}`.");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let workspace_root = std::env::current_dir()?;
+    let store = FileSessionStore::project(&workspace_root);
+
     let mut resumed: Option<kiliax_core::session::SessionState> = None;
     if let Some(id) = resume_id.as_ref() {
         resumed = Some(store.load(id).await?);
     }
 
-    let loaded = config::load()?;
     let model_override = resumed.as_ref().and_then(|s| s.meta.model_id.as_deref());
     let llm = LlmClient::from_config(&loaded.config, model_override)?;
     let runtime = kiliax_core::runtime::AgentRuntime::new(

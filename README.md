@@ -1,6 +1,7 @@
+<h1 align="center">Kiliax</h1>
 
 <p align="center">
-  <img src="assets/kiliax.png" width="120" alt="Kiliax logo">
+  <img src="assets/kiliax.png" width="240" alt="Kiliax logo">
 </p>
 
 Kiliax is a high-performance, cross-platform AI agent tool (Rust).
@@ -40,31 +41,19 @@ Download the latest binary for your platform from [GitHub Releases](https://gith
 ```bash
 git clone https://github.com/skyw8/kiliax.git
 cd kiliax
-cargo build --release -p kiliax-tui
+cargo build --release -p kiliax
 ```
 
 ## run
 
 ```bash
+cargo run -p kiliax
+
+cd workspace && cargo run -p kiliax --manifest-path=../Cargo.toml
+
 cargo run -p kiliax-core --example chat_hello
 cargo run -p kiliax-core --example stream_chat
 cargo run -p kiliax-core --example agent_loop
-```
-
-## config
-
-See `kiliax.example.yaml`.
-
-- `runtime.max_steps`: default max steps for all agents
-- `agents.plan.max_steps` / `agents.general.max_steps`: per-agent overrides
-
-## tui
-
-```bash
-cargo run -p kiliax-tui
-
-
-cd workspace && cargo run -p kiliax-tui --manifest-path=../Cargo.toml
 ```
 
 ## References
