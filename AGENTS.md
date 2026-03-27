@@ -89,7 +89,10 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - status bar： 在输入框底部，显示status/agent_name/model_name 
 - 输出紧凑：避免引入多余空行（尤其是 thinking/流式渲染导致的空行）
 - 遵循无框线的设计，简化UI
-- 优先蓝色、紫色高亮，其次绿色、黄色
+
+#### color
+- 优先蓝色、紫色高亮，其次橙色绿色
+- 颜色使用场景：题头为紫色；选中为蓝色，未选中为白色；未开启的显示为灰色，开启显示为白色
 
 ## ENV
 
