@@ -116,6 +116,7 @@ impl AgentRuntime {
         let perms = std::sync::Arc::new(profile.permissions.clone());
 
         for step in 0..options.max_steps {
+            sanitize_tool_call_history(&mut messages);
             let tool_defs = tool_definitions_for(profile, &self.tools).await;
             let mut req = ChatRequest::new(messages.clone());
             req.tools = tool_defs;
@@ -247,6 +248,7 @@ impl AgentRuntime {
 
         tokio::spawn(async move {
             for step in 0..options.max_steps {
+                sanitize_tool_call_history(&mut messages);
                 if tx
                     .send(Ok(AgentEvent::StepStart { step: step + 1 }))
                     .await
@@ -527,6 +529,76 @@ fn group_tool_calls(tool_calls: &[ToolCall]) -> Vec<ToolCallGroup<'_>> {
     out
 }
 
+fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
+    if messages.iter().all(|m| {
+        !matches!(m, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty())
+            && !matches!(m, Message::Tool { .. })
+    }) {
+        return;
+    }
+
+    let mut queue: std::collections::VecDeque<Message> = std::mem::take(messages).into();
+    let mut out: Vec<Message> = Vec::with_capacity(queue.len());
+
+    while let Some(msg) = queue.pop_front() {
+        match msg {
+            Message::Assistant {
+                content,
+                reasoning_content,
+                tool_calls,
+            } if !tool_calls.is_empty() => {
+                let expected_ids: Vec<String> =
+                    tool_calls.iter().map(|c| c.id.clone()).collect();
+                out.push(Message::Assistant {
+                    content,
+                    reasoning_content,
+                    tool_calls,
+                });
+
+                let mut segment_tool_msgs: Vec<Message> = Vec::new();
+                let mut segment_other_msgs: Vec<Message> = Vec::new();
+                while !matches!(queue.front(), Some(Message::Assistant { .. }) | None) {
+                    let next = queue.pop_front().expect("front checked");
+                    match next {
+                        Message::Tool { .. } => segment_tool_msgs.push(next),
+                        other => segment_other_msgs.push(other),
+                    }
+                }
+
+                let mut remaining: Vec<Option<Message>> =
+                    segment_tool_msgs.into_iter().map(Some).collect();
+                for expected_id in expected_ids {
+                    let mut picked: Option<Message> = None;
+                    for slot in remaining.iter_mut() {
+                        let Some(Message::Tool { tool_call_id, .. }) = slot.as_ref() else {
+                            continue;
+                        };
+                        if tool_call_id == &expected_id {
+                            picked = slot.take();
+                            break;
+                        }
+                    }
+
+                    if let Some(msg) = picked {
+                        out.push(msg);
+                    } else {
+                        out.push(Message::Tool {
+                            tool_call_id: expected_id,
+                            content: "error: missing tool response message (repaired)".to_string(),
+                        });
+                    }
+                }
+
+                out.extend(segment_other_msgs);
+            }
+            Message::Tool { .. } => {}
+            other => out.push(other),
+        }
+    }
+
+    *messages = out;
+}
+
 #[derive(Debug)]
 struct StreamStepOutput {
     assistant: Message,
@@ -671,6 +743,141 @@ async fn drive_stream_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_tool_call_history_reorders_tool_messages() {
+        let mut messages = vec![
+            Message::User {
+                content: crate::llm::UserMessageContent::Text("hi".to_string()),
+            },
+            Message::Assistant {
+                content: None,
+                reasoning_content: None,
+                tool_calls: vec![
+                    ToolCall {
+                        id: "a".to_string(),
+                        name: "t".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                    ToolCall {
+                        id: "b".to_string(),
+                        name: "t".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                ],
+            },
+            Message::Tool {
+                tool_call_id: "b".to_string(),
+                content: "B".to_string(),
+            },
+            Message::Tool {
+                tool_call_id: "a".to_string(),
+                content: "A".to_string(),
+            },
+            Message::Assistant {
+                content: Some("done".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+            },
+        ];
+
+        sanitize_tool_call_history(&mut messages);
+
+        assert!(matches!(
+            messages.get(2),
+            Some(Message::Tool {
+                tool_call_id,
+                content,
+            }) if tool_call_id == "a" && content == "A"
+        ));
+        assert!(matches!(
+            messages.get(3),
+            Some(Message::Tool {
+                tool_call_id,
+                content,
+            }) if tool_call_id == "b" && content == "B"
+        ));
+    }
+
+    #[test]
+    fn sanitize_tool_call_history_inserts_missing_tool_messages() {
+        let mut messages = vec![
+            Message::Assistant {
+                content: Some("call tools".to_string()),
+                reasoning_content: None,
+                tool_calls: vec![ToolCall {
+                    id: "x".to_string(),
+                    name: "t".to_string(),
+                    arguments: "{}".to_string(),
+                }],
+            },
+            Message::Assistant {
+                content: Some("next".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+            },
+        ];
+
+        sanitize_tool_call_history(&mut messages);
+
+        assert!(matches!(
+            messages.get(1),
+            Some(Message::Tool { tool_call_id, .. }) if tool_call_id == "x"
+        ));
+    }
+
+    #[test]
+    fn sanitize_tool_call_history_moves_non_tool_messages_after_tool_messages() {
+        let mut messages = vec![
+            Message::Assistant {
+                content: None,
+                reasoning_content: None,
+                tool_calls: vec![
+                    ToolCall {
+                        id: "a".to_string(),
+                        name: "t".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                    ToolCall {
+                        id: "b".to_string(),
+                        name: "t".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                ],
+            },
+            Message::Tool {
+                tool_call_id: "a".to_string(),
+                content: "A".to_string(),
+            },
+            Message::User {
+                content: crate::llm::UserMessageContent::Text("[img]".to_string()),
+            },
+            Message::Tool {
+                tool_call_id: "b".to_string(),
+                content: "B".to_string(),
+            },
+            Message::Assistant {
+                content: Some("done".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+            },
+        ];
+
+        sanitize_tool_call_history(&mut messages);
+
+        assert!(matches!(
+            messages.get(1),
+            Some(Message::Tool { tool_call_id, .. }) if tool_call_id == "a"
+        ));
+        assert!(matches!(
+            messages.get(2),
+            Some(Message::Tool { tool_call_id, .. }) if tool_call_id == "b"
+        ));
+        assert!(matches!(
+            messages.get(3),
+            Some(Message::User { .. })
+        ));
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn drive_stream_step_merges_tool_call_deltas() {

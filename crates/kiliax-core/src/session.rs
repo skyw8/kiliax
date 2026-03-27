@@ -560,12 +560,20 @@ fn derive_title(messages: &[Message]) -> Option<String> {
 }
 
 fn truncate_title(input: &str) -> String {
-    let mut s = input.to_string();
-    const MAX: usize = 80;
-    if s.len() > MAX {
-        s.truncate(MAX);
-        s.push_str("…");
+    const MAX_BYTES: usize = 80;
+    let input = input.trim();
+
+    if input.len() <= MAX_BYTES {
+        return input.to_string();
     }
+
+    let mut cut = MAX_BYTES;
+    while cut > 0 && !input.is_char_boundary(cut) {
+        cut -= 1;
+    }
+
+    let mut s = input[..cut].to_string();
+    s.push('…');
     s
 }
 
@@ -601,6 +609,15 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_title_does_not_panic_on_utf8_boundary() {
+        // "你" is 3 bytes; 80 is not a char boundary (80 % 3 == 2).
+        let input = "你".repeat(40);
+        let out = truncate_title(&input);
+        assert!(out.ends_with('…'));
+        assert!(out.len() < input.len());
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn roundtrip_create_record_load_list() {
