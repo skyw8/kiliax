@@ -182,7 +182,8 @@ async fn main() -> Result<()> {
     let Some(loaded) = load_or_init_config()? else {
         return Ok(());
     };
-    let store = FileSessionStore::project(&workspace_root);
+    let store = FileSessionStore::global()
+        .context("failed to determine home directory for sessions (expected ~/sessions)")?;
 
     let mut resumed: Option<kiliax_core::session::SessionState> = None;
     if let Some(id) = resume_id.as_ref() {

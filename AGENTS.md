@@ -39,7 +39,7 @@ minimal
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 请求前规整 tool_calls/Tool 消息序列（补齐缺失/保证顺序），避免 provider 因 tool_call_id 未响应报 400）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`，并在 tool_calls step 中累积为 assistant 的 `reasoning_content` 以便下一轮回放
-- `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `<workspace>/.kiliax/sessions/<session_id>/`）；title 从首条 user 文本派生并做 UTF-8 安全截断（避免中文等多字节字符触发 panic）
+- `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `~/sessions/<session_id>/`）；title 从首条 user 文本派生并做 UTF-8 安全截断（避免中文等多字节字符触发 panic）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`；定义 `ToolParallelism` 与并行能力判定
   - `builtin/`: codex 风格内置工具 schema + 执行（按工具拆分）

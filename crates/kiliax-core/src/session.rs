@@ -188,7 +188,7 @@ impl FileSessionStore {
     }
 
     pub fn global() -> Option<Self> {
-        dirs::home_dir().map(|home| Self::new(home.join(".kiliax").join("sessions")))
+        dirs::home_dir().map(|home| Self::new(home.join("sessions")))
     }
 
     pub fn root_dir(&self) -> &Path {

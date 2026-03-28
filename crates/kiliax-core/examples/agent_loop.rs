@@ -61,7 +61,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     eprintln!("Agent: {}", profile.name);
 
-    let store = FileSessionStore::project(&workspace_root);
+    let store = FileSessionStore::global().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "failed to determine home directory for sessions (expected ~/sessions)",
+        )
+    })?;
 
     let tools_engine = ToolEngine::new(&workspace_root, loaded.config.clone());
     let runtime = AgentRuntime::new(llm, tools_engine);

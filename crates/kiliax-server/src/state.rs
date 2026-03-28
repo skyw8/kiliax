@@ -44,7 +44,9 @@ impl ServerState {
         config: Config,
         token: Option<String>,
     ) -> Result<Self, anyhow::Error> {
-        Self::new_inner(workspace_root, config_path, config, token, true).await
+        let store = FileSessionStore::global()
+            .ok_or_else(|| anyhow::anyhow!("failed to determine home directory for sessions (expected ~/sessions)"))?;
+        Self::new_inner(workspace_root, config_path, config, token, true, store).await
     }
 
     #[cfg(test)]
@@ -54,7 +56,8 @@ impl ServerState {
         config: Config,
         token: Option<String>,
     ) -> Result<Self, anyhow::Error> {
-        Self::new_inner(workspace_root, config_path, config, token, false).await
+        let store = FileSessionStore::project(&workspace_root);
+        Self::new_inner(workspace_root, config_path, config, token, false, store).await
     }
 
     async fn new_inner(
@@ -63,8 +66,8 @@ impl ServerState {
         config: Config,
         token: Option<String>,
         runner_enabled: bool,
+        store: FileSessionStore,
     ) -> Result<Self, anyhow::Error> {
-        let store = FileSessionStore::project(&workspace_root);
         let runs_dir = workspace_root.join(".kiliax").join("runs");
         tokio::fs::create_dir_all(&runs_dir).await?;
 
