@@ -1,0 +1,953 @@
+openapi: 3.1.0
+info:
+  title: Kiliax Session Control API
+  version: 1.0.0
+  description: |
+    Network API for controlling Kiliax sessions.
+
+    Notes:
+    - `kiliax.yaml` provides defaults for *new sessions* only.
+    - API/CLI can override settings at session-level (persistent) and per-run (ephemeral).
+    - Streaming output is delivered as events (SSE endpoint is specified here; WebSocket is documented in descriptions).
+servers:
+  - url: http://127.0.0.1:8123
+    description: Local-only default
+tags:
+  - name: Sessions
+  - name: Runs
+  - name: Capabilities
+  - name: Events
+security:
+  - bearerAuth: []
+  - {}
+paths:
+  /v1/sessions:
+    post:
+      tags: [Sessions]
+      operationId: createSession
+      summary: Create a session
+      description: |
+        Creates a new session using YAML defaults, optionally overridden by `settings`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionCreateRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List sessions
+      parameters:
+        - name: live
+          in: query
+          required: false
+          description: If true, only return live sessions.
+          schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/Limit"
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned by a previous list call.
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionListResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}:
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: Get session snapshot
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}/resume:
+    post:
+      tags: [Sessions]
+      operationId: resumeSession
+      summary: Resume session as live
+      description: |
+        Makes an archived session live (creates an in-memory runtime).
+        Implementations may also auto-resume on `createRun`; this endpoint exists for explicit warm-up.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}/settings:
+    patch:
+      tags: [Sessions]
+      operationId: patchSessionSettings
+      summary: Patch session settings (persistent)
+      description: |
+        Updates persistent session settings (agent/model/MCP) that apply to subsequent runs.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionSettingsPatch"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}/messages:
+    get:
+      tags: [Sessions]
+      operationId: getSessionMessages
+      summary: Get session messages (paged)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/Limit"
+        - name: before
+          in: query
+          required: false
+          description: Return messages before this message id (exclusive).
+          schema: { $ref: "#/components/schemas/MessageId" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageListResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}/runs:
+    post:
+      tags: [Runs]
+      operationId: createRun
+      summary: Create a run (send a message)
+      description: |
+        Enqueues a new run for a session. Runs are executed sequentially per session.
+
+        Auto-resume:
+        - If the session is archived and `auto_resume=true`, the server SHOULD resume it automatically.
+        - If `auto_resume=false` and the session is archived, the server SHOULD return an error
+          with `error.code=session_not_live` (recommended HTTP status: 409).
+
+        Streaming:
+        - Subscribe to events via SSE (`/v1/sessions/{session_id}/events/stream`) or WebSocket
+          (`/v1/sessions/{session_id}/events/ws`, not formally represented in OpenAPI).
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunCreateRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/runs/{run_id}:
+    get:
+      tags: [Runs]
+      operationId: getRun
+      summary: Get run status
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/runs/{run_id}/cancel:
+    post:
+      tags: [Runs]
+      operationId: cancelRun
+      summary: Cancel a run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/capabilities:
+    get:
+      tags: [Capabilities]
+      operationId: getCapabilities
+      summary: Get server capabilities/options for UI
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}/events:
+    get:
+      tags: [Events]
+      operationId: listEvents
+      summary: List session events (paged)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/Limit"
+        - name: after
+          in: query
+          required: false
+          description: Return events after this event id (exclusive).
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventListResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}/events/stream:
+    get:
+      tags: [Events]
+      operationId: streamEventsSse
+      summary: Stream session events (SSE)
+      description: |
+        Server-Sent Events stream. Each SSE `data:` line contains JSON encoded `Event`.
+
+        Resuming:
+        - Pass `Last-Event-ID` header (recommended), or `after_event_id` query parameter.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: after_event_id
+          in: query
+          required: false
+          description: Start streaming after this event id (exclusive).
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE stream of events. Each event is encoded as:
+                  - `id: <event_id>\n`
+                  - `event: <type>\n`
+                  - `data: <json(Event)>\n\n`
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/sessions/{session_id}/events/ws:
+    get:
+      tags: [Events]
+      operationId: streamEventsWebSocket
+      summary: Stream session events (WebSocket)
+      description: |
+        WebSocket upgrade endpoint (recommended for RN).
+
+        Client sends:
+        - HTTP Upgrade request to this endpoint
+        - Optional query `after_event_id=<int>` for resuming
+        - Optional `Authorization: Bearer <token>`
+
+        Server sends JSON messages encoded as `Event` (same schema as SSE `data:`).
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: after_event_id
+          in: query
+          required: false
+          description: Start streaming after this event id (exclusive).
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket)
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/SessionId" }
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/RunId" }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Client-provided idempotency key for safe retries.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Max number of items to return.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+  responses:
+    ErrorResponse:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+
+  schemas:
+    # ---- ids ----
+    OpaqueId:
+      type: string
+      description: |
+        Opaque id (implementation-defined).
+
+        Current implementation uses filesystem-friendly ids matching: `[A-Za-z0-9_-]+`.
+      pattern: "^[A-Za-z0-9_-]+$"
+      examples: ["20260328T123456Z_123_18f0c2a-3e9"]
+    SessionId:
+      allOf: [{ $ref: "#/components/schemas/OpaqueId" }]
+    RunId:
+      allOf: [{ $ref: "#/components/schemas/OpaqueId" }]
+    MessageId:
+      type: string
+      minLength: 1
+      description: Opaque message id (implementation-defined).
+
+    # ---- errors ----
+    ApiErrorCode:
+      type: string
+      description: |
+        Stable, machine-readable error code.
+
+        Suggested HTTP status mapping (best-effort):
+        - `invalid_argument` -> 400
+        - `unauthorized` -> 401
+        - `forbidden` -> 403
+        - `not_found` -> 404
+        - `conflict` / `session_not_live` -> 409
+        - `rate_limited` -> 429
+        - `internal` -> 500
+      enum:
+        - invalid_argument
+        - unauthorized
+        - forbidden
+        - not_found
+        - conflict
+        - rate_limited
+        - internal
+        - session_not_live
+        - model_not_supported
+        - agent_not_supported
+        - mcp_server_not_found
+        - run_not_cancellable
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { $ref: "#/components/schemas/ApiErrorCode" }
+        message: { type: string, minLength: 1 }
+        details:
+          type: object
+          additionalProperties: true
+    ApiErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: "#/components/schemas/ApiError" }
+        trace_id:
+          type: string
+          description: Optional server trace id for debugging.
+
+    # ---- settings / capabilities ----
+    AgentName:
+      type: string
+      description: Agent profile name (e.g. "general", "plan").
+      minLength: 1
+    ModelId:
+      type: string
+      description: Provider-qualified model id (e.g. "openai/gpt-5.2").
+      minLength: 1
+    McpServerId:
+      type: string
+      description: MCP server id from config.
+      minLength: 1
+
+    McpServerSetting:
+      type: object
+      required: [id, enable]
+      properties:
+        id: { $ref: "#/components/schemas/McpServerId" }
+        enable: { type: boolean }
+
+    SessionSettings:
+      type: object
+      required: [agent, model_id, mcp]
+      properties:
+        agent: { $ref: "#/components/schemas/AgentName" }
+        model_id: { $ref: "#/components/schemas/ModelId" }
+        mcp:
+          type: object
+          required: [servers]
+          properties:
+            servers:
+              type: array
+              items: { $ref: "#/components/schemas/McpServerSetting" }
+
+    SessionSettingsPatch:
+      type: object
+      description: Partial update. Fields omitted are unchanged.
+      properties:
+        agent: { $ref: "#/components/schemas/AgentName" }
+        model_id: { $ref: "#/components/schemas/ModelId" }
+        mcp:
+          type: object
+          properties:
+            servers:
+              type: array
+              items: { $ref: "#/components/schemas/McpServerSetting" }
+
+    McpConnectionState:
+      type: string
+      enum: [disabled, connecting, connected, error]
+    McpServerStatus:
+      type: object
+      required: [id, enable, state]
+      properties:
+        id: { $ref: "#/components/schemas/McpServerId" }
+        enable: { type: boolean }
+        state: { $ref: "#/components/schemas/McpConnectionState" }
+        last_error: { type: string }
+        tools:
+          type: array
+          description: Tool names exposed by this MCP server (optional).
+          items: { type: string }
+
+    Capabilities:
+      type: object
+      required: [agents, models, mcp_servers]
+      properties:
+        agents:
+          type: array
+          items: { $ref: "#/components/schemas/AgentName" }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/ModelId" }
+        mcp_servers:
+          type: array
+          items: { $ref: "#/components/schemas/McpServerStatus" }
+
+    # ---- session / run ----
+    SessionState:
+      type: string
+      enum: [live, archived]
+    SessionRunState:
+      type: string
+      description: Current activity of the live runtime.
+      enum: [idle, running, tooling]
+
+    SessionStatus:
+      type: object
+      required: [session_state, run_state, queue_len, last_event_id]
+      properties:
+        session_state: { $ref: "#/components/schemas/SessionState" }
+        run_state: { $ref: "#/components/schemas/SessionRunState" }
+        active_run_id:
+          anyOf:
+            - { $ref: "#/components/schemas/RunId" }
+            - { type: "null" }
+        step:
+          type: integer
+          minimum: 0
+          description: Current step for the active run (0 when idle).
+        active_tool:
+          type: string
+          description: Current tool name when `run_state=tooling`.
+        queue_len:
+          type: integer
+          minimum: 0
+        last_event_id:
+          type: integer
+          minimum: 0
+
+    SessionSummary:
+      type: object
+      required: [id, title, created_at, status, settings]
+      properties:
+        id: { $ref: "#/components/schemas/SessionId" }
+        title: { type: string }
+        created_at: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/SessionStatus" }
+        settings: { $ref: "#/components/schemas/SessionSettings" }
+
+    Session:
+      allOf:
+        - $ref: "#/components/schemas/SessionSummary"
+        - type: object
+          required: [mcp_status]
+          properties:
+            mcp_status:
+              type: array
+              items: { $ref: "#/components/schemas/McpServerStatus" }
+
+    SessionCreateRequest:
+      type: object
+      description: Optional overrides for a newly created session.
+      properties:
+        title:
+          type: string
+          description: Optional explicit title; if omitted server may derive from first user message.
+        settings:
+          $ref: "#/components/schemas/SessionSettingsPatch"
+
+    SessionListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SessionSummary" }
+        next_cursor:
+          type: string
+          description: Opaque cursor for pagination.
+
+    RunState:
+      type: string
+      enum: [queued, running, done, error, cancelled]
+    Run:
+      type: object
+      required: [id, session_id, state, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/RunId" }
+        session_id: { $ref: "#/components/schemas/SessionId" }
+        state: { $ref: "#/components/schemas/RunState" }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        finish_reason:
+          type: string
+          description: Provider finish reason (best-effort).
+        error:
+          $ref: "#/components/schemas/ApiError"
+        input:
+          $ref: "#/components/schemas/RunInput"
+        overrides:
+          $ref: "#/components/schemas/RunOverrides"
+
+    RunInput:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [text]
+        text:
+          type: string
+          description: Text input for the run.
+      oneOf:
+        - required: [type, text]
+
+    RunOverrides:
+      type: object
+      description: Ephemeral overrides that only apply to this run.
+      properties:
+        agent: { $ref: "#/components/schemas/AgentName" }
+        model_id: { $ref: "#/components/schemas/ModelId" }
+        mcp:
+          type: object
+          properties:
+            servers:
+              type: array
+              items: { $ref: "#/components/schemas/McpServerSetting" }
+
+    RunCreateRequest:
+      type: object
+      required: [input]
+      properties:
+        input: { $ref: "#/components/schemas/RunInput" }
+        overrides: { $ref: "#/components/schemas/RunOverrides" }
+        auto_resume:
+          type: boolean
+          default: true
+          description: |
+            If true (default), server should auto-resume an archived session to accept this run.
+            If false, server may reject archived sessions with `error.code=session_not_live`.
+
+    # ---- messages ----
+    MessageRole:
+      type: string
+      enum: [user, assistant, tool]
+
+    ToolCall:
+      type: object
+      required: [id, name, arguments]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        arguments:
+          type: string
+          description: JSON encoded arguments (OpenAI-compatible).
+
+    MessageBase:
+      type: object
+      required: [id, role, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/MessageId" }
+        role: { $ref: "#/components/schemas/MessageRole" }
+        created_at: { type: string, format: date-time }
+
+    UserMessage:
+      allOf:
+        - $ref: "#/components/schemas/MessageBase"
+        - type: object
+          required: [role, content]
+          properties:
+            role:
+              const: user
+            content: { type: string }
+
+    AssistantMessage:
+      allOf:
+        - $ref: "#/components/schemas/MessageBase"
+        - type: object
+          required: [role, content]
+          properties:
+            role:
+              const: assistant
+            content: { type: string }
+            reasoning_content:
+              type: string
+              description: Optional reasoning/thinking text (best-effort).
+            tool_calls:
+              type: array
+              items: { $ref: "#/components/schemas/ToolCall" }
+
+    ToolMessage:
+      allOf:
+        - $ref: "#/components/schemas/MessageBase"
+        - type: object
+          required: [role, tool_call_id, content]
+          properties:
+            role:
+              const: tool
+            tool_call_id: { type: string, minLength: 1 }
+            content: { type: string }
+
+    Message:
+      oneOf:
+        - $ref: "#/components/schemas/UserMessage"
+        - $ref: "#/components/schemas/AssistantMessage"
+        - $ref: "#/components/schemas/ToolMessage"
+      discriminator:
+        propertyName: role
+        mapping:
+          user: "#/components/schemas/UserMessage"
+          assistant: "#/components/schemas/AssistantMessage"
+          tool: "#/components/schemas/ToolMessage"
+
+    MessageListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+        next_before:
+          $ref: "#/components/schemas/MessageId"
+
+    # ---- events ----
+    EventType:
+      type: string
+      enum:
+        - step_start
+        - step_end
+        - assistant_thinking_delta
+        - assistant_delta
+        - assistant_message
+        - tool_call
+        - tool_result
+        - run_done
+        - run_error
+        - run_cancelled
+        - session_settings_changed
+
+    EventBase:
+      type: object
+      required: [event_id, ts, session_id]
+      properties:
+        event_id:
+          type: integer
+          minimum: 0
+          description: Monotonic within a session.
+        ts:
+          type: string
+          format: date-time
+        session_id: { $ref: "#/components/schemas/SessionId" }
+        run_id:
+          anyOf:
+            - { $ref: "#/components/schemas/RunId" }
+            - { type: "null" }
+
+    StepStartEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: step_start }
+            data: { $ref: "#/components/schemas/EventStep" }
+
+    StepEndEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: step_end }
+            data: { $ref: "#/components/schemas/EventStep" }
+
+    AssistantThinkingDeltaEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: assistant_thinking_delta }
+            data: { $ref: "#/components/schemas/EventDelta" }
+
+    AssistantDeltaEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: assistant_delta }
+            data: { $ref: "#/components/schemas/EventDelta" }
+
+    AssistantMessageEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: assistant_message }
+            data: { $ref: "#/components/schemas/EventAssistantMessage" }
+
+    ToolCallEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: tool_call }
+            data: { $ref: "#/components/schemas/EventToolCall" }
+
+    ToolResultEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: tool_result }
+            data: { $ref: "#/components/schemas/EventToolResult" }
+
+    RunDoneEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: run_done }
+            data: { $ref: "#/components/schemas/EventRunDone" }
+
+    RunErrorEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: run_error }
+            data: { $ref: "#/components/schemas/EventRunError" }
+
+    RunCancelledEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: run_cancelled }
+            data: { $ref: "#/components/schemas/EventRunCancelled" }
+
+    SessionSettingsChangedEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [type, data]
+          properties:
+            type: { const: session_settings_changed }
+            data: { $ref: "#/components/schemas/EventSessionSettingsChanged" }
+
+    Event:
+      oneOf:
+        - $ref: "#/components/schemas/StepStartEvent"
+        - $ref: "#/components/schemas/StepEndEvent"
+        - $ref: "#/components/schemas/AssistantThinkingDeltaEvent"
+        - $ref: "#/components/schemas/AssistantDeltaEvent"
+        - $ref: "#/components/schemas/AssistantMessageEvent"
+        - $ref: "#/components/schemas/ToolCallEvent"
+        - $ref: "#/components/schemas/ToolResultEvent"
+        - $ref: "#/components/schemas/RunDoneEvent"
+        - $ref: "#/components/schemas/RunErrorEvent"
+        - $ref: "#/components/schemas/RunCancelledEvent"
+        - $ref: "#/components/schemas/SessionSettingsChangedEvent"
+      discriminator:
+        propertyName: type
+        mapping:
+          step_start: "#/components/schemas/StepStartEvent"
+          step_end: "#/components/schemas/StepEndEvent"
+          assistant_thinking_delta: "#/components/schemas/AssistantThinkingDeltaEvent"
+          assistant_delta: "#/components/schemas/AssistantDeltaEvent"
+          assistant_message: "#/components/schemas/AssistantMessageEvent"
+          tool_call: "#/components/schemas/ToolCallEvent"
+          tool_result: "#/components/schemas/ToolResultEvent"
+          run_done: "#/components/schemas/RunDoneEvent"
+          run_error: "#/components/schemas/RunErrorEvent"
+          run_cancelled: "#/components/schemas/RunCancelledEvent"
+          session_settings_changed: "#/components/schemas/SessionSettingsChangedEvent"
+
+    EventStep:
+      type: object
+      required: [step]
+      properties:
+        step: { type: integer, minimum: 1 }
+
+    EventDelta:
+      type: object
+      required: [delta]
+      properties:
+        delta: { type: string }
+
+    EventAssistantMessage:
+      type: object
+      required: [message]
+      properties:
+        message: { $ref: "#/components/schemas/AssistantMessage" }
+
+    EventToolCall:
+      type: object
+      required: [call]
+      properties:
+        call: { $ref: "#/components/schemas/ToolCall" }
+
+    EventToolResult:
+      type: object
+      required: [message]
+      properties:
+        message: { $ref: "#/components/schemas/Message" }
+
+    EventRunDone:
+      type: object
+      required: [run]
+      properties:
+        run: { $ref: "#/components/schemas/Run" }
+
+    EventRunError:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: "#/components/schemas/ApiError" }
+
+    EventRunCancelled:
+      type: object
+      properties:
+        reason: { type: string }
+
+    EventSessionSettingsChanged:
+      type: object
+      required: [settings]
+      properties:
+        settings: { $ref: "#/components/schemas/SessionSettings" }
+
+    EventListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Event" }
+        next_after:
+          type: integer
+          minimum: 0
