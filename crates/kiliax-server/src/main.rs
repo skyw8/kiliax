@@ -32,7 +32,7 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
     let api = Router::new()
         .route("/sessions", post(create_session).get(list_sessions))
         .route("/config", get(get_config).put(put_config))
-        .route("/sessions/{session_id}", get(get_session))
+        .route("/sessions/{session_id}", get(get_session).delete(delete_session))
         .route("/sessions/{session_id}/resume", post(resume_session))
         .route("/sessions/{session_id}/settings", patch(patch_settings))
         .route("/sessions/{session_id}/messages", get(get_messages))
@@ -417,6 +417,15 @@ async fn get_session(
     let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.get_session(&id).await?;
     Ok(Json(out))
+}
+
+async fn delete_session(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    state.delete_session(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn resume_session(

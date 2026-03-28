@@ -277,6 +277,70 @@ async fn idempotency_key_makes_create_session_idempotent() {
 }
 
 #[tokio::test]
+async fn delete_session_removes_session() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let session_id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("session id")
+        .to_string();
+
+    let meta_path = dir
+        .path()
+        .join(".kiliax")
+        .join("sessions")
+        .join(&session_id)
+        .join("meta.json");
+    assert!(meta_path.is_file(), "expected meta.json to exist");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::DELETE,
+            &format!("/v1/sessions/{session_id}"),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("items")
+            .and_then(|v| v.as_array())
+            .map(|v| v.len()),
+        Some(0),
+        "unexpected sessions: {body}"
+    );
+}
+
+#[tokio::test]
 async fn list_sessions_shows_archived_after_restart() {
     let dir = TempDir::new().expect("tempdir");
     let app1 = build_test_app(&dir, None).await;

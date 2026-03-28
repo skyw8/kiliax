@@ -61,6 +61,9 @@ export const api = {
   getSession(sessionId: string): Promise<Session> {
     return apiFetch<Session>(`/v1/sessions/${sessionId}`);
   },
+  deleteSession(sessionId: string): Promise<void> {
+    return apiFetch<void>(`/v1/sessions/${sessionId}`, { method: "DELETE" });
+  },
   patchSessionSettings(sessionId: string, patch: unknown): Promise<Session> {
     return apiFetch<Session>(`/v1/sessions/${sessionId}/settings`, {
       method: "PATCH",

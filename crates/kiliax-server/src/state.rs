@@ -397,6 +397,15 @@ impl ServerState {
         })
     }
 
+    pub async fn delete_session(&self, session_id: &SessionId) -> Result<(), ApiError> {
+        let live = self.sessions.lock().await.remove(session_id.as_str());
+        if let Some(live) = live {
+            live.shutdown().await;
+        }
+        self.store.delete(session_id).await.map_err(map_session_err)?;
+        Ok(())
+    }
+
     pub async fn resume_session(&self, session_id: &SessionId) -> Result<api::Session, ApiError> {
         let live = self.ensure_live(session_id).await?;
         live.snapshot().await
@@ -1240,6 +1249,8 @@ pub struct LiveSession {
     session: Mutex<SessionState>,
     settings: Mutex<api::SessionSettings>,
     settings_dirty: AtomicBool,
+    closing: AtomicBool,
+    worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
 
     tools: Mutex<ToolEngine>,
 
@@ -1346,6 +1357,8 @@ impl LiveSession {
             session: Mutex::new(session),
             settings: Mutex::new(settings.clone()),
             settings_dirty: AtomicBool::new(false),
+            closing: AtomicBool::new(false),
+            worker: Mutex::new(None),
             tools: Mutex::new(tools),
             status: Mutex::new(api::SessionStatus {
                 session_state: api::SessionState::Live,
@@ -1383,12 +1396,47 @@ impl LiveSession {
 
         if server.runner_enabled {
             let worker = live.clone();
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 worker.worker_loop().await;
             });
+            *live.worker.lock().await = Some(handle);
         }
 
         Ok(live)
+    }
+
+    pub async fn shutdown(&self) {
+        self.closing.store(true, Ordering::SeqCst);
+
+        let queued = {
+            let q = self.queue.lock().await;
+            q.iter().map(|r| r.run.id.clone()).collect::<Vec<_>>()
+        };
+        for run_id in queued {
+            let _ = self.cancel_run(&self.runs_dir, &run_id).await;
+        }
+
+        let active = { self.status.lock().await.active_run_id.clone() };
+        if let Some(run_id) = active {
+            let _ = self.cancel_run(&self.runs_dir, &run_id).await;
+        }
+
+        self.notify.notify_one();
+
+        let handle = self.worker.lock().await.take();
+        let Some(mut handle) = handle else {
+            return;
+        };
+
+        let timeout = tokio::time::sleep(std::time::Duration::from_secs(5));
+        tokio::pin!(timeout);
+        tokio::select! {
+            _ = &mut handle => {}
+            _ = &mut timeout => {
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
     }
 
     pub async fn summary(&self) -> Result<api::SessionSummary, ApiError> {
@@ -1538,6 +1586,14 @@ impl LiveSession {
 
     async fn worker_loop(self: Arc<Self>) {
         loop {
+            if self.closing.load(Ordering::SeqCst) {
+                let queue_empty = self.queue.lock().await.is_empty();
+                let idle = self.status.lock().await.run_state == api::SessionRunState::Idle;
+                if queue_empty && idle {
+                    break;
+                }
+            }
+
             let next = {
                 let mut q = self.queue.lock().await;
                 let item = q.pop_front();
