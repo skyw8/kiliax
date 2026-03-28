@@ -702,6 +702,11 @@ async fn to_openai_user_content(
 ) -> Result<ChatCompletionRequestUserMessageContent, LlmError> {
     match content {
         UserMessageContent::Text(text) => {
+            if text.trim().is_empty() {
+                return Err(LlmError::OpenAI(OpenAIError::InvalidArgument(
+                    "user message text must not be empty".to_string(),
+                )));
+            }
             Ok(ChatCompletionRequestUserMessageContent::Text(text.clone()))
         }
         UserMessageContent::Parts(parts) => {
@@ -709,6 +714,9 @@ async fn to_openai_user_content(
             for part in parts {
                 match part {
                     UserContentPart::Text { text } => {
+                        if text.trim().is_empty() {
+                            continue;
+                        }
                         out.push(ChatCompletionRequestUserMessageContentPart::Text(
                             ChatCompletionRequestMessageContentPartText { text: text.clone() },
                         ))
@@ -721,6 +729,11 @@ async fn to_openai_user_content(
                     }
                 }
             }
+            if out.is_empty() {
+                return Err(LlmError::OpenAI(OpenAIError::InvalidArgument(
+                    "user message content must not be empty".to_string(),
+                )));
+            }
             if !out
                 .iter()
                 .any(|p| matches!(p, ChatCompletionRequestUserMessageContentPart::Text(_)))
@@ -729,7 +742,7 @@ async fn to_openai_user_content(
                     0,
                     ChatCompletionRequestUserMessageContentPart::Text(
                         ChatCompletionRequestMessageContentPartText {
-                            text: String::new(),
+                            text: ".".to_string(),
                         },
                     ),
                 );
@@ -1068,6 +1081,22 @@ mod tests {
         };
         assert!(a.content.is_none());
         assert_eq!(a.tool_calls.as_ref().unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn image_only_user_message_includes_non_empty_text_part() {
+        let content = UserMessageContent::Parts(vec![UserContentPart::Image {
+            path: "data:image/png;base64,AA==".to_string(),
+            detail: None,
+        }]);
+        let openai = to_openai_user_content(&content).await.unwrap();
+        let ChatCompletionRequestUserMessageContent::Array(parts) = openai else {
+            panic!("expected user content array");
+        };
+        let ChatCompletionRequestUserMessageContentPart::Text(t) = parts.first().unwrap() else {
+            panic!("expected first part to be text");
+        };
+        assert!(!t.text.trim().is_empty());
     }
 
     #[test]
