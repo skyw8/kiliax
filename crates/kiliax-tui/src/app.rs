@@ -2230,6 +2230,378 @@ fn truncate_one_line(text: &str, max_chars: usize) -> String {
     out
 }
 
+fn cmd_basename(cmd: &str) -> &str {
+    cmd.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(cmd)
+}
+
+fn cmd_basename_no_ext(cmd: &str) -> &str {
+    let base = cmd_basename(cmd);
+    base.strip_suffix(".exe")
+        .or_else(|| base.strip_suffix(".EXE"))
+        .unwrap_or(base)
+}
+
+fn is_env_assignment_token(token: &str) -> bool {
+    let Some((name, _value)) = token.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn quote_for_display(token: &str) -> String {
+    if !token.chars().any(|ch| ch.is_whitespace()) {
+        return token.to_string();
+    }
+    let mut out = String::with_capacity(token.len().saturating_add(2));
+    out.push('"');
+    for ch in token.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn abbreviate_long_arg(token: &str) -> String {
+    const MAX_ARG_CHARS: usize = 40;
+    if token.chars().count() <= MAX_ARG_CHARS {
+        return token.to_string();
+    }
+    if token.contains('/') || token.contains('\\') {
+        let parts: Vec<&str> = token
+            .split(|c| c == '/' || c == '\\')
+            .filter(|p| !p.is_empty())
+            .collect();
+        if parts.len() > 3 {
+            return format!("…/{}", parts[parts.len() - 3..].join("/"));
+        }
+    }
+    truncate_one_line(token, MAX_ARG_CHARS)
+}
+
+fn split_shell_words(script: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for ch in script.chars() {
+        if escape {
+            cur.push(ch);
+            escape = false;
+            continue;
+        }
+        if !in_single && ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if !in_double && ch == '\'' {
+            in_single = !in_single;
+            continue;
+        }
+        if !in_single && ch == '"' {
+            in_double = !in_double;
+            continue;
+        }
+        if !in_single && !in_double && ch.is_whitespace() {
+            if !cur.is_empty() {
+                out.push(cur);
+                cur = String::new();
+            }
+            continue;
+        }
+        cur.push(ch);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn split_shell_script(script: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+    let mut chars = script.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if escape {
+            cur.push(ch);
+            escape = false;
+            continue;
+        }
+        if !in_single && ch == '\\' {
+            escape = true;
+            cur.push(ch);
+            continue;
+        }
+        if !in_double && ch == '\'' {
+            in_single = !in_single;
+            cur.push(ch);
+            continue;
+        }
+        if !in_single && ch == '"' {
+            in_double = !in_double;
+            cur.push(ch);
+            continue;
+        }
+        if !in_single && !in_double {
+            if ch == '&' && chars.peek().is_some_and(|c| *c == '&') {
+                chars.next();
+                let seg = cur.trim();
+                if !seg.is_empty() {
+                    out.push(seg.to_string());
+                }
+                cur.clear();
+                continue;
+            }
+            if ch == '|' && chars.peek().is_some_and(|c| *c == '|') {
+                chars.next();
+                let seg = cur.trim();
+                if !seg.is_empty() {
+                    out.push(seg.to_string());
+                }
+                cur.clear();
+                continue;
+            }
+            if ch == ';' || ch == '\n' || ch == '\r' {
+                let seg = cur.trim();
+                if !seg.is_empty() {
+                    out.push(seg.to_string());
+                }
+                cur.clear();
+                continue;
+            }
+        }
+        cur.push(ch);
+    }
+
+    let seg = cur.trim();
+    if !seg.is_empty() {
+        out.push(seg.to_string());
+    }
+    out
+}
+
+fn split_shell_pipeline(script: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for ch in script.chars() {
+        if escape {
+            cur.push(ch);
+            escape = false;
+            continue;
+        }
+        if !in_single && ch == '\\' {
+            escape = true;
+            cur.push(ch);
+            continue;
+        }
+        if !in_double && ch == '\'' {
+            in_single = !in_single;
+            cur.push(ch);
+            continue;
+        }
+        if !in_single && ch == '"' {
+            in_double = !in_double;
+            cur.push(ch);
+            continue;
+        }
+        if !in_single && !in_double && ch == '|' {
+            let seg = cur.trim();
+            if !seg.is_empty() {
+                out.push(seg.to_string());
+            }
+            cur.clear();
+            continue;
+        }
+        cur.push(ch);
+    }
+
+    let seg = cur.trim();
+    if !seg.is_empty() {
+        out.push(seg.to_string());
+    }
+    out
+}
+
+fn is_setup_shell_segment(segment: &str) -> bool {
+    let s = segment.trim_start();
+    if s == "cd" || s.starts_with("cd ") || s.starts_with("cd\t") {
+        return true;
+    }
+    for prefix in ["export ", "set ", "unset ", "source ", ". "] {
+        if s.starts_with(prefix) {
+            return true;
+        }
+    }
+    let words = split_shell_words(s);
+    !words.is_empty() && words.iter().all(|w| is_env_assignment_token(w))
+}
+
+fn summarize_command_tokens(tokens: &[String]) -> String {
+    const MAX_TOKENS: usize = 8;
+    const MAX_POSITIONALS: usize = 2;
+    const MAX_CHARS: usize = 100;
+
+    if tokens.is_empty() {
+        return String::new();
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    out.push(cmd_basename_no_ext(&tokens[0]).to_string());
+
+    let mut i = 1usize;
+    let mut positionals = 0usize;
+    let mut omitted = false;
+
+    while i < tokens.len() && out.len() < MAX_TOKENS {
+        let t = tokens[i].as_str();
+        if t == "--" {
+            out.push("--".to_string());
+            i += 1;
+            if i < tokens.len() && out.len() < MAX_TOKENS {
+                out.push(quote_for_display(&abbreviate_long_arg(&tokens[i])));
+                i += 1;
+            }
+            break;
+        }
+        if t.starts_with('-') {
+            out.push(quote_for_display(&abbreviate_long_arg(t)));
+            if i + 1 < tokens.len() && out.len() < MAX_TOKENS {
+                let next = tokens[i + 1].as_str();
+                if !next.starts_with('-') && next != "--" {
+                    out.push(quote_for_display(&abbreviate_long_arg(next)));
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        positionals += 1;
+        if positionals > MAX_POSITIONALS {
+            omitted = true;
+            break;
+        }
+        out.push(quote_for_display(&abbreviate_long_arg(t)));
+        i += 1;
+    }
+
+    if i < tokens.len() {
+        omitted = true;
+    }
+
+    let mut text = out.join(" ");
+    if omitted && !text.ends_with('…') {
+        text.push_str(" …");
+    }
+    truncate_one_line(&text, MAX_CHARS)
+}
+
+fn wrapped_shell_script(argv: &[String]) -> Option<&str> {
+    let cmd0 = cmd_basename_no_ext(argv.first()?.as_str());
+    let is_posix_shell = cmd0.eq_ignore_ascii_case("bash")
+        || cmd0.eq_ignore_ascii_case("sh")
+        || cmd0.eq_ignore_ascii_case("zsh")
+        || cmd0.eq_ignore_ascii_case("fish");
+    if is_posix_shell {
+        for (idx, arg) in argv.iter().enumerate().skip(1) {
+            if arg == "-c" || arg == "-lc" || arg == "--command" {
+                return argv.get(idx + 1).map(|s| s.as_str());
+            }
+        }
+    }
+
+    if cmd0.eq_ignore_ascii_case("cmd") {
+        for (idx, arg) in argv.iter().enumerate().skip(1) {
+            if arg.eq_ignore_ascii_case("/c") {
+                return argv.get(idx + 1).map(|s| s.as_str());
+            }
+        }
+    }
+
+    if cmd0.eq_ignore_ascii_case("powershell") || cmd0.eq_ignore_ascii_case("pwsh") {
+        for (idx, arg) in argv.iter().enumerate().skip(1) {
+            if arg.eq_ignore_ascii_case("-command") || arg == "-c" {
+                return argv.get(idx + 1).map(|s| s.as_str());
+            }
+        }
+    }
+
+    None
+}
+
+fn summarize_shell_script_command(script: &str) -> String {
+    let segments = split_shell_script(script);
+    if segments.is_empty() {
+        return String::new();
+    }
+
+    let real_segments: Vec<&str> = segments
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|s| !is_setup_shell_segment(s))
+        .collect();
+    let selected = real_segments.first().copied().unwrap_or_else(|| segments[0].as_str());
+
+    let stages = split_shell_pipeline(selected);
+    let mut rendered = Vec::new();
+    for stage in stages.iter().take(2) {
+        let mut words = split_shell_words(stage);
+        if words.first().is_some_and(|w| w == "env") {
+            words.remove(0);
+        }
+        while words.first().is_some_and(|w| is_env_assignment_token(w)) {
+            words.remove(0);
+        }
+        if words.is_empty() {
+            continue;
+        }
+        rendered.push(summarize_command_tokens(&words));
+    }
+
+    let mut summary = rendered.join(" | ");
+    if stages.len() > 2 && !summary.is_empty() && !summary.ends_with('…') {
+        summary.push_str(" | …");
+    }
+    if real_segments.len() > 1 && !summary.is_empty() && !summary.ends_with('…') {
+        summary.push_str(" …");
+    }
+    if summary.is_empty() {
+        summary = truncate_one_line(selected, 100);
+    }
+    summary
+}
+
+fn summarize_shell_command_argv(argv: &[String]) -> String {
+    if let Some(script) = wrapped_shell_script(argv) {
+        let summary = summarize_shell_script_command(script);
+        if !summary.trim().is_empty() {
+            return summary;
+        }
+    }
+    summarize_command_tokens(argv)
+}
+
 fn render_error_lines(text: &str) -> Vec<Line<'static>> {
     vec![Line::from(vec![
         Span::from("• ").dim(),
@@ -2413,7 +2785,7 @@ fn summarize_tool_result(
             None,
         ),
         PendingToolCallKind::ShellCommand { argv, cwd } => {
-            let cmd = argv.join(" ");
+            let cmd = summarize_shell_command_argv(argv);
             let mut detail = String::new();
             if let Ok(parsed) = serde_json::from_str::<ShellCommandOutput>(tool_content) {
                 if parsed.running {
@@ -2507,7 +2879,7 @@ fn tool_status_label(pending: &PendingToolCall) -> String {
         PendingToolCallKind::GrepFiles { pattern, .. } => format!("grep_files {pattern}"),
         PendingToolCallKind::ViewImage { path } => format!("view_image {path}"),
         PendingToolCallKind::ShellCommand { argv, .. } => {
-            format!("shell_command {}", argv.join(" "))
+            format!("shell_command {}", summarize_shell_command_argv(argv))
         }
         PendingToolCallKind::WriteStdin { session_id } => format!("write_stdin {session_id}"),
         PendingToolCallKind::ApplyPatch { files } => match files.len() {
@@ -2676,6 +3048,46 @@ mod tests {
             let modifiers = span.style.add_modifier - span.style.sub_modifier;
             modifiers.contains(Modifier::CROSSED_OUT)
         }));
+    }
+
+    #[test]
+    fn shell_command_summary_omits_wrapper_and_setup_steps() {
+        let argv = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "cd /home/skywo/github/kiliax && rg -n shell_command crates/kiliax-tui/src | head -n 5"
+                .to_string(),
+        ];
+        let out = summarize_shell_command_argv(&argv);
+        assert_eq!(
+            out,
+            "rg -n shell_command crates/kiliax-tui/src | head -n 5"
+        );
+    }
+
+    #[test]
+    fn shell_command_summary_strips_env_assignments() {
+        let argv = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "FOO=bar BAR=baz rg -n shell_command crates/kiliax-tui/src".to_string(),
+        ];
+        let out = summarize_shell_command_argv(&argv);
+        assert_eq!(out, "rg -n shell_command crates/kiliax-tui/src");
+    }
+
+    #[test]
+    fn shell_command_summary_falls_back_to_plain_argv() {
+        let argv = vec![
+            "cargo".to_string(),
+            "test".to_string(),
+            "-p".to_string(),
+            "kiliax-core".to_string(),
+            "--".to_string(),
+            "--nocapture".to_string(),
+        ];
+        let out = summarize_shell_command_argv(&argv);
+        assert_eq!(out, "cargo test -p kiliax-core -- --nocapture");
     }
 
     #[tokio::test(flavor = "current_thread")]

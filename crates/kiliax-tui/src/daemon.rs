@@ -84,25 +84,6 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn generate_token_hex(bytes: usize) -> Result<String> {
-    let mut buf = vec![0u8; bytes];
-    getrandom::getrandom(&mut buf).context("getrandom failed")?;
-    let mut out = String::with_capacity(bytes * 2);
-    for b in buf {
-        out.push(hex_digit(b >> 4));
-        out.push(hex_digit(b & 0x0f));
-    }
-    Ok(out)
-}
-
-fn hex_digit(n: u8) -> char {
-    match n {
-        0..=9 => (b'0' + n) as char,
-        10..=15 => (b'a' + (n - 10)) as char,
-        _ => '?',
-    }
-}
-
 async fn ping(state: &DaemonState) -> bool {
     let url = format!("{}/v1/capabilities", state.url_base());
     let client = reqwest::Client::new();
@@ -357,6 +338,25 @@ pub async fn stop(workspace_root: &Path) -> Result<StopOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn generate_token_hex(bytes: usize) -> Result<String> {
+        let mut buf = vec![0u8; bytes];
+        getrandom::getrandom(&mut buf).context("getrandom failed")?;
+        let mut out = String::with_capacity(bytes * 2);
+        for b in buf {
+            out.push(hex_digit(b >> 4));
+            out.push(hex_digit(b & 0x0f));
+        }
+        Ok(out)
+    }
+
+    fn hex_digit(n: u8) -> char {
+        match n {
+            0..=9 => (b'0' + n) as char,
+            10..=15 => (b'a' + (n - 10)) as char,
+            _ => '?',
+        }
+    }
 
     #[test]
     fn token_is_hex() {
