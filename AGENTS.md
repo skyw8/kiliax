@@ -134,5 +134,5 @@ xterm-256color
 ## ATTENTION
 
 - 修改完代码后，更新AGENTS.md中的arch部分，只用说明这些核心代码部分
-- 优先遵循最佳实践，并兼顾常见终端兼容性（尤其 VSCode WSL / xterm.js），遗留代码可大胆重构
-- 不要修改TODO.md
+- 优先遵循最佳实践，并兼顾常见终端兼容性（尤其 VSCode WSL / xterm.js）
+- **不要兼容旧接口、旧代码等，直接删除重构即可**
