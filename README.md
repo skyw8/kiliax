@@ -56,6 +56,24 @@ cargo run -p kiliax-core --example stream_chat
 cargo run -p kiliax-core --example agent_loop
 ```
 
+## session control server
+
+`kiliax` will best-effort start a background `kiliax-server` on launch (REST + SSE/WS).
+
+Stop it with:
+```bash
+kiliax stop
+```
+
+Configure bind/auth in `kiliax.yaml`:
+```yaml
+server:
+  host: 127.0.0.1
+  port: 8123
+  # token is optional when host is loopback. Recommended when exposing to LAN.
+  # token: your-long-random-token
+```
+
 ## References
 
 This project is inspired by and built in the spirit of the following open-source AI coding agents:

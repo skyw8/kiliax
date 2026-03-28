@@ -68,12 +68,25 @@ pub struct McpServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ServerConfig {
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Config {
     #[serde(default)]
     pub default_model: Option<String>,
 
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
+
+    #[serde(default)]
+    pub server: ServerConfig,
 
     #[serde(default)]
     pub web_search: WebSearchConfig,
@@ -223,6 +236,9 @@ struct ConfigFile {
     pub providers: BTreeMap<String, ProviderConfig>,
 
     #[serde(default)]
+    pub server: ServerConfig,
+
+    #[serde(default)]
     pub web_search: WebSearchConfig,
 
     #[serde(default)]
@@ -295,9 +311,8 @@ fn split_qualified_model_id(model_id: &str) -> Result<Option<(&str, &str)>, Stri
 }
 
 pub fn candidate_paths(cwd: &Path, home_dir: Option<&Path>) -> Vec<PathBuf> {
-    let mut paths = Vec::with_capacity(3);
-    paths.push(cwd.join(CONFIG_FILENAME));
-    paths.push(cwd.join(".kiliax").join(CONFIG_FILENAME));
+    let _ = cwd;
+    let mut paths = Vec::with_capacity(1);
     if let Some(home) = home_dir {
         paths.push(home.join(".kiliax").join(CONFIG_FILENAME));
     }
@@ -346,6 +361,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
     let ConfigFile {
         default_model,
         mut providers,
+        server,
         mut web_search,
         tools,
         runtime,
@@ -374,6 +390,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
     Ok(Config {
         default_model,
         providers,
+        server,
         web_search,
         runtime,
         agents,
@@ -415,6 +432,37 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
     }
     if let Some(default_model) = &config.default_model {
         config.resolve_model(default_model)?;
+    }
+
+    if let Some(host) = config.server.host.as_deref() {
+        if host.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "server.host must not be empty when set".to_string(),
+            ));
+        }
+    }
+    if let Some(port) = config.server.port {
+        if port == 0 {
+            return Err(ConfigError::Invalid(
+                "server.port must not be 0 when set".to_string(),
+            ));
+        }
+    }
+    if let Some(token) = config.server.token.as_deref() {
+        if token.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "server.token must not be empty when set".to_string(),
+            ));
+        }
+    }
+    if let Some(host) = config.server.host.as_deref() {
+        let host = host.trim();
+        let is_loopback = matches!(host, "127.0.0.1" | "localhost" | "::1");
+        if !is_loopback && config.server.token.is_none() {
+            return Err(ConfigError::Invalid(
+                "server.token is required when server.host is not loopback".to_string(),
+            ));
+        }
     }
 
     validate_web_search_config(&config.web_search)?;
@@ -498,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn priority_uses_project_root_first() {
+    fn loads_home_config_even_if_project_configs_exist() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("proj");
         let home = tmp.path().join("home");
@@ -510,22 +558,7 @@ mod tests {
         write_yaml(&cwd.join("kiliax.yaml"), "root");
 
         let loaded = load_from_locations(&cwd, Some(&home)).unwrap();
-        assert_eq!(loaded.config.providers["p"].base_url, "root");
-    }
-
-    #[test]
-    fn priority_uses_dot_dir_when_root_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cwd = tmp.path().join("proj");
-        let home = tmp.path().join("home");
-        fs::create_dir_all(&cwd).unwrap();
-        fs::create_dir_all(&home).unwrap();
-
-        write_yaml(&home.join(".kiliax").join("kiliax.yaml"), "home");
-        write_yaml(&cwd.join(".kiliax").join("kiliax.yaml"), "localdir");
-
-        let loaded = load_from_locations(&cwd, Some(&home)).unwrap();
-        assert_eq!(loaded.config.providers["p"].base_url, "localdir");
+        assert_eq!(loaded.config.providers["p"].base_url, "home");
     }
 
     #[test]
@@ -540,26 +573,27 @@ mod tests {
         let ConfigError::NotFound { paths } = err else {
             panic!("unexpected error: {err:?}");
         };
-        assert_eq!(paths.len(), 3);
-        assert_eq!(paths[0], cwd.join("kiliax.yaml"));
-        assert_eq!(paths[1], cwd.join(".kiliax").join("kiliax.yaml"));
-        assert_eq!(paths[2], home.join(".kiliax").join("kiliax.yaml"));
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], home.join(".kiliax").join("kiliax.yaml"));
     }
 
     #[test]
     fn supports_single_provider_shorthand() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("proj");
+        let home = tmp.path().join("home");
         fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(&home).unwrap();
 
-        let path = cwd.join("kiliax.yaml");
+        let path = home.join(".kiliax").join("kiliax.yaml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
             "provider:\n  base_url: https://example.com/v1\n  apikey: sk-test\n  models:\n    - gpt-test\n",
         )
         .unwrap();
 
-        let loaded = load_from_locations(&cwd, None).unwrap();
+        let loaded = load_from_locations(&cwd, Some(&home)).unwrap();
         assert_eq!(
             loaded.config.providers["default"].base_url,
             "https://example.com/v1"
@@ -629,16 +663,19 @@ mod tests {
     fn tools_tavily_config_maps_to_web_search() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("proj");
+        let home = tmp.path().join("home");
         fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(&home).unwrap();
 
-        let path = cwd.join("kiliax.yaml");
+        let path = home.join(".kiliax").join("kiliax.yaml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
             "providers:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - gpt-test\n\ntools:\n  tavily:\n    api_key: tvly-test\n    base_url: https://api.tavily.com\n",
         )
         .unwrap();
 
-        let loaded = load_from_locations(&cwd, None).unwrap();
+        let loaded = load_from_locations(&cwd, Some(&home)).unwrap();
         assert_eq!(
             loaded.config.web_search.api_key.as_deref(),
             Some("tvly-test")

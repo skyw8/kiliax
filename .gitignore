@@ -11,5 +11,7 @@ kiliax.yaml
 .kiliax/sessions
 .kiliax
 
+.vscode
+
 tmp
 workspace

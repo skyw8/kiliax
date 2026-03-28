@@ -36,6 +36,7 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .route("/v1/runs/{run_id}", get(get_run))
         .route("/v1/runs/{run_id}/cancel", post(cancel_run))
         .route("/v1/capabilities", get(get_capabilities))
+        .route("/v1/admin/stop", post(stop_server))
         .route("/v1/sessions/{session_id}/events", get(list_events))
         .route("/v1/sessions/{session_id}/events/stream", get(stream_events_sse))
         .route("/v1/sessions/{session_id}/events/ws", get(stream_events_ws))
@@ -47,8 +48,8 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let mut host = "127.0.0.1".to_string();
-    let mut port: u16 = 8123;
+    let mut host: Option<String> = None;
+    let mut port: Option<u16> = None;
     let mut workspace_root: Option<PathBuf> = None;
     let mut config_path: Option<PathBuf> = None;
     let mut token: Option<String> = None;
@@ -58,12 +59,12 @@ async fn main() -> anyhow::Result<()> {
         match arg.as_str() {
             "--host" => {
                 if let Some(v) = iter.next() {
-                    host = v.to_string();
+                    host = Some(v.to_string());
                 }
             }
             "--port" => {
                 if let Some(v) = iter.next() {
-                    port = v.parse().unwrap_or(port);
+                    port = v.parse().ok();
                 }
             }
             "--workspace-root" => {
@@ -102,6 +103,15 @@ async fn main() -> anyhow::Result<()> {
     };
     let config_path = config_path.unwrap_or(loaded.path.clone());
 
+    let host = host
+        .or_else(|| loaded.config.server.host.clone())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = port.or(loaded.config.server.port).unwrap_or(8123);
+    let token = token.or_else(|| loaded.config.server.token.clone());
+    let token = token
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+
     let state = Arc::new(ServerState::new(
         workspace_root.clone(),
         config_path.clone(),
@@ -109,13 +119,18 @@ async fn main() -> anyhow::Result<()> {
         token,
     ).await?);
 
+    let shutdown = state.shutdown.clone();
     let app = build_app(state);
 
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     tracing::info!("kiliax-server listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown.notified().await;
+        })
+        .await?;
     Ok(())
 }
 
@@ -272,6 +287,17 @@ async fn get_capabilities(
 ) -> Result<impl IntoResponse, ApiError> {
     let out = state.get_capabilities().await?;
     Ok(Json(out))
+}
+
+async fn stop_server(
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.shutdown.notify_waiters();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        std::process::exit(0);
+    });
+    Ok(StatusCode::OK)
 }
 
 #[derive(serde::Deserialize)]

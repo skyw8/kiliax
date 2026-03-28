@@ -1,6 +1,7 @@
 mod app;
 mod clipboard_paste;
 mod custom_terminal;
+mod daemon;
 mod header;
 mod highlight;
 mod history;
@@ -41,6 +42,7 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  {bin} [plan|general|build] [--resume <SESSION_ID>]");
+    println!("  {bin} stop");
     println!();
     println!("Options:");
     println!("  --resume <SESSION_ID>    Resume a session");
@@ -48,9 +50,7 @@ fn print_help() {
     println!("  -V, --version            Show version");
     println!();
     println!("Config search order:");
-    println!("  1) ./kiliax.yaml");
-    println!("  2) ./.kiliax/kiliax.yaml");
-    println!("  3) ~/.kiliax/kiliax.yaml");
+    println!("  1) ~/.kiliax/kiliax.yaml");
     println!();
     println!("If no config is found, {bin} will write a template and exit.");
 }
@@ -98,6 +98,23 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let workspace_root = std::env::current_dir()?;
+
+    if args.first().is_some_and(|a| a == "stop") {
+        match daemon::stop(&workspace_root).await? {
+            daemon::StopOutcome::NotRunning => {
+                println!("kiliax-server not running (no .kiliax/server.json)");
+            }
+            daemon::StopOutcome::Stopped => {
+                println!("kiliax-server stopped");
+            }
+            daemon::StopOutcome::NotReachable => {
+                println!("kiliax-server not reachable (removed stale .kiliax/server.json)");
+            }
+        }
+        return Ok(());
+    }
+
     let mut profile_override: Option<&str> = None;
     let mut resume_id: Option<SessionId> = None;
     let mut iter = args.iter().peekable();
@@ -127,7 +144,10 @@ async fn main() -> Result<()> {
         Err(err) => return Err(err.into()),
     };
 
-    let workspace_root = std::env::current_dir()?;
+    // Best-effort: ensure the background session-control server is running.
+    if let Err(err) = daemon::ensure_running(&workspace_root, &loaded.path, &loaded.config.server).await {
+        eprintln!("warning: failed to start kiliax-server: {err}");
+    }
     let store = FileSessionStore::project(&workspace_root);
 
     let mut resumed: Option<kiliax_core::session::SessionState> = None;

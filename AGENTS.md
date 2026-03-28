@@ -34,7 +34,7 @@ minimal
   - `stream_chat.rs`: 流式 chat 示例（展示 delta 与 tool_call delta 合并）
   - `agent_loop.rs`: AgentRuntime + PromptBuilder 的闭环示例（流式输出 + 自动执行工具）
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
-- `crates/kiliax-core/src/config.rs`: 配置查找/解析（优先级路径）、provider/base_url/api_key、model 路由（按首个 `/` 分割，支持 `openrouter/openai/gpt-4o-mini` 这类 model id）；多 provider 时可按 `providers.*.models` 反查唯一 provider；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；MCP 配置（`mcp.servers`: `enable` + stdio command+args）；包含 config 优先级/resolve_model 单元测试
+- `crates/kiliax-core/src/config.rs`: 配置查找/解析（默认仅 `~/.kiliax/kiliax.yaml`）、provider/base_url/api_key、model 路由（按首个 `/` 分割，支持 `openrouter/openai/gpt-4o-mini` 这类 model id）；多 provider 时可按 `providers.*.models` 反查唯一 provider；server 配置（`server.host/port/token`）；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；MCP 配置（`mcp.servers`: `enable` + stdio command+args）；包含 config/resolve_model 单元测试
 - `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义（assistant 支持 `reasoning_content` 以兼容部分 provider 的 tool loop）；User 输入支持 `UserMessageContent`（text + local image path → data URL base64；仅图片输入会自动补 `.` 文本占位避免 400 empty text）；chat/流式均用 `reqwest` 直连 `/chat/completions`（4xx 会读取 body 并转换为 `ApiError`）；解析 provider 扩展 `reasoning_content/thinking/reasoning` → `ChatStreamChunk.thinking_delta`；Moonshot 等 provider 在 assistant tool_calls 消息中要求携带 `reasoning_content` 时自动注入
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
@@ -61,8 +61,9 @@ minimal
 
 TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 codex）+ 终端 scrollback 历史；启动先插入 header（版本/模型/cwd），输入框从 header 之后开始并随输出自动下推；输入框支持自动换行与动态高度。
 
-- `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect` 等）
-- `crates/kiliax-tui/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`）；启动时若未找到 `kiliax.yaml` 自动从内置 `kiliax.example.yaml` 写入模板并提示后退出；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）
+- `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect`/`reqwest` 等）
+- `crates/kiliax-tui/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`、`stop`）；启动前 best-effort 拉起后台 `kiliax-server`；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）
+- `crates/kiliax-tui/src/daemon.rs`: 后台 `kiliax-server` 管理（启动、健康检查、`kiliax stop` 关闭）；状态写入 `.kiliax/server.json`，日志写入 `.kiliax/server.log`
 - `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示；`update_plan` 以 `[]` 待办/完成删除线展示（不显示 pending 等状态字样）；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable` 并 checkpoint session（刷新 system preamble）；/new 切换前会清理空 session
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；/model、/mcp 等 picker（题头紫色、选中蓝色、未选中白色；MCP 未开启灰色/开启白色）；底部 footer 仅显示 status + agent + model_id（去 provider）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
@@ -84,7 +85,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session、发送消息（run）、切换 agent/model/MCP，以及查询 messages/status/capabilities。`kiliax.yaml` 仅作为新 session 默认值；session 覆盖持久化到 `settings.json`。
 
 - `crates/kiliax-server/Cargo.toml`: server 依赖（axum/ws/sse、tracing 等）
-- `crates/kiliax-server/src/main.rs`: HTTP 路由、鉴权（可选 Bearer token）、服务启动参数（host/port/workspace/config）
+- `crates/kiliax-server/src/main.rs`: HTTP 路由、鉴权（可选 Bearer token）、服务启动参数（host/port/workspace/config）、`/v1/admin/stop` 关闭服务
 - `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行（测试可通过 `new_for_tests` 禁用 runner）；session settings 持久化（`<session>/settings.json`）；API events（`<session>/events_api.jsonl`）；run 状态（`<workspace>/.kiliax/runs/<run_id>.json`）
 - `crates/kiliax-server/src/api.rs`: OpenAPI 对齐的请求/响应/事件 schema
 - `crates/kiliax-server/src/error.rs`: 统一错误模型（`{ error: { code, message, details? } }`）

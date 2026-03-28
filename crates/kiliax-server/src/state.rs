@@ -31,6 +31,7 @@ pub struct ServerState {
     pub runs_dir: PathBuf,
     pub tools_for_caps: ToolEngine,
 
+    pub shutdown: Arc<Notify>,
     runner_enabled: bool,
     sessions: Mutex<HashMap<String, Arc<LiveSession>>>,
     idempotency: Mutex<HashMap<String, String>>,
@@ -75,6 +76,7 @@ impl ServerState {
             store,
             runs_dir,
             tools_for_caps: ToolEngine::new(&workspace_root, config),
+            shutdown: Arc::new(Notify::new()),
             runner_enabled,
             sessions: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(HashMap::new()),
