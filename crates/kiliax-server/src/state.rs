@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
@@ -24,7 +24,7 @@ use crate::error::{ApiError, ApiErrorCode};
 pub struct ServerState {
     pub workspace_root: PathBuf,
     pub config_path: PathBuf,
-    pub config: Arc<Config>,
+    pub config: Arc<RwLock<Arc<Config>>>,
     pub token: Option<String>,
 
     pub store: FileSessionStore,
@@ -71,18 +71,107 @@ impl ServerState {
         let runs_dir = workspace_root.join(".kiliax").join("runs");
         tokio::fs::create_dir_all(&runs_dir).await?;
 
+        let tools_for_caps = ToolEngine::new(&workspace_root, config.clone());
         Ok(Self {
             workspace_root: workspace_root.clone(),
             config_path,
-            config: Arc::new(config.clone()),
+            config: Arc::new(RwLock::new(Arc::new(config))),
             token,
             store,
             runs_dir,
-            tools_for_caps: ToolEngine::new(&workspace_root, config),
+            tools_for_caps,
             shutdown: Arc::new(Notify::new()),
             runner_enabled,
             sessions: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn config_snapshot(&self) -> Result<Arc<Config>, ApiError> {
+        self.config
+            .read()
+            .map(|v| v.clone())
+            .map_err(|_| ApiError::internal("config lock poisoned"))
+    }
+
+    pub async fn get_config(&self) -> Result<api::ConfigResponse, ApiError> {
+        let yaml = match tokio::fs::read_to_string(&self.config_path).await {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(ApiError::internal(err.to_string())),
+        };
+        let config = self.config_snapshot()?.as_ref().clone();
+        Ok(api::ConfigResponse {
+            path: self.config_path.display().to_string(),
+            yaml,
+            config,
+        })
+    }
+
+    pub async fn update_config(
+        &self,
+        req: api::ConfigUpdateRequest,
+    ) -> Result<api::ConfigResponse, ApiError> {
+        let next = kiliax_core::config::load_from_str(&req.yaml)
+            .map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+
+        write_text_atomic(&self.config_path, &req.yaml).await?;
+
+        {
+            let mut guard = self
+                .config
+                .write()
+                .map_err(|_| ApiError::internal("config lock poisoned"))?;
+            *guard = Arc::new(next.clone());
+        }
+        self.tools_for_caps
+            .set_config(next.clone())
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let live_sessions = {
+            let guard = self.sessions.lock().await;
+            guard.values().cloned().collect::<Vec<_>>()
+        };
+        for live in live_sessions {
+            live.on_config_updated().await?;
+        }
+
+        Ok(api::ConfigResponse {
+            path: self.config_path.display().to_string(),
+            yaml: req.yaml,
+            config: next,
+        })
+    }
+
+    pub async fn list_skills(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<api::SkillListResponse, ApiError> {
+        let workspace_root = if let Some(live) = self.get_live(session_id.as_str()).await {
+            live.settings.lock().await.workspace_root.clone()
+        } else {
+            let state = self.store.load(session_id).await.map_err(map_session_err)?;
+            let config = self.config_snapshot()?;
+            let settings = load_settings_for_meta(&self.store, &state.meta, config.as_ref()).await?;
+            settings.workspace_root
+        };
+
+        if workspace_root.trim().is_empty() {
+            return Ok(api::SkillListResponse { items: Vec::new() });
+        }
+        let root = PathBuf::from(workspace_root.trim());
+
+        let skills = kiliax_core::tools::skills::discover_skills(&root)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok(api::SkillListResponse {
+            items: skills
+                .into_iter()
+                .map(|s| api::SkillSummary {
+                    id: s.id,
+                    name: s.name,
+                    description: s.description,
+                })
+                .collect(),
         })
     }
 
@@ -125,9 +214,15 @@ impl ServerState {
     }
 
     async fn create_session_inner(&self, req: api::SessionCreateRequest) -> Result<api::Session, ApiError> {
-        let mut settings = default_settings(self.config.as_ref(), None)?;
+        let config = self.config_snapshot()?;
+
+        let mut settings = default_settings(config.as_ref(), None)?;
         if let Some(patch) = req.settings {
-            apply_settings_patch(&mut settings, &patch, self.config.as_ref(), true)?;
+            if let Some(root) = patch.workspace_root.as_deref() {
+                let root = validate_client_workspace_root(root)?;
+                settings.workspace_root = root.display().to_string();
+            }
+            apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
         }
 
         let profile = AgentProfile::from_name(&settings.agent).ok_or_else(|| {
@@ -138,21 +233,28 @@ impl ServerState {
             )
         })?;
 
-        self.config
-            .resolve_model(&settings.model_id)
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    ApiErrorCode::ModelNotSupported,
-                    e.to_string(),
-                )
-            })?;
+        config.resolve_model(&settings.model_id).map_err(|e| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                ApiErrorCode::ModelNotSupported,
+                e.to_string(),
+            )
+        })?;
 
-        let cfg_for_tools = config_with_mcp_overrides(self.config.as_ref(), &settings.mcp.servers)?;
-        let tools = ToolEngine::new(&self.workspace_root, cfg_for_tools);
+        if settings.workspace_root.trim().is_empty() {
+            let root = default_tmp_workspace_root()?;
+            settings.workspace_root = root.display().to_string();
+        }
+        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        tokio::fs::create_dir_all(&workspace_root)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
 
         let messages =
-            build_preamble(&profile, &settings.model_id, &self.workspace_root, &tools).await;
+            build_preamble(&profile, &settings.model_id, &workspace_root, &tools).await;
 
         let mut session = self
             .store
@@ -160,7 +262,7 @@ impl ServerState {
                 profile.name.to_string(),
                 Some(settings.model_id.clone()),
                 Some(self.config_path.display().to_string()),
-                Some(self.workspace_root.display().to_string()),
+                Some(settings.workspace_root.clone()),
                 messages.clone(),
             )
             .await
@@ -188,6 +290,8 @@ impl ServerState {
         limit: usize,
         cursor: Option<String>,
     ) -> Result<api::SessionListResponse, ApiError> {
+        let config = self.config_snapshot()?;
+
         let limit = limit.clamp(1, 200);
         let offset = cursor
             .as_deref()
@@ -208,13 +312,22 @@ impl ServerState {
                     continue;
                 }
 
-                let settings = load_settings_for_meta(&self.store, &meta, self.config.as_ref()).await?;
+                let settings = load_settings_for_meta(&self.store, &meta, config.as_ref()).await?;
                 let last_event_id = read_last_event_id(&session_events_api_path(&self.store, &meta.id)).await?;
+                let last_outcome = if meta.last_error.is_some() {
+                    api::SessionLastOutcome::Error
+                } else if meta.last_finish_reason.is_some() {
+                    api::SessionLastOutcome::Done
+                } else {
+                    api::SessionLastOutcome::None
+                };
 
                 items.push(api::SessionSummary {
                     id: id.clone(),
                     title: meta.title.clone().unwrap_or_else(|| id.clone()),
                     created_at: ts_ms_to_rfc3339(meta.created_at_ms),
+                    updated_at: ts_ms_to_rfc3339(meta.updated_at_ms),
+                    last_outcome,
                     status: api::SessionStatus {
                         session_state: api::SessionState::Archived,
                         run_state: api::SessionRunState::Idle,
@@ -241,13 +354,22 @@ impl ServerState {
     }
 
     pub async fn get_session(&self, session_id: &SessionId) -> Result<api::Session, ApiError> {
+        let config = self.config_snapshot()?;
+
         if let Some(live) = self.get_live(session_id.as_str()).await {
             return live.snapshot().await;
         }
 
         let state = self.store.load(session_id).await.map_err(map_session_err)?;
-        let settings = load_settings_for_meta(&self.store, &state.meta, self.config.as_ref()).await?;
+        let settings = load_settings_for_meta(&self.store, &state.meta, config.as_ref()).await?;
         let last_event_id = read_last_event_id(&session_events_api_path(&self.store, session_id)).await?;
+        let last_outcome = if state.meta.last_error.is_some() {
+            api::SessionLastOutcome::Error
+        } else if state.meta.last_finish_reason.is_some() {
+            api::SessionLastOutcome::Done
+        } else {
+            api::SessionLastOutcome::None
+        };
 
         Ok(api::Session {
             summary: api::SessionSummary {
@@ -258,6 +380,8 @@ impl ServerState {
                     .clone()
                     .unwrap_or_else(|| session_id.to_string()),
                 created_at: ts_ms_to_rfc3339(state.meta.created_at_ms),
+                updated_at: ts_ms_to_rfc3339(state.meta.updated_at_ms),
+                last_outcome,
                 status: api::SessionStatus {
                     session_state: api::SessionState::Archived,
                     run_state: api::SessionRunState::Idle,
@@ -269,7 +393,7 @@ impl ServerState {
                 },
                 settings: settings.clone(),
             },
-            mcp_status: mcp_status_from_settings(&settings, self.config.as_ref()),
+            mcp_status: mcp_status_from_settings(&settings, config.as_ref()),
         })
     }
 
@@ -420,9 +544,10 @@ impl ServerState {
     }
 
     pub async fn get_capabilities(&self) -> Result<api::Capabilities, ApiError> {
+        let config = self.config_snapshot()?;
         Ok(api::Capabilities {
             agents: vec!["general".to_string(), "plan".to_string()],
-            models: list_models(self.config.as_ref()),
+            models: list_models(config.as_ref()),
             mcp_servers: map_mcp_status(self.tools_for_caps.mcp_status().await),
         })
     }
@@ -503,6 +628,8 @@ struct SettingsFile {
     agent: String,
     model_id: String,
     mcp: api::McpServers,
+    #[serde(default)]
+    workspace_root: String,
 }
 
 async fn read_settings_file(path: &Path) -> Result<Option<SettingsFile>, ApiError> {
@@ -521,6 +648,7 @@ async fn write_settings_file(path: &Path, settings: &api::SessionSettings) -> Re
         agent: settings.agent.clone(),
         model_id: settings.model_id.clone(),
         mcp: settings.mcp.clone(),
+        workspace_root: settings.workspace_root.clone(),
     };
     let text =
         serde_json::to_string_pretty(&file).map_err(|e| ApiError::internal(e.to_string()))?;
@@ -542,6 +670,7 @@ async fn load_settings_for_meta(
             agent: file.agent,
             model_id: file.model_id,
             mcp: file.mcp,
+            workspace_root: file.workspace_root,
         };
         normalize_settings(&mut settings, meta, config)?;
         return Ok(settings);
@@ -577,6 +706,19 @@ fn normalize_settings(
             .or_else(|| config.default_model.clone())
             .ok_or_else(|| ApiError::invalid_argument("missing model id"))?;
     }
+    if config.resolve_model(&settings.model_id).is_err() {
+        settings.model_id = config
+            .default_model
+            .clone()
+            .ok_or_else(|| ApiError::invalid_argument("missing default_model in config"))?;
+    }
+
+    let ws = settings.workspace_root.trim().to_string();
+    settings.workspace_root = if !ws.is_empty() {
+        ws
+    } else {
+        meta.workspace_root.clone().unwrap_or_default()
+    };
 
     let mut patch_map: HashMap<&str, bool> = HashMap::new();
     for s in &settings.mcp.servers {
@@ -595,6 +737,54 @@ fn normalize_settings(
     Ok(())
 }
 
+fn home_kiliax_dir() -> Result<PathBuf, ApiError> {
+    let home = dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"))?;
+    Ok(home.join(".kiliax"))
+}
+
+fn expand_tilde(path: &str) -> Result<PathBuf, ApiError> {
+    let trimmed = path.trim();
+    if trimmed == "~" {
+        return dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"));
+    }
+    let Some(rest) = trimmed.strip_prefix("~/") else {
+        return Ok(PathBuf::from(trimmed));
+    };
+    let home = dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"))?;
+    Ok(home.join(rest))
+}
+
+fn validate_client_workspace_root(input: &str) -> Result<PathBuf, ApiError> {
+    let candidate = expand_tilde(input)?;
+    if !candidate.is_absolute() {
+        return Err(ApiError::invalid_argument("workspace_root must be an absolute path"));
+    }
+    for c in candidate.components() {
+        if matches!(c, std::path::Component::ParentDir) {
+            return Err(ApiError::invalid_argument(
+                "workspace_root must not contain `..`",
+            ));
+        }
+    }
+
+    let allowed_root = home_kiliax_dir()?;
+    if !candidate.starts_with(&allowed_root) {
+        return Err(ApiError::invalid_argument(format!(
+            "workspace_root must be within {}",
+            allowed_root.display()
+        )));
+    }
+
+    Ok(candidate)
+}
+
+fn default_tmp_workspace_root() -> Result<PathBuf, ApiError> {
+    let base = home_kiliax_dir()?;
+    let ts = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let pid = std::process::id();
+    Ok(base.join(format!("tmp_workspace_{ts}_{pid}")))
+}
+
 fn default_settings(config: &Config, meta: Option<&SessionMeta>) -> Result<api::SessionSettings, ApiError> {
     let agent = meta
         .and_then(|m| AgentProfile::from_name(&m.agent))
@@ -606,6 +796,10 @@ fn default_settings(config: &Config, meta: Option<&SessionMeta>) -> Result<api::
         .and_then(|m| m.model_id.clone())
         .or_else(|| config.default_model.clone())
         .ok_or_else(|| ApiError::invalid_argument("missing model id (set default_model in config)"))?;
+
+    let workspace_root = meta
+        .and_then(|m| m.workspace_root.clone())
+        .unwrap_or_default();
 
     let servers = config
         .mcp
@@ -621,6 +815,7 @@ fn default_settings(config: &Config, meta: Option<&SessionMeta>) -> Result<api::
         agent,
         model_id,
         mcp: api::McpServers { servers },
+        workspace_root,
     })
 }
 
@@ -654,6 +849,9 @@ fn apply_settings_patch(
     }
     if let Some(patch_servers) = patch.mcp.as_ref().and_then(|m| m.servers.as_ref()) {
         merge_mcp_settings(&mut settings.mcp.servers, patch_servers, config, allow_enable)?;
+    }
+    if let Some(root) = patch.workspace_root.as_deref() {
+        settings.workspace_root = root.trim().to_string();
     }
     Ok(())
 }
@@ -974,6 +1172,33 @@ async fn append_event(path: &Path, event: &api::Event) -> Result<(), ApiError> {
     Ok(())
 }
 
+async fn write_text_atomic(path: &Path, text: &str) -> Result<(), ApiError> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let tmp = path.with_extension("tmp");
+    tokio::fs::write(&tmp, text)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    match tokio::fs::rename(&tmp, path).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                let _ = tokio::fs::remove_file(path).await;
+                tokio::fs::rename(&tmp, path)
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                Ok(())
+            } else {
+                Err(ApiError::internal(err.to_string()))
+            }
+        }
+    }
+}
+
 async fn write_run_file(dir: &Path, run: &api::Run) -> Result<(), ApiError> {
     tokio::fs::create_dir_all(dir)
         .await
@@ -1011,15 +1236,14 @@ fn new_run_id() -> String {
 pub struct LiveSession {
     session_id: SessionId,
     store: FileSessionStore,
-    workspace_root: PathBuf,
-    config: Arc<Config>,
+    config: Arc<RwLock<Arc<Config>>>,
     runs_dir: PathBuf,
 
     session: Mutex<SessionState>,
     settings: Mutex<api::SessionSettings>,
     settings_dirty: AtomicBool,
 
-    tools: ToolEngine,
+    tools: Mutex<ToolEngine>,
 
     status: Mutex<api::SessionStatus>,
     queue: Mutex<VecDeque<QueuedRun>>,
@@ -1038,16 +1262,69 @@ struct QueuedRun {
 }
 
 impl LiveSession {
+    fn config_snapshot(&self) -> Result<Arc<Config>, ApiError> {
+        self.config
+            .read()
+            .map(|v| v.clone())
+            .map_err(|_| ApiError::internal("config lock poisoned"))
+    }
+
+    pub async fn on_config_updated(&self) -> Result<(), ApiError> {
+        let config = self.config_snapshot()?;
+        let meta = { self.session.lock().await.meta.clone() };
+
+        let mut settings = self.settings.lock().await.clone();
+        normalize_settings(&mut settings, &meta, config.as_ref())?;
+
+        let workspace_root = if settings.workspace_root.trim().is_empty() {
+            default_tmp_workspace_root()?
+        } else {
+            match validate_client_workspace_root(&settings.workspace_root) {
+                Ok(p) => p,
+                Err(_) => default_tmp_workspace_root()?,
+            }
+        };
+        settings.workspace_root = workspace_root.display().to_string();
+        tokio::fs::create_dir_all(&workspace_root)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        *self.settings.lock().await = settings.clone();
+        write_settings_file(&self.settings_path, &settings).await?;
+
+        self.settings_dirty.store(true, Ordering::SeqCst);
+        let is_idle = { self.status.lock().await.run_state == api::SessionRunState::Idle };
+        if is_idle {
+            self.apply_settings_now(true).await?;
+            self.settings_dirty.store(false, Ordering::SeqCst);
+        }
+
+        Ok(())
+    }
+
     pub fn id(&self) -> &SessionId {
         &self.session_id
     }
 
     pub async fn resume(server: &ServerState, session_id: &SessionId) -> Result<Arc<Self>, ApiError> {
+        let config = server.config_snapshot()?;
         let session = server.store.load(session_id).await.map_err(map_session_err)?;
-        let settings = load_settings_for_meta(&server.store, &session.meta, server.config.as_ref()).await?;
+        let mut settings = load_settings_for_meta(&server.store, &session.meta, config.as_ref()).await?;
 
-        let cfg_for_tools = config_with_mcp_overrides(server.config.as_ref(), &settings.mcp.servers)?;
-        let tools = ToolEngine::new(&server.workspace_root, cfg_for_tools);
+        if settings.workspace_root.trim().is_empty() {
+            settings.workspace_root = session
+                .meta
+                .workspace_root
+                .clone()
+                .unwrap_or_else(|| server.workspace_root.display().to_string());
+        }
+        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        tokio::fs::create_dir_all(&workspace_root)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
 
         Self::from_state(server, session, settings, tools).await
     }
@@ -1066,13 +1343,12 @@ impl LiveSession {
         let live = Arc::new(Self {
             session_id: session.meta.id.clone(),
             store: server.store.clone(),
-            workspace_root: server.workspace_root.clone(),
             config: server.config.clone(),
             runs_dir: server.runs_dir.clone(),
             session: Mutex::new(session),
             settings: Mutex::new(settings.clone()),
             settings_dirty: AtomicBool::new(false),
-            tools,
+            tools: Mutex::new(tools),
             status: Mutex::new(api::SessionStatus {
                 session_state: api::SessionState::Live,
                 run_state: api::SessionRunState::Idle,
@@ -1098,6 +1374,7 @@ impl LiveSession {
             let mut session = live.session.lock().await;
             session.meta.agent = settings.agent.clone();
             session.meta.model_id = Some(settings.model_id.clone());
+            session.meta.workspace_root = Some(settings.workspace_root.clone());
             live.store
                 .checkpoint(&mut session)
                 .await
@@ -1120,6 +1397,13 @@ impl LiveSession {
         let session = self.session.lock().await;
         let settings = self.settings.lock().await.clone();
         let status = self.status.lock().await.clone();
+        let last_outcome = if session.meta.last_error.is_some() {
+            api::SessionLastOutcome::Error
+        } else if session.meta.last_finish_reason.is_some() {
+            api::SessionLastOutcome::Done
+        } else {
+            api::SessionLastOutcome::None
+        };
         Ok(api::SessionSummary {
             id: self.session_id.to_string(),
             title: session
@@ -1128,23 +1412,33 @@ impl LiveSession {
                 .clone()
                 .unwrap_or_else(|| self.session_id.to_string()),
             created_at: ts_ms_to_rfc3339(session.meta.created_at_ms),
+            updated_at: ts_ms_to_rfc3339(session.meta.updated_at_ms),
+            last_outcome,
             status,
             settings,
         })
     }
 
     pub async fn snapshot(&self) -> Result<api::Session, ApiError> {
+        let tools = { self.tools.lock().await.clone() };
         Ok(api::Session {
             summary: self.summary().await?,
-            mcp_status: map_mcp_status(self.tools.mcp_status().await),
+            mcp_status: map_mcp_status(tools.mcp_status().await),
         })
     }
 
     pub async fn patch_settings(&self, patch: api::SessionSettingsPatch) -> Result<(), ApiError> {
+        let config = self.config_snapshot()?;
         let meta = { self.session.lock().await.meta.clone() };
         let mut settings = self.settings.lock().await.clone();
-        apply_settings_patch(&mut settings, &patch, self.config.as_ref(), true)?;
-        normalize_settings(&mut settings, &meta, self.config.as_ref())?;
+        let mut patch = patch;
+        if let Some(root) = patch.workspace_root.take() {
+            let root = validate_client_workspace_root(&root)?;
+            patch.workspace_root = Some(root.display().to_string());
+        }
+
+        apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
+        normalize_settings(&mut settings, &meta, config.as_ref())?;
         *self.settings.lock().await = settings.clone();
         write_settings_file(&self.settings_path, &settings).await?;
 
@@ -1276,6 +1570,8 @@ impl LiveSession {
     }
 
     async fn run_one(&self, mut run: api::Run) -> Result<(), ApiError> {
+        let config = self.config_snapshot()?;
+
         let (cancel_tx, mut cancel_rx) = watch::channel(false);
         *self.active_cancel.lock().await = Some(cancel_tx);
 
@@ -1301,13 +1597,32 @@ impl LiveSession {
         .await?;
 
         let base_settings = self.settings.lock().await.clone();
-        let effective = apply_run_overrides(&base_settings, run.overrides.as_ref(), self.config.as_ref())?;
+        let mut overrides = run.overrides.take();
+        if let Some(o) = overrides.as_mut() {
+            if let Some(root) = o.workspace_root.take() {
+                let root = validate_client_workspace_root(&root)?;
+                o.workspace_root = Some(root.display().to_string());
+            }
+        }
+        let effective = apply_run_overrides(&base_settings, overrides.as_ref(), config.as_ref())?;
+        run.overrides = overrides;
 
         // Per-run MCP config.
-        let cfg_for_run = config_with_mcp_overrides(self.config.as_ref(), &effective.mcp.servers)?;
-        self.tools
-            .set_config(cfg_for_run)
+        let cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
+        let workspace_root = PathBuf::from(effective.workspace_root.trim());
+        tokio::fs::create_dir_all(&workspace_root)
+            .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let tools_for_run = if effective.workspace_root != base_settings.workspace_root {
+            ToolEngine::new(&workspace_root, cfg_for_run)
+        } else {
+            let tools = self.tools.lock().await;
+            tools
+                .set_config(cfg_for_run)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            tools.clone()
+        };
 
         let profile = AgentProfile::from_name(&effective.agent).ok_or_else(|| {
             ApiError::new(
@@ -1316,22 +1631,23 @@ impl LiveSession {
                 "agent not supported",
             )
         })?;
-        let options = AgentRuntimeOptions::from_config(&profile, self.config.as_ref());
+        let options = AgentRuntimeOptions::from_config(&profile, config.as_ref());
 
-        let llm = kiliax_core::llm::LlmClient::from_config(self.config.as_ref(), Some(&effective.model_id))
+        let llm = kiliax_core::llm::LlmClient::from_config(config.as_ref(), Some(&effective.model_id))
             .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, ApiErrorCode::ModelNotSupported, e.to_string()))?;
-        let runtime = AgentRuntime::new(llm, self.tools.clone());
+        let runtime = AgentRuntime::new(llm, tools_for_run.clone());
 
         let mut messages = { self.session.lock().await.messages.clone() };
         if effective.agent != base_settings.agent
             || effective.model_id != base_settings.model_id
             || effective.mcp.servers != base_settings.mcp.servers
+            || effective.workspace_root != base_settings.workspace_root
         {
             let preamble = build_preamble(
                 &profile,
                 &effective.model_id,
-                &self.workspace_root,
-                &self.tools,
+                &workspace_root,
+                &tools_for_run,
             )
             .await;
             replace_preamble(&mut messages, preamble);
@@ -1377,8 +1693,12 @@ impl LiveSession {
 
         // Restore tool config to current session defaults (may have changed).
         let current_settings = self.settings.lock().await.clone();
-        let cfg_for_tools = config_with_mcp_overrides(self.config.as_ref(), &current_settings.mcp.servers)?;
-        let _ = self.tools.set_config(cfg_for_tools);
+        let cfg_for_tools =
+            config_with_mcp_overrides(config.as_ref(), &current_settings.mcp.servers)?;
+        {
+            let tools = self.tools.lock().await;
+            let _ = tools.set_config(cfg_for_tools);
+        }
 
         {
             let mut st = self.status.lock().await;
@@ -1404,12 +1724,16 @@ impl LiveSession {
             let _ = self.store.record_error(&mut session, err).await;
         } else {
             run.state = api::RunState::Done;
+            let persisted_finish_reason = finish_reason
+                .clone()
+                .or_else(|| Some("done".to_string()));
+            run.finish_reason = persisted_finish_reason.clone();
             let mut session = self.session.lock().await;
             let _ = self
                 .store
                 .record_finish(
                     &mut session,
-                    finish_reason.as_ref().map(|s| s.to_string()),
+                    persisted_finish_reason,
                 )
                 .await;
         }
@@ -1458,12 +1782,29 @@ impl LiveSession {
     }
 
     async fn apply_settings_now(&self, emit_event: bool) -> Result<(), ApiError> {
+        let config = self.config_snapshot()?;
         let settings = self.settings.lock().await.clone();
 
-        let cfg_for_tools = config_with_mcp_overrides(self.config.as_ref(), &settings.mcp.servers)?;
-        self.tools
-            .set_config(cfg_for_tools)
+        if settings.workspace_root.trim().is_empty() {
+            return Err(ApiError::invalid_argument("workspace_root must not be empty"));
+        }
+        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        tokio::fs::create_dir_all(&workspace_root)
+            .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        let tools = {
+            let mut tools = self.tools.lock().await;
+            if tools.workspace_root() != workspace_root.as_path() {
+                *tools = ToolEngine::new(&workspace_root, cfg_for_tools);
+            } else {
+                tools
+                    .set_config(cfg_for_tools)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+            }
+            tools.clone()
+        };
 
         let profile = AgentProfile::from_name(&settings.agent).ok_or_else(|| {
             ApiError::new(
@@ -1474,12 +1815,13 @@ impl LiveSession {
         })?;
 
         let preamble =
-            build_preamble(&profile, &settings.model_id, &self.workspace_root, &self.tools).await;
+            build_preamble(&profile, &settings.model_id, &workspace_root, &tools).await;
 
         let mut session = self.session.lock().await;
         replace_preamble(&mut session.messages, preamble);
         session.meta.agent = profile.name.to_string();
         session.meta.model_id = Some(settings.model_id.clone());
+        session.meta.workspace_root = Some(settings.workspace_root.clone());
         self.store
             .checkpoint(&mut session)
             .await
@@ -1676,6 +2018,12 @@ fn apply_run_overrides(
         if let Some(mcp) = o.mcp.as_ref().and_then(|m| m.servers.as_ref()) {
             merge_mcp_settings(&mut out.mcp.servers, mcp, config, false)?;
         }
+        if let Some(root) = o.workspace_root.as_deref() {
+            out.workspace_root = root.trim().to_string();
+        }
+    }
+    if out.workspace_root.trim().is_empty() {
+        out.workspace_root = base.workspace_root.clone();
     }
     Ok(out)
 }

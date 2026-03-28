@@ -11,6 +11,7 @@ const DEFAULT_PORT: u16 = 8123;
 const PORT_SCAN_MAX: u16 = 8200;
 const PING_TIMEOUT_FAST: std::time::Duration = std::time::Duration::from_millis(200);
 const STARTUP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
+const PORT_RELEASE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonState {
@@ -97,6 +98,41 @@ async fn ping(state: &DaemonState) -> bool {
     }
 }
 
+async fn ping_web(state: &DaemonState) -> bool {
+    let url = format!("{}/", state.url_base());
+    let client = reqwest::Client::new();
+    match client.get(url).timeout(PING_TIMEOUT_FAST).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+async fn try_stop_http(state: &DaemonState) -> bool {
+    let url = format!("{}/v1/admin/stop", state.url_base());
+    let client = reqwest::Client::new();
+    let mut req = client
+        .post(url)
+        .timeout(std::time::Duration::from_millis(800));
+    if !state.token.trim().is_empty() {
+        req = req.bearer_auth(state.token.trim());
+    }
+    match req.send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+async fn wait_for_port_to_free(host: &str, port: u16) -> bool {
+    let deadline = std::time::Instant::now() + PORT_RELEASE_GRACE;
+    while std::time::Instant::now() < deadline {
+        if port_is_free(host, port) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    port_is_free(host, port)
+}
+
 pub async fn ensure_running(
     workspace_root: &Path,
     config_path: &Path,
@@ -121,7 +157,19 @@ pub async fn ensure_running(
     if let Ok(text) = tokio::fs::read_to_string(&state_file).await {
         if let Ok(parsed) = serde_json::from_str::<DaemonState>(&text) {
             if ping(&parsed).await {
-                return Ok(parsed);
+                if ping_web(&parsed).await {
+                    return Ok(parsed);
+                }
+                if try_stop_http(&parsed).await {
+                    let _ = wait_for_port_to_free(&desired_bind_host, parsed.port).await;
+                    let _ = tokio::fs::remove_file(&state_file).await;
+                } else {
+                    anyhow::bail!(
+                        "kiliax-server is reachable at {}:{}, but the web UI is not available (try `kiliax serve restart`)",
+                        parsed.host,
+                        parsed.port
+                    );
+                }
             }
             if parsed
                 .started_at_ms
@@ -147,25 +195,35 @@ pub async fn ensure_running(
             started_at_ms: None,
         };
         if ping(&candidate).await {
-            let text = serde_json::to_string_pretty(&candidate).context("failed to serialize server state")?;
-            tokio::fs::write(&state_file, text)
-                .await
-                .with_context(|| format!("failed to write server state file: {}", state_file.display()))?;
-            return Ok(candidate);
+            if ping_web(&candidate).await {
+                let text = serde_json::to_string_pretty(&candidate).context("failed to serialize server state")?;
+                tokio::fs::write(&state_file, text)
+                    .await
+                    .with_context(|| format!("failed to write server state file: {}", state_file.display()))?;
+                return Ok(candidate);
+            }
+
+            if try_stop_http(&candidate).await {
+                let _ = wait_for_port_to_free(&desired_bind_host, port).await;
+            } else if desired_port.is_some() {
+                anyhow::bail!("server.port {port} is in use and no web UI is reachable at that address");
+            }
         }
 
         if desired_port.is_some() {
-            anyhow::bail!("server.port {port} is in use and no reachable kiliax-server is listening there");
-        }
-
-        let mut found = None;
-        for p in DEFAULT_PORT..=PORT_SCAN_MAX {
-            if port_is_free(&desired_bind_host, p) {
-                found = Some(p);
-                break;
+            if !port_is_free(&desired_bind_host, port) {
+                anyhow::bail!("server.port {port} is in use and no reachable kiliax-server is listening there");
             }
+        } else {
+            let mut found = None;
+            for p in DEFAULT_PORT..=PORT_SCAN_MAX {
+                if port_is_free(&desired_bind_host, p) {
+                    found = Some(p);
+                    break;
+                }
+            }
+            port = found.context("no free port found for kiliax-server")?;
         }
-        port = found.context("no free port found for kiliax-server")?;
     }
 
     let token = desired_token.unwrap_or_default();
@@ -195,7 +253,26 @@ pub async fn ensure_running(
         server_args.push(token.clone());
     }
 
-    let mut cmd = {
+    let repo_manifest = repo_manifest_from_current_exe();
+    let mut cmd = if let Some(manifest) = repo_manifest.clone() {
+        let mut cmd = Command::new("cargo");
+        cmd.arg("run")
+            .arg("-p")
+            .arg("kiliax-server")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .arg("--")
+            .args(&server_args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(log_file_err))
+            .current_dir(
+                manifest
+                    .parent()
+                    .context("manifest path missing parent dir")?,
+            );
+        cmd
+    } else {
         let server_exe = server_executable()?;
         let mut cmd = Command::new(server_exe);
         cmd.args(&server_args)
@@ -222,19 +299,9 @@ pub async fn ensure_running(
     let child = match cmd.spawn() {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let manifest = repo_manifest_from_current_exe()
-                .context("kiliax-server not found (install it, or run from repo with cargo)")?;
-
-            let log_file_path = log_path(workspace_root);
-            let log_file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file_path)
-                .with_context(|| format!("failed to open server log file: {}", log_file_path.display()))?;
-            let log_file_err = log_file
-                .try_clone()
-                .context("failed to clone server log file handle")?;
-
+            let Some(manifest) = repo_manifest else {
+                return Err(anyhow::Error::new(err).context("kiliax-server not found (install it, or run from repo with cargo)"));
+            };
             let mut cmd = Command::new("cargo");
             cmd.arg("run")
                 .arg("-p")
@@ -244,8 +311,8 @@ pub async fn ensure_running(
                 .arg("--")
                 .args(&server_args)
                 .stdin(Stdio::null())
-                .stdout(Stdio::from(log_file))
-                .stderr(Stdio::from(log_file_err))
+                .stdout(Stdio::from(std::fs::OpenOptions::new().create(true).append(true).open(log_path(workspace_root))?))
+                .stderr(Stdio::from(std::fs::OpenOptions::new().create(true).append(true).open(log_path(workspace_root))?))
                 .current_dir(
                     manifest
                         .parent()

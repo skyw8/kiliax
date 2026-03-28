@@ -82,6 +82,18 @@ async fn read_json(resp: axum::response::Response) -> (StatusCode, serde_json::V
     (status, value)
 }
 
+async fn read_text(resp: axum::response::Response) -> (StatusCode, String) {
+    let status = resp.status();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    (status, text)
+}
+
 fn assert_error_code(body: &serde_json::Value, code: &str) {
     assert_eq!(
         body.get("error")
@@ -90,6 +102,65 @@ fn assert_error_code(body: &serde_json::Value, code: &str) {
         Some(code),
         "unexpected error body: {body}"
     );
+}
+
+#[tokio::test]
+async fn web_serves_hint_when_dist_missing() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_text(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("kiliax-web is not built"), "body: {body}");
+}
+
+#[tokio::test]
+async fn web_serves_dist_and_spa_fallback() {
+    let dir = TempDir::new().expect("tempdir");
+    let dist_dir = dir.path().join("web").join("dist");
+    tokio::fs::create_dir_all(dist_dir.join("assets"))
+        .await
+        .expect("mkdir");
+    tokio::fs::write(dist_dir.join("index.html"), "<html>INDEX_OK</html>")
+        .await
+        .expect("write index");
+    tokio::fs::write(dist_dir.join("assets").join("hello.txt"), "HELLO_ASSET")
+        .await
+        .expect("write asset");
+
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_text(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("INDEX_OK"), "body: {body}");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/some/deep/link"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_text(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("INDEX_OK"), "body: {body}");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/assets/hello.txt"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_text(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "HELLO_ASSET");
 }
 
 #[tokio::test]
@@ -426,6 +497,14 @@ async fn auth_middleware_enforces_bearer_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_error_code(&body, "unauthorized");
 
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/capabilities?token=secret"))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
     let req = Request::builder()
         .method(Method::GET)
         .uri("/v1/capabilities")
@@ -437,3 +516,245 @@ async fn auth_middleware_enforces_bearer_token() {
     assert_eq!(status, StatusCode::OK);
 }
 
+fn allowed_home_kiliax_dir() -> std::path::PathBuf {
+    dirs::home_dir()
+        .expect("home_dir")
+        .join(".kiliax")
+}
+
+fn unique_allowed_workspace_root(prefix: &str) -> std::path::PathBuf {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    allowed_home_kiliax_dir().join(format!("{prefix}_{ts}_{}", std::process::id()))
+}
+
+#[tokio::test]
+async fn create_session_sets_workspace_root_and_updated_at() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let ws = body
+        .get("settings")
+        .and_then(|s| s.get("workspace_root"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(!ws.trim().is_empty(), "workspace_root missing: {body}");
+    assert!(
+        std::path::Path::new(ws).starts_with(&allowed_home_kiliax_dir()),
+        "workspace_root not under ~/.kiliax: {ws}"
+    );
+
+    let updated_at = body.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(!updated_at.trim().is_empty(), "updated_at missing: {body}");
+}
+
+#[tokio::test]
+async fn patch_settings_rejects_workspace_root_outside_kiliax_home() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (_status, body) = read_json(resp).await;
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            &format!("/v1/sessions/{session_id}/settings"),
+            serde_json::json!({ "workspace_root": "/tmp" }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_code(&body, "invalid_argument");
+}
+
+#[tokio::test]
+async fn list_skills_returns_workspace_skills() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let workspace_root = unique_allowed_workspace_root("kiliax_test_workspace");
+    let skill_dir = workspace_root.join("skills").join("demo_skill");
+    tokio::fs::create_dir_all(&skill_dir)
+        .await
+        .expect("create skill dir");
+    tokio::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: Demo Skill\ndescription: Hello\n---\n# Demo\n",
+    )
+    .await
+    .expect("write SKILL.md");
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::POST,
+            "/v1/sessions",
+            serde_json::json!({
+                "settings": {
+                    "workspace_root": workspace_root.display().to_string(),
+                }
+            }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/skills"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    assert!(
+        items.iter().any(|it| it.get("id").and_then(|v| v.as_str()) == Some("demo_skill")),
+        "missing demo_skill: {items:?}"
+    );
+
+    let _ = tokio::fs::remove_dir_all(&workspace_root).await;
+}
+
+#[tokio::test]
+async fn put_config_updates_live_session_model_when_removed() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (_status, body) = read_json(resp).await;
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+
+    let new_yaml = r#"
+default_model: test/new-model
+providers:
+  test:
+    base_url: http://127.0.0.1:1
+    models:
+      - new-model
+mcp:
+  servers: []
+"#;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PUT,
+            "/v1/config",
+            serde_json::json!({ "yaml": new_yaml }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, &format!("/v1/sessions/{session_id}")))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("model_id"))
+            .and_then(|v| v.as_str()),
+        Some("test/new-model"),
+        "session settings not normalized after config update: {body}"
+    );
+}
+
+#[tokio::test]
+async fn list_sessions_last_outcome_reflects_meta_finish_or_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let app1 = build_test_app(&dir, None).await;
+
+    let resp = app1
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (_status, body) = read_json(resp).await;
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+
+    let meta_path = dir
+        .path()
+        .join(".kiliax")
+        .join("sessions")
+        .join(&session_id)
+        .join("meta.json");
+    let meta_text = tokio::fs::read_to_string(&meta_path).await.expect("meta");
+    let mut meta: serde_json::Value = serde_json::from_str(&meta_text).expect("meta json");
+    meta["last_finish_reason"] = serde_json::Value::String("done".to_string());
+    let meta_text = serde_json::to_string_pretty(&meta).expect("meta serialize");
+    tokio::fs::write(&meta_path, meta_text).await.expect("meta write");
+
+    let app2 = build_test_app(&dir, None).await;
+    let resp = app2
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    let found = items
+        .iter()
+        .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(&session_id))
+        .expect("session");
+    assert_eq!(
+        found.get("last_outcome").and_then(|v| v.as_str()),
+        Some("done")
+    );
+
+    // Now mark as error and ensure it takes precedence.
+    let meta_text = tokio::fs::read_to_string(&meta_path).await.expect("meta");
+    let mut meta: serde_json::Value = serde_json::from_str(&meta_text).expect("meta json");
+    meta["last_error"] = serde_json::Value::String("boom".to_string());
+    let meta_text = serde_json::to_string_pretty(&meta).expect("meta serialize");
+    tokio::fs::write(&meta_path, meta_text).await.expect("meta write");
+
+    let app3 = build_test_app(&dir, None).await;
+    let resp = app3
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    let found = items
+        .iter()
+        .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(&session_id))
+        .expect("session");
+    assert_eq!(
+        found.get("last_outcome").and_then(|v| v.as_str()),
+        Some("error")
+    );
+}

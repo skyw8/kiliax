@@ -1,0 +1,145 @@
+export type SessionState = "live" | "archived";
+export type SessionRunState = "idle" | "running" | "tooling";
+export type SessionLastOutcome = "none" | "done" | "error";
+
+export type McpConnectionState =
+  | "disabled"
+  | "connecting"
+  | "connected"
+  | "error";
+
+export interface McpServerSetting {
+  id: string;
+  enable: boolean;
+}
+
+export interface McpServers {
+  servers: McpServerSetting[];
+}
+
+export interface SessionSettings {
+  agent: string;
+  model_id: string;
+  workspace_root: string;
+  mcp: McpServers;
+}
+
+export interface SessionStatus {
+  session_state: SessionState;
+  run_state: SessionRunState;
+  active_run_id: string | null;
+  step: number;
+  active_tool?: string | null;
+  queue_len: number;
+  last_event_id: number;
+}
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  last_outcome: SessionLastOutcome;
+  status: SessionStatus;
+  settings: SessionSettings;
+}
+
+export interface McpServerStatus {
+  id: string;
+  enable: boolean;
+  state: McpConnectionState;
+  last_error?: string | null;
+  tools?: string[] | null;
+}
+
+export interface Session extends SessionSummary {
+  mcp_status: McpServerStatus[];
+}
+
+export interface SessionListResponse {
+  items: SessionSummary[];
+  next_cursor?: string | null;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+export type Message = UserMessage | AssistantMessage | ToolMessage;
+
+export interface UserMessage {
+  role: "user";
+  id: string;
+  created_at: string;
+  content: string;
+}
+
+export interface AssistantMessage {
+  role: "assistant";
+  id: string;
+  created_at: string;
+  content: string;
+  reasoning_content?: string | null;
+  tool_calls: ToolCall[];
+}
+
+export interface ToolMessage {
+  role: "tool";
+  id: string;
+  created_at: string;
+  tool_call_id: string;
+  content: string;
+}
+
+export interface MessageListResponse {
+  items: Message[];
+  next_before?: string | null;
+}
+
+export interface Capabilities {
+  agents: string[];
+  models: string[];
+  mcp_servers: McpServerStatus[];
+}
+
+export interface ConfigResponse {
+  path: string;
+  yaml: string;
+  config: unknown;
+}
+
+export interface ConfigUpdateRequest {
+  yaml: string;
+}
+
+export interface SkillSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface SkillListResponse {
+  items: SkillSummary[];
+}
+
+export type RunInput = { type: "text"; text: string };
+
+export interface RunOverrides {
+  agent?: string;
+  model_id?: string;
+  mcp?: { servers?: McpServerSetting[] };
+  workspace_root?: string;
+}
+
+export interface RunCreateRequest {
+  input: RunInput;
+  overrides?: RunOverrides;
+  auto_resume?: boolean;
+}
+
+export interface ApiErrorShape {
+  error?: { code?: string; message?: string };
+}
+

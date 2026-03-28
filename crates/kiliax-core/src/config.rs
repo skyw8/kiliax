@@ -357,6 +357,20 @@ pub fn load_from_path(path: impl Into<PathBuf>) -> Result<LoadedConfig, ConfigEr
     Ok(LoadedConfig { path, config })
 }
 
+pub fn load_from_str(yaml: &str) -> Result<Config, ConfigError> {
+    let file: ConfigFile = serde_yaml::from_str(yaml).map_err(|source| ConfigError::Parse {
+        path: PathBuf::from("<memory>"),
+        source,
+    })?;
+    let config = resolve_config(file)?;
+    validate(&config)?;
+    Ok(config)
+}
+
+pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
+    validate(config)
+}
+
 fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
     let ConfigFile {
         default_model,

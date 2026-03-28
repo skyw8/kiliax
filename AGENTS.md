@@ -63,7 +63,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect`/`reqwest` 等）
 - `crates/kiliax-tui/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`、`serve start|stop|restart`）；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）；不再自动拉起 `kiliax-server`
-- `crates/kiliax-tui/src/daemon.rs`: 后台 `kiliax-server` 管理（`kiliax serve start|stop|restart`；健康检查；开发态缺少 `kiliax-server` binary 时 fallback `cargo run -p kiliax-server`）；状态写入 `.kiliax/server.json`，日志写入 `.kiliax/server.log`
+- `crates/kiliax-tui/src/daemon.rs`: 后台 `kiliax-server` 管理（`kiliax serve start|stop|restart`；健康检查；启动时校验 web root 可用性，不可用则尝试 stop 并重启；开发态优先通过 `cargo run -p kiliax-server` 确保与源码同步）；状态写入 `.kiliax/server.json`，日志写入 `.kiliax/server.log`
 - `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示（`shell_command` 仅展示关键命令/参数，省略 bash -lc/cd/env 等包装与冗长参数）；`update_plan` 以 `[]` 待办/完成删除线展示（不显示 pending 等状态字样）；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable` 并 checkpoint session（刷新 system preamble）；/new 切换前会清理空 session
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；/model、/mcp 等 picker（题头紫色、选中蓝色、未选中白色；MCP 未开启灰色/开启白色）；底部 footer 仅显示 status + agent + model_id（去 provider）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
@@ -85,11 +85,17 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session、发送消息（run）、切换 agent/model/MCP，以及查询 messages/status/capabilities。`kiliax.yaml` 仅作为新 session 默认值；session 覆盖持久化到 `settings.json`。
 
 - `crates/kiliax-server/Cargo.toml`: server 依赖（axum/ws/sse、tracing 等）
-- `crates/kiliax-server/src/main.rs`: HTTP 路由、鉴权（可选 Bearer token）、服务启动参数（host/port/workspace/config）、`/v1/admin/stop` 关闭服务
-- `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行（测试可通过 `new_for_tests` 禁用 runner）；session settings 持久化（`<session>/settings.json`）；API events（`<session>/events_api.jsonl`）；run 状态（`<workspace>/.kiliax/runs/<run_id>.json`）
-- `crates/kiliax-server/src/api.rs`: OpenAPI 对齐的请求/响应/事件 schema
+- `crates/kiliax-server/src/main.rs`: `/v1` REST + SSE/WS 路由、鉴权（Bearer + `?token=` 便于 WebSocket）、以及静态托管 `web/dist`（SPA fallback 到 `index.html`）
+- `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行；session settings（含 `workspace_root`）持久化到 `settings.json`；支持 `/v1/config` 读写 YAML 并热更新 live sessions；skills 发现 `/v1/sessions/{id}/skills`
+- `crates/kiliax-server/src/api.rs`: REST schema（session summary 增强：`updated_at/last_outcome`；新增 `config/skills/workspace_root` 相关结构）
 - `crates/kiliax-server/src/error.rs`: 统一错误模型（`{ error: { code, message, details? } }`）
-- `crates/kiliax-server/src/tests.rs`: server HTTP 行为测试（create/list/resume/settings/runs/cancel/events/auth/idempotency；离线不跑 LLM）
+- `crates/kiliax-server/src/tests.rs`: server HTTP 行为测试（追加：`/v1/config`、skills、workspace_root 校验、query token auth、web 静态托管与 SPA fallback 等）
+
+### web
+
+Web UI（React + Vite + Tailwind + shadcn/ui），由 `kiliax-server` 静态托管：
+
+- `web/`: 单页应用（左侧 session 导航 + 主对话区 + 设置/Skills/MCP 弹窗）；通过 `/v1/*` 与 `/v1/sessions/{id}/events/ws` 交互
 
 ## constraints
 

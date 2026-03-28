@@ -130,6 +130,7 @@ async fn main() -> Result<()> {
                 )
                 .await?;
                 println!("kiliax-server: {}:{}", state.host, state.port);
+                println!("kiliax-web: http://{}:{}/", state.host, state.port);
             }
             Some("stop") => {
                 match daemon::stop(&workspace_root).await? {
@@ -156,6 +157,7 @@ async fn main() -> Result<()> {
                 )
                 .await?;
                 println!("kiliax-server: {}:{}", state.host, state.port);
+                println!("kiliax-web: http://{}:{}/", state.host, state.port);
             }
             _ => print_help(),
         }

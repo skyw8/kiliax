@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use kiliax_core::config::Config as KiliaxConfig;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionListResponse {
     pub items: Vec<SessionSummary>,
@@ -26,8 +28,18 @@ pub struct SessionSummary {
     pub id: String,
     pub title: String,
     pub created_at: String,
+    pub updated_at: String,
+    pub last_outcome: SessionLastOutcome,
     pub status: SessionStatus,
     pub settings: SessionSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionLastOutcome {
+    None,
+    Done,
+    Error,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +92,8 @@ pub struct SessionSettingsPatch {
     pub model_id: Option<String>,
     #[serde(default)]
     pub mcp: Option<McpServersPatch>,
+    #[serde(default)]
+    pub workspace_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +113,7 @@ pub struct SessionSettings {
     pub agent: String,
     pub model_id: String,
     pub mcp: McpServers,
+    pub workspace_root: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +168,8 @@ pub struct RunOverrides {
     pub model_id: Option<String>,
     #[serde(default)]
     pub mcp: Option<McpServersPatch>,
+    #[serde(default)]
+    pub workspace_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +212,31 @@ pub struct Capabilities {
     pub agents: Vec<String>,
     pub models: Vec<String>,
     pub mcp_servers: Vec<McpServerStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigResponse {
+    pub path: String,
+    pub yaml: String,
+    pub config: KiliaxConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigUpdateRequest {
+    pub yaml: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillListResponse {
+    pub items: Vec<SkillSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
