@@ -79,6 +79,17 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 - `crates/kiliax-tui/src/terminal.rs`: inline viewport backend（viewport 可下推/可伸缩；raw mode + bracketed paste）；仅重绘 viewport；跳过绘制终端右下角单元格以规避部分终端的滚屏/空行问题；每帧用 Synchronized Update 包裹所有写入（同一 backend writer）以减少 tearing
 - `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致样式（无背景 + 上下 padding + 双彩箭头前缀）；支持 fg/bg/italic/underline/strikethrough 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\\r\\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\\r/\\n`；必要时清理 continuation rows 以避免残留/空行；相关 ANSI 命令封装在 `custom_terminal`）；包含 marker 解析/user bubble/divider 展开单元测试
 
+### crates/kiliax-server
+
+Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session、发送消息（run）、切换 agent/model/MCP，以及查询 messages/status/capabilities。`kiliax.yaml` 仅作为新 session 默认值；session 覆盖持久化到 `settings.json`。
+
+- `crates/kiliax-server/Cargo.toml`: server 依赖（axum/ws/sse、tracing 等）
+- `crates/kiliax-server/src/main.rs`: HTTP 路由、鉴权（可选 Bearer token）、服务启动参数（host/port/workspace/config）
+- `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行（测试可通过 `new_for_tests` 禁用 runner）；session settings 持久化（`<session>/settings.json`）；API events（`<session>/events_api.jsonl`）；run 状态（`<workspace>/.kiliax/runs/<run_id>.json`）
+- `crates/kiliax-server/src/api.rs`: OpenAPI 对齐的请求/响应/事件 schema
+- `crates/kiliax-server/src/error.rs`: 统一错误模型（`{ error: { code, message, details? } }`）
+- `crates/kiliax-server/src/tests.rs`: server HTTP 行为测试（create/list/resume/settings/runs/cancel/events/auth/idempotency；离线不跑 LLM）
+
 ## constraints
 
 ### TUI

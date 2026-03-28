@@ -1,0 +1,22 @@
+[package]
+name = "kiliax-server"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+kiliax-core = { path = "../kiliax-core" }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws", "macros"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "fs", "io-util", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"

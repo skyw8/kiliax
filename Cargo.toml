@@ -2,6 +2,7 @@
 members = [
   "crates/kiliax-core",
   "crates/kiliax-tui",
+  "crates/kiliax-server",
 ]
 resolver = "2"
 
@@ -15,4 +16,3 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 tempfile = "3"
 thiserror = "2"
-
