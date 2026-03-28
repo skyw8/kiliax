@@ -10,6 +10,18 @@ fn default_true() -> bool {
     true
 }
 
+fn default_otel_environment() -> String {
+    "dev".to_string()
+}
+
+fn default_otlp_endpoint() -> String {
+    "http://localhost:4318".to_string()
+}
+
+fn default_capture_max_bytes() -> usize {
+    65536
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentRuntimeConfig {
     /// Maximum number of ReAct steps in a single run.
@@ -77,6 +89,168 @@ pub struct ServerConfig {
     pub token: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OtelOtlpProtocol {
+    HttpProtobuf,
+    HttpJson,
+    Grpc,
+}
+
+impl Default for OtelOtlpProtocol {
+    fn default() -> Self {
+        Self::HttpProtobuf
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct OtelTlsConfig {
+    #[serde(default, alias = "caCert", alias = "ca-cert")]
+    pub ca_cert: Option<PathBuf>,
+
+    #[serde(default, alias = "clientCert", alias = "client-cert")]
+    pub client_cert: Option<PathBuf>,
+
+    #[serde(default, alias = "clientKey", alias = "client-key")]
+    pub client_key: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OtelOtlpConfig {
+    #[serde(default = "default_otlp_endpoint")]
+    pub endpoint: String,
+
+    #[serde(default)]
+    pub protocol: OtelOtlpProtocol,
+
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+
+    #[serde(default)]
+    pub tls: Option<OtelTlsConfig>,
+}
+
+impl Default for OtelOtlpConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_otlp_endpoint(),
+            protocol: Default::default(),
+            headers: Default::default(),
+            tls: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OtelSignalsConfig {
+    #[serde(default = "default_true")]
+    pub logs: bool,
+
+    #[serde(default = "default_true")]
+    pub traces: bool,
+
+    #[serde(default = "default_true")]
+    pub metrics: bool,
+}
+
+impl Default for OtelSignalsConfig {
+    fn default() -> Self {
+        Self {
+            logs: true,
+            traces: true,
+            metrics: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OtelCaptureMode {
+    Metadata,
+    Full,
+}
+
+impl Default for OtelCaptureMode {
+    fn default() -> Self {
+        Self::Full
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OtelCaptureHash {
+    None,
+    Sha256,
+}
+
+impl Default for OtelCaptureHash {
+    fn default() -> Self {
+        Self::Sha256
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OtelCaptureConfig {
+    #[serde(default)]
+    pub mode: OtelCaptureMode,
+
+    #[serde(default = "default_capture_max_bytes", alias = "maxBytes", alias = "max-bytes")]
+    pub max_bytes: usize,
+
+    #[serde(
+        default,
+        alias = "includeImages",
+        alias = "include-images",
+        alias = "include_image",
+        alias = "include-image"
+    )]
+    pub include_images: bool,
+
+    #[serde(default)]
+    pub hash: OtelCaptureHash,
+}
+
+impl Default for OtelCaptureConfig {
+    fn default() -> Self {
+        Self {
+            mode: Default::default(),
+            max_bytes: default_capture_max_bytes(),
+            include_images: false,
+            hash: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OtelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_otel_environment")]
+    pub environment: String,
+
+    #[serde(default)]
+    pub otlp: OtelOtlpConfig,
+
+    #[serde(default)]
+    pub signals: OtelSignalsConfig,
+
+    #[serde(default)]
+    pub capture: OtelCaptureConfig,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            environment: default_otel_environment(),
+            otlp: Default::default(),
+            signals: Default::default(),
+            capture: Default::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Config {
     #[serde(default)]
@@ -87,6 +261,9 @@ pub struct Config {
 
     #[serde(default)]
     pub server: ServerConfig,
+
+    #[serde(default)]
+    pub otel: OtelConfig,
 
     #[serde(default)]
     pub web_search: WebSearchConfig,
@@ -239,6 +416,9 @@ struct ConfigFile {
     pub server: ServerConfig,
 
     #[serde(default)]
+    pub otel: OtelConfig,
+
+    #[serde(default)]
     pub web_search: WebSearchConfig,
 
     #[serde(default)]
@@ -376,6 +556,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         default_model,
         mut providers,
         server,
+        otel,
         mut web_search,
         tools,
         runtime,
@@ -405,6 +586,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         default_model,
         providers,
         server,
+        otel,
         web_search,
         runtime,
         agents,
@@ -481,11 +663,84 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
 
     validate_web_search_config(&config.web_search)?;
 
+    validate_otel_config(&config.otel)?;
+
     validate_agent_runtime_config("runtime", &config.runtime)?;
     validate_agent_runtime_config("agents.plan", &config.agents.plan)?;
     validate_agent_runtime_config("agents.general", &config.agents.general)?;
 
     validate_mcp_config(&config.mcp)?;
+
+    Ok(())
+}
+
+fn validate_otel_config(cfg: &OtelConfig) -> Result<(), ConfigError> {
+    if !cfg.enabled {
+        return Ok(());
+    }
+
+    if cfg.environment.trim().is_empty() {
+        return Err(ConfigError::Invalid(
+            "otel.environment must not be empty when otel.enabled".to_string(),
+        ));
+    }
+
+    let endpoint = cfg.otlp.endpoint.trim();
+    if endpoint.is_empty() {
+        return Err(ConfigError::Invalid(
+            "otel.otlp.endpoint must not be empty when otel.enabled".to_string(),
+        ));
+    }
+
+    match cfg.otlp.protocol {
+        OtelOtlpProtocol::HttpProtobuf | OtelOtlpProtocol::HttpJson => {
+            if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
+                return Err(ConfigError::Invalid(
+                    "otel.otlp.endpoint must start with http:// or https:// for OTLP HTTP"
+                        .to_string(),
+                ));
+            }
+        }
+        OtelOtlpProtocol::Grpc => {
+            if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
+                return Err(ConfigError::Invalid(
+                    "otel.otlp.endpoint must start with http:// or https:// for OTLP gRPC"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
+    let endpoint_no_trailing_slash = endpoint.trim_end_matches('/');
+    let endpoint_no_trailing_slash = endpoint_no_trailing_slash.to_ascii_lowercase();
+    if endpoint_no_trailing_slash.ends_with("/v1")
+        || endpoint_no_trailing_slash.ends_with("/v1/traces")
+        || endpoint_no_trailing_slash.ends_with("/v1/logs")
+        || endpoint_no_trailing_slash.ends_with("/v1/metrics")
+    {
+        return Err(ConfigError::Invalid(
+            "otel.otlp.endpoint must be the collector base URL (e.g. http://localhost:4318), not include OTLP signal paths like /v1/traces"
+                .to_string(),
+        ));
+    }
+
+    if cfg.capture.max_bytes < 1024 {
+        return Err(ConfigError::Invalid(
+            "otel.capture.max_bytes must be >= 1024 when otel.enabled".to_string(),
+        ));
+    }
+
+    if let Some(tls) = cfg.otlp.tls.as_ref() {
+        match (&tls.client_cert, &tls.client_key) {
+            (Some(_), Some(_)) | (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(ConfigError::Invalid(
+                    "otel.otlp.tls.client_cert and otel.otlp.tls.client_key must both be set for mTLS"
+                        .to_string(),
+                ));
+            }
+        }
+    }
 
     Ok(())
 }
@@ -760,5 +1015,50 @@ mod tests {
         let resolved = cfg.resolve_model("openai/gpt-4o-mini").unwrap();
         assert_eq!(resolved.provider, "openrouter");
         assert_eq!(resolved.model, "openai/gpt-4o-mini");
+    }
+
+    #[test]
+    fn otel_config_defaults_when_missing() {
+        let cfg = load_from_str(
+            "providers:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - gpt-test\n",
+        )
+        .unwrap();
+
+        assert!(!cfg.otel.enabled);
+        assert_eq!(cfg.otel.environment, "dev");
+        assert_eq!(cfg.otel.otlp.endpoint, "http://localhost:4318");
+        assert_eq!(cfg.otel.otlp.protocol, OtelOtlpProtocol::HttpProtobuf);
+        assert!(cfg.otel.signals.logs);
+        assert!(cfg.otel.signals.traces);
+        assert!(cfg.otel.signals.metrics);
+        assert_eq!(cfg.otel.capture.mode, OtelCaptureMode::Full);
+        assert_eq!(cfg.otel.capture.max_bytes, 65536);
+        assert_eq!(cfg.otel.capture.hash, OtelCaptureHash::Sha256);
+    }
+
+    #[test]
+    fn otel_config_rejects_incomplete_mtls() {
+        let err = load_from_str(
+            "otel:\n  enabled: true\n  otlp:\n    endpoint: http://localhost:4318\n    tls:\n      client_cert: client.pem\nproviders:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - gpt-test\n",
+        )
+        .unwrap_err();
+
+        let ConfigError::Invalid(msg) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(msg.contains("mTLS"), "{msg}");
+    }
+
+    #[test]
+    fn otel_config_rejects_endpoint_with_signal_path() {
+        let err = load_from_str(
+            "otel:\n  enabled: true\n  otlp:\n    endpoint: http://localhost:4318/v1/traces\nproviders:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - gpt-test\n",
+        )
+        .unwrap_err();
+
+        let ConfigError::Invalid(msg) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(msg.contains("base URL"), "{msg}");
     }
 }

@@ -6,8 +6,10 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 use tokio::time::Instant;
+use tracing::Instrument;
 
 use crate::llm::{Message, ToolCall, ToolDefinition};
+use crate::telemetry;
 use crate::tools::{builtin, Permissions, ToolError};
 
 #[derive(Debug, Default)]
@@ -50,6 +52,7 @@ pub struct ToolEngine {
 
 impl ToolEngine {
     pub fn new(workspace_root: impl Into<PathBuf>, config: crate::config::Config) -> Self {
+        telemetry::set_capture_config(config.otel.enabled.then_some(config.otel.capture.clone()));
         Self {
             workspace_root: workspace_root.into(),
             shell_sessions: Arc::new(builtin::ShellSessions::new()),
@@ -64,6 +67,7 @@ impl ToolEngine {
     }
 
     pub fn set_config(&self, config: crate::config::Config) -> Result<(), ToolError> {
+        telemetry::set_capture_config(config.otel.enabled.then_some(config.otel.capture.clone()));
         let mut guard = self.config.write().map_err(|_| {
             ToolError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -164,6 +168,44 @@ impl ToolEngine {
     }
 
     pub async fn execute(&self, perms: &Permissions, call: &ToolCall) -> Result<String, ToolError> {
+        let started = Instant::now();
+
+        let is_mcp = crate::tools::mcp::McpHub::is_mcp_tool_name(call.name.as_str());
+        let kind = if is_mcp { "mcp" } else { "builtin" };
+        let (mcp_server, mcp_tool) = if is_mcp {
+            crate::tools::mcp::McpHub::parse_exposed_tool_name(call.name.as_str())
+                .map(|(s, t)| (s.to_string(), t.to_string()))
+        } else {
+            None
+        }
+        .unwrap_or_else(|| ("".to_string(), "".to_string()));
+
+        let span = tracing::info_span!(
+            "kiliax.tool.execute",
+            tool.name = %call.name,
+            tool.call_id = %call.id,
+            tool.kind = %kind,
+            mcp.server = %mcp_server,
+            mcp.tool = %mcp_tool,
+            tool.duration_ms = tracing::field::Empty,
+        );
+
+        if telemetry::capture_enabled() {
+            let captured = telemetry::capture_text(&call.arguments);
+            tracing::info!(
+                target: "kiliax_core::telemetry",
+                parent: &span,
+                event = "tool.args",
+                tool = %call.name,
+                kind = %kind,
+                call_id = %call.id,
+                args_len = captured.len as u64,
+                args_truncated = captured.truncated,
+                args_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                args = %captured.as_str(),
+            );
+        }
+
         let cfg = self
             .config
             .read()
@@ -175,38 +217,81 @@ impl ToolEngine {
             })?
             .clone();
 
-        if crate::tools::mcp::McpHub::is_mcp_tool_name(call.name.as_str()) {
-            let Some((server_name, _tool_name)) =
-                crate::tools::mcp::McpHub::parse_exposed_tool_name(call.name.as_str())
-            else {
-                return Err(ToolError::UnknownTool(call.name.clone()));
-            };
-            self.ensure_mcp_server(cfg.as_ref(), server_name).await?;
+        let res: Result<String, ToolError> = async {
+            if is_mcp {
+                let Some((server_name, _tool_name)) =
+                    crate::tools::mcp::McpHub::parse_exposed_tool_name(call.name.as_str())
+                else {
+                    return Err(ToolError::UnknownTool(call.name.clone()));
+                };
+                self.ensure_mcp_server(cfg.as_ref(), server_name).await?;
 
-            let arguments = call
-                .arguments_json()
-                .map_err(|source| ToolError::InvalidArgs {
-                    tool: call.name.clone(),
-                    source,
-                })?;
-            let res = self
-                .mcp
-                .call_exposed_tool(call.name.as_str(), arguments)
-                .await;
-            if let Err(ToolError::Mcp(err)) = &res {
-                self.mark_mcp_server_disconnected(server_name, err).await;
+                let arguments = call
+                    .arguments_json()
+                    .map_err(|source| ToolError::InvalidArgs {
+                        tool: call.name.clone(),
+                        source,
+                    })?;
+                let res = self
+                    .mcp
+                    .call_exposed_tool(call.name.as_str(), arguments)
+                    .await;
+                if let Err(ToolError::Mcp(err)) = &res {
+                    self.mark_mcp_server_disconnected(server_name, err).await;
+                }
+                return res;
             }
-            return res;
+
+            builtin::execute(
+                &self.workspace_root,
+                perms,
+                self.shell_sessions.as_ref(),
+                cfg.as_ref(),
+                call,
+            )
+            .await
+        }
+        .instrument(span.clone())
+        .await;
+
+        let latency = started.elapsed();
+        span.record("tool.duration_ms", latency.as_millis() as u64);
+
+        let outcome = if res.is_ok() { "ok" } else { "error" };
+        telemetry::metrics::record_tool_call(&call.name, kind, outcome, latency);
+
+        match &res {
+            Ok(output) => {
+                if telemetry::capture_enabled() {
+                    let captured = telemetry::capture_text(output);
+                    tracing::info!(
+                        target: "kiliax_core::telemetry",
+                        parent: &span,
+                        event = "tool.output",
+                        tool = %call.name,
+                        kind = %kind,
+                        call_id = %call.id,
+                        output_len = captured.len as u64,
+                        output_truncated = captured.truncated,
+                        output_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                        output = %captured.as_str(),
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "kiliax_core::telemetry",
+                    parent: &span,
+                    event = "tool.error",
+                    tool = %call.name,
+                    kind = %kind,
+                    call_id = %call.id,
+                    error = %err,
+                );
+            }
         }
 
-        builtin::execute(
-            &self.workspace_root,
-            perms,
-            self.shell_sessions.as_ref(),
-            cfg.as_ref(),
-            call,
-        )
-        .await
+        res
     }
 
     pub async fn execute_to_message(
@@ -227,9 +312,78 @@ impl ToolEngine {
         call: &ToolCall,
     ) -> Result<Vec<Message>, ToolError> {
         if call.name == builtin::TOOL_VIEW_IMAGE {
-            let (tool_content, image_message) =
-                builtin::execute_view_image_with_attachment(&self.workspace_root, perms, call)
-                    .await?;
+            let started = Instant::now();
+            let kind = "builtin";
+            let span = tracing::info_span!(
+                "kiliax.tool.execute",
+                tool.name = %call.name,
+                tool.call_id = %call.id,
+                tool.kind = %kind,
+                mcp.server = "",
+                mcp.tool = "",
+                tool.duration_ms = tracing::field::Empty,
+            );
+
+            if telemetry::capture_enabled() {
+                let captured = telemetry::capture_text(&call.arguments);
+                tracing::info!(
+                    target: "kiliax_core::telemetry",
+                    parent: &span,
+                    event = "tool.args",
+                    tool = %call.name,
+                    kind = %kind,
+                    call_id = %call.id,
+                    args_len = captured.len as u64,
+                    args_truncated = captured.truncated,
+                    args_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                    args = %captured.as_str(),
+                );
+            }
+
+            let res: Result<(String, Message), ToolError> = async {
+                builtin::execute_view_image_with_attachment(&self.workspace_root, perms, call).await
+            }
+            .instrument(span.clone())
+            .await;
+
+            let latency = started.elapsed();
+            span.record("tool.duration_ms", latency.as_millis() as u64);
+
+            let outcome = if res.is_ok() { "ok" } else { "error" };
+            telemetry::metrics::record_tool_call(&call.name, kind, outcome, latency);
+
+            match &res {
+                Ok((output, _image_message)) => {
+                    if telemetry::capture_enabled() {
+                        let captured = telemetry::capture_text(output);
+                        tracing::info!(
+                            target: "kiliax_core::telemetry",
+                            parent: &span,
+                            event = "tool.output",
+                            tool = %call.name,
+                            kind = %kind,
+                            call_id = %call.id,
+                            output_len = captured.len as u64,
+                            output_truncated = captured.truncated,
+                            output_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                            output = %captured.as_str(),
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "kiliax_core::telemetry",
+                        parent: &span,
+                        event = "tool.error",
+                        tool = %call.name,
+                        kind = %kind,
+                        call_id = %call.id,
+                        error = %err,
+                    );
+                }
+            }
+
+            let (tool_content, image_message) = res?;
             return Ok(vec![
                 Message::Tool {
                     tool_call_id: call.id.clone(),

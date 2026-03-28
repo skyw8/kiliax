@@ -9,6 +9,38 @@ server:
   # token is optional when host is loopback. Recommended for non-loopback binds (e.g. 0.0.0.0).
   # token: your-long-random-token
 
+# OpenTelemetry (optional).
+otel:
+  enabled: false
+  environment: dev
+  otlp:
+    # Base endpoint for your OTEL Collector.
+    # HTTP: http://localhost:4318
+    # gRPC: http://localhost:4317
+    endpoint: http://localhost:4318
+    # http_protobuf (default) | http_json | grpc
+    protocol: http_protobuf
+    # Extra exporter headers (e.g. auth tokens).
+    headers: {}
+    # Optional mTLS / custom CA (paths).
+    # tls:
+    #   ca_cert: /path/to/ca.pem
+    #   client_cert: /path/to/client.pem
+    #   client_key: /path/to/client.key
+  signals:
+    logs: true
+    traces: true
+    metrics: true
+  capture:
+    # metadata | full
+    mode: full
+    # Truncate any captured text fields (prompt/response/tool args/output).
+    max_bytes: 65536
+    # Never export base64 image data; only paths/metadata.
+    include_images: false
+    # none | sha256
+    hash: sha256
+
 # Agent runtime options (optional).
 runtime:
   # Maximum number of ReAct steps in a single run.

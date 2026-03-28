@@ -190,6 +190,13 @@ async fn main() -> Result<()> {
     let Some(loaded) = load_or_init_config()? else {
         return Ok(());
     };
+
+    let _otel = kiliax_otel::init(
+        &loaded.config,
+        "kiliax-tui",
+        env!("CARGO_PKG_VERSION"),
+        kiliax_otel::LocalLogs::None,
+    )?;
     let store = FileSessionStore::global()
         .context("failed to determine home directory for sessions (expected ~/sessions)")?;
 

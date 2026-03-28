@@ -24,8 +24,10 @@ use reqwest_eventsource::{Event, RequestBuilderExt};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use tokio_stream::{Stream, StreamExt};
+use tracing::Instrument;
 
 use crate::config::{Config, ConfigError, ResolvedModel};
+use crate::telemetry;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
@@ -87,67 +89,153 @@ impl LlmClient {
             max_completion_tokens,
         } = req;
 
-        let mut messages: Vec<ChatCompletionRequestMessage> =
-            Vec::with_capacity(internal_messages.len());
-        for msg in &internal_messages {
-            messages.push(to_openai_message(msg).await?);
-        }
+        let started = std::time::Instant::now();
+        let span = tracing::info_span!(
+            "kiliax.llm.chat",
+            llm.provider = %self.route.provider,
+            llm.model = %self.route.model,
+            llm.base_url = %self.route.base_url,
+            llm.stream = false,
+            request.messages = internal_messages.len() as u64,
+            request.tools = tools.len() as u64,
+        );
 
-        let mut builder = CreateChatCompletionRequestArgs::default();
-        builder.model(&self.route.model).messages(messages);
-
-        if !tools.is_empty() {
-            let tools: Vec<ChatCompletionTool> = tools.into_iter().map(to_openai_tool).collect();
-            builder.tools(tools);
-            if tool_choice != ToolChoice::Auto {
-                builder.tool_choice(to_openai_tool_choice(&tool_choice));
+        if telemetry::capture_enabled() {
+            if let Ok(json) = serde_json::to_string(&internal_messages) {
+                let captured = telemetry::capture_text(&json);
+                tracing::info!(
+                    target: "kiliax_core::telemetry",
+                    parent: &span,
+                    event = "llm.request",
+                    llm_stream = false,
+                    request_len = captured.len as u64,
+                    request_truncated = captured.truncated,
+                    request_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                    request = %captured.as_str(),
+                );
             }
         }
 
-        if let Some(parallel_tool_calls) = parallel_tool_calls {
-            builder.parallel_tool_calls(parallel_tool_calls);
+        let res: Result<ChatResponse, LlmError> = async {
+            let mut messages: Vec<ChatCompletionRequestMessage> =
+                Vec::with_capacity(internal_messages.len());
+            for msg in &internal_messages {
+                messages.push(to_openai_message(msg).await?);
+            }
+
+            let mut builder = CreateChatCompletionRequestArgs::default();
+            builder.model(&self.route.model).messages(messages);
+
+            if !tools.is_empty() {
+                let tools: Vec<ChatCompletionTool> =
+                    tools.into_iter().map(to_openai_tool).collect();
+                builder.tools(tools);
+                if tool_choice != ToolChoice::Auto {
+                    builder.tool_choice(to_openai_tool_choice(&tool_choice));
+                }
+            }
+
+            if let Some(parallel_tool_calls) = parallel_tool_calls {
+                builder.parallel_tool_calls(parallel_tool_calls);
+            }
+
+            if let Some(temperature) = temperature {
+                builder.temperature(temperature);
+            }
+
+            if let Some(max_completion_tokens) = max_completion_tokens {
+                builder.max_completion_tokens(max_completion_tokens);
+            }
+
+            let request = builder.build()?;
+            let mut body = serde_json::to_value(&request).map_err(|e| {
+                LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
+                    "failed to serialize request: {e}"
+                )))
+            })?;
+
+            if should_inject_reasoning_content(&self.route) {
+                inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
+            }
+
+            let cfg = self.client.config();
+            let http = reqwest::Client::new();
+            let resp = http
+                .post(cfg.url("/chat/completions"))
+                .query(&cfg.query())
+                .headers(cfg.headers())
+                .json(&body)
+                .send()
+                .await
+                .map_err(OpenAIError::Reqwest)?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let err = map_api_error_response(status, resp).await;
+                return Err(LlmError::OpenAI(err));
+            }
+
+            let bytes = resp.bytes().await.map_err(OpenAIError::Reqwest)?;
+            let parsed: ByotCreateChatCompletionResponse = serde_json::from_slice(&bytes)
+                .map_err(|e| LlmError::OpenAI(OpenAIError::JSONDeserialize(e)))?;
+            chat_response_from_byot(parsed)
+        }
+        .instrument(span.clone())
+        .await;
+
+        let latency = started.elapsed();
+
+        match &res {
+            Ok(ok) => {
+                let usage = ok.usage.as_ref();
+                telemetry::metrics::record_llm_call(
+                    &self.route.provider,
+                    &self.route.model,
+                    false,
+                    "ok",
+                    latency,
+                    usage.map(|u| u.prompt_tokens as u64),
+                    usage.map(|u| u.completion_tokens as u64),
+                );
+
+                if telemetry::capture_enabled() {
+                    if let Ok(json) = serde_json::to_string(&ok.message) {
+                        let captured = telemetry::capture_text(&json);
+                        tracing::info!(
+                            target: "kiliax_core::telemetry",
+                            parent: &span,
+                            event = "llm.response",
+                            llm_stream = false,
+                            finish_reason = ?ok.finish_reason,
+                            response_len = captured.len as u64,
+                            response_truncated = captured.truncated,
+                            response_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                            response = %captured.as_str(),
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                telemetry::metrics::record_llm_call(
+                    &self.route.provider,
+                    &self.route.model,
+                    false,
+                    "error",
+                    latency,
+                    None,
+                    None,
+                );
+                tracing::warn!(
+                    target: "kiliax_core::telemetry",
+                    parent: &span,
+                    event = "llm.error",
+                    llm_stream = false,
+                    error = %err,
+                );
+            }
         }
 
-        if let Some(temperature) = temperature {
-            builder.temperature(temperature);
-        }
-
-        if let Some(max_completion_tokens) = max_completion_tokens {
-            builder.max_completion_tokens(max_completion_tokens);
-        }
-
-        let request = builder.build()?;
-        let mut body = serde_json::to_value(&request).map_err(|e| {
-            LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
-                "failed to serialize request: {e}"
-            )))
-        })?;
-
-        if should_inject_reasoning_content(&self.route) {
-            inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
-        }
-
-        let cfg = self.client.config();
-        let http = reqwest::Client::new();
-        let resp = http
-            .post(cfg.url("/chat/completions"))
-            .query(&cfg.query())
-            .headers(cfg.headers())
-            .json(&body)
-            .send()
-            .await
-            .map_err(OpenAIError::Reqwest)?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let err = map_api_error_response(status, resp).await;
-            return Err(LlmError::OpenAI(err));
-        }
-
-        let bytes = resp.bytes().await.map_err(OpenAIError::Reqwest)?;
-        let parsed: ByotCreateChatCompletionResponse = serde_json::from_slice(&bytes)
-            .map_err(|e| LlmError::OpenAI(OpenAIError::JSONDeserialize(e)))?;
-        chat_response_from_byot(parsed)
+        res
     }
 
     pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
@@ -160,98 +248,193 @@ impl LlmClient {
             max_completion_tokens,
         } = req;
 
-        let mut messages: Vec<ChatCompletionRequestMessage> =
-            Vec::with_capacity(internal_messages.len());
-        for msg in &internal_messages {
-            messages.push(to_openai_message(msg).await?);
-        }
+        let started = std::time::Instant::now();
+        let span = tracing::info_span!(
+            "kiliax.llm.chat_stream",
+            llm.provider = %self.route.provider,
+            llm.model = %self.route.model,
+            llm.base_url = %self.route.base_url,
+            llm.stream = true,
+            request.messages = internal_messages.len() as u64,
+            request.tools = tools.len() as u64,
+        );
 
-        let mut builder = CreateChatCompletionRequestArgs::default();
-        builder.model(&self.route.model).messages(messages);
-
-        if !tools.is_empty() {
-            let tools: Vec<ChatCompletionTool> = tools.into_iter().map(to_openai_tool).collect();
-            builder.tools(tools);
-            if tool_choice != ToolChoice::Auto {
-                builder.tool_choice(to_openai_tool_choice(&tool_choice));
+        if telemetry::capture_enabled() {
+            if let Ok(json) = serde_json::to_string(&internal_messages) {
+                let captured = telemetry::capture_text(&json);
+                tracing::info!(
+                    target: "kiliax_core::telemetry",
+                    parent: &span,
+                    event = "llm.request",
+                    llm_stream = true,
+                    request_len = captured.len as u64,
+                    request_truncated = captured.truncated,
+                    request_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                    request = %captured.as_str(),
+                );
             }
         }
 
-        if let Some(parallel_tool_calls) = parallel_tool_calls {
-            builder.parallel_tool_calls(parallel_tool_calls);
-        }
-
-        if let Some(temperature) = temperature {
-            builder.temperature(temperature);
-        }
-
-        if let Some(max_completion_tokens) = max_completion_tokens {
-            builder.max_completion_tokens(max_completion_tokens);
-        }
-
-        let mut request = builder.build()?;
-        request.stream = Some(true);
-        let mut body = serde_json::to_value(&request).map_err(|e| {
-            LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
-                "failed to serialize request: {e}"
-            )))
-        })?;
-
-        if should_inject_reasoning_content(&self.route) {
-            inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
-        }
-
-        let cfg = self.client.config();
-        let http = reqwest::Client::new();
-        let mut event_source = http
-            .post(cfg.url("/chat/completions"))
-            .query(&cfg.query())
-            .headers(cfg.headers())
-            .json(&body)
-            .eventsource()
-            .map_err(|e| OpenAIError::StreamError(e.to_string()))?;
+        let provider = self.route.provider.clone();
+        let model = self.route.model.clone();
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<ChatStreamChunk, LlmError>>();
 
-        tokio::spawn(async move {
-            while let Some(ev) = event_source.next().await {
-                match ev {
-                    Ok(Event::Open) => continue,
-                    Ok(Event::Message(message)) => {
-                        let data = message.data.trim();
-                        if data.is_empty() || message.event == "keepalive" {
-                            continue;
-                        }
-                        if data == "[DONE]" {
-                            break;
-                        }
+        let setup: Result<(), LlmError> = async {
+            let mut messages: Vec<ChatCompletionRequestMessage> =
+                Vec::with_capacity(internal_messages.len());
+            for msg in &internal_messages {
+                messages.push(to_openai_message(msg).await?);
+            }
 
-                        let response = match serde_json::from_str::<
-                            ByotCreateChatCompletionStreamResponse,
-                        >(data)
-                        {
-                            Ok(resp) => Ok(chat_stream_chunk_from_byot(resp)),
-                            Err(err) => Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(err))),
-                        };
+            let mut builder = CreateChatCompletionRequestArgs::default();
+            builder.model(&self.route.model).messages(messages);
 
-                        if tx.send(response).is_err() {
-                            break;
-                        }
-                    }
-                    Err(reqwest_eventsource::Error::StreamEnded) => break,
-                    Err(err) => {
-                        let mapped = map_eventsource_error(err).await;
-                        let _ = tx.send(Err(LlmError::OpenAI(mapped)));
-                        break;
-                    }
+            if !tools.is_empty() {
+                let tools: Vec<ChatCompletionTool> =
+                    tools.into_iter().map(to_openai_tool).collect();
+                builder.tools(tools);
+                if tool_choice != ToolChoice::Auto {
+                    builder.tool_choice(to_openai_tool_choice(&tool_choice));
                 }
             }
-            event_source.close();
-        });
 
-        Ok(Box::pin(
-            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
-        ))
+            if let Some(parallel_tool_calls) = parallel_tool_calls {
+                builder.parallel_tool_calls(parallel_tool_calls);
+            }
+
+            if let Some(temperature) = temperature {
+                builder.temperature(temperature);
+            }
+
+            if let Some(max_completion_tokens) = max_completion_tokens {
+                builder.max_completion_tokens(max_completion_tokens);
+            }
+
+            let mut request = builder.build()?;
+            request.stream = Some(true);
+            let mut body = serde_json::to_value(&request).map_err(|e| {
+                LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
+                    "failed to serialize request: {e}"
+                )))
+            })?;
+
+            if should_inject_reasoning_content(&self.route) {
+                inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
+            }
+
+            let cfg = self.client.config();
+            let http = reqwest::Client::new();
+            let mut event_source = http
+                .post(cfg.url("/chat/completions"))
+                .query(&cfg.query())
+                .headers(cfg.headers())
+                .json(&body)
+                .eventsource()
+                .map_err(|e| OpenAIError::StreamError(e.to_string()))?;
+
+            let span_for_task = span.clone();
+            let provider = provider.clone();
+            let model = model.clone();
+            tokio::spawn(
+                async move {
+                    let mut last_usage: Option<CompletionUsage> = None;
+                    let mut outcome = "ok";
+
+                    while let Some(ev) = event_source.next().await {
+                        match ev {
+                            Ok(Event::Open) => continue,
+                            Ok(Event::Message(message)) => {
+                                let data = message.data.trim();
+                                if data.is_empty() || message.event == "keepalive" {
+                                    continue;
+                                }
+                                if data == "[DONE]" {
+                                    break;
+                                }
+
+                                let response = match serde_json::from_str::<
+                                    ByotCreateChatCompletionStreamResponse,
+                                >(data)
+                                {
+                                    Ok(resp) => {
+                                        let chunk = chat_stream_chunk_from_byot(resp);
+                                        if let Some(usage) = chunk.usage.clone() {
+                                            last_usage = Some(usage);
+                                        }
+                                        Ok(chunk)
+                                    }
+                                    Err(err) => Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(
+                                        err,
+                                    ))),
+                                };
+
+                                if tx.send(response).is_err() {
+                                    outcome = "cancelled";
+                                    break;
+                                }
+                            }
+                            Err(reqwest_eventsource::Error::StreamEnded) => break,
+                            Err(err) => {
+                                let mapped = map_eventsource_error(err).await;
+                                let _ = tx.send(Err(LlmError::OpenAI(mapped)));
+                                outcome = "error";
+                                break;
+                            }
+                        }
+                    }
+                    event_source.close();
+
+                    let latency = started.elapsed();
+                    telemetry::metrics::record_llm_call(
+                        &provider,
+                        &model,
+                        true,
+                        outcome,
+                        latency,
+                        last_usage.as_ref().map(|u| u.prompt_tokens as u64),
+                        last_usage.as_ref().map(|u| u.completion_tokens as u64),
+                    );
+
+                    if outcome != "ok" {
+                        tracing::warn!(
+                            target: "kiliax_core::telemetry",
+                            event = "llm.stream_end",
+                            outcome = outcome,
+                        );
+                    }
+                }
+                .instrument(span_for_task),
+            );
+
+            Ok(())
+        }
+        .instrument(span.clone())
+        .await;
+
+        if let Err(err) = setup {
+            telemetry::metrics::record_llm_call(
+                &provider,
+                &model,
+                true,
+                "error",
+                started.elapsed(),
+                None,
+                None,
+            );
+            tracing::warn!(
+                target: "kiliax_core::telemetry",
+                parent: &span,
+                event = "llm.error",
+                llm_stream = true,
+                error = %err,
+            );
+            return Err(err);
+        }
+
+        Ok(Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(
+            rx,
+        )))
     }
 }
 

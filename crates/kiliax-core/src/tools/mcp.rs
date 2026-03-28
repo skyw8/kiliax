@@ -8,10 +8,13 @@ use async_trait::async_trait;
 use mcp_protocol::messages::JsonRpcMessage;
 use modelcontextprotocol_client::{Client as McpClient, ClientBuilder as McpClientBuilder};
 use tokio::sync::Mutex;
+use tokio::time::Instant;
+use tracing::Instrument;
 
 use crate::config::McpServerConfig;
 use crate::llm::ToolDefinition;
 use crate::tools::ToolError;
+use crate::telemetry;
 
 const MCP_PREFIX: &str = "mcp__";
 const MCP_SEP: &str = "__";
@@ -209,56 +212,87 @@ impl McpHub {
     pub async fn connect_stdio(&self, cfg: McpServerConfig) -> Result<(), ToolError> {
         validate_component(&cfg.name)?;
         let name = cfg.name.clone();
+        let started = Instant::now();
 
-        let (transport, mut rx) = QuietStdioTransport::new(&cfg.command, cfg.args.clone());
-        let client = Arc::new(
-            McpClientBuilder::new("kiliax", "0.1.0")
-                .with_transport(transport)
-                .build()
-                .map_err(|e| ToolError::Mcp(e.to_string()))?,
+        let span = tracing::info_span!(
+            "kiliax.mcp.connect",
+            mcp.server = %name,
+            mcp.command = %cfg.command,
+            mcp.args = ?cfg.args,
+            mcp.duration_ms = tracing::field::Empty,
         );
 
-        // Drive the inbound message loop so requests can complete.
-        let client_for_task = client.clone();
-        tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
-                if let Err(err) = client_for_task.handle_message(msg).await {
-                    tracing::error!("mcp handle_message error: {}", err);
+        let res: Result<(), ToolError> = async {
+            let (transport, mut rx) = QuietStdioTransport::new(&cfg.command, cfg.args.clone());
+            let client = Arc::new(
+                McpClientBuilder::new("kiliax", "0.1.0")
+                    .with_transport(transport)
+                    .build()
+                    .map_err(|e| ToolError::Mcp(e.to_string()))?,
+            );
+
+            // Drive the inbound message loop so requests can complete.
+            let client_for_task = client.clone();
+            tokio::spawn(
+                async move {
+                    while let Some(msg) = rx.recv().await {
+                        if let Err(err) = client_for_task.handle_message(msg).await {
+                            tracing::error!("mcp handle_message error: {}", err);
+                        }
+                    }
                 }
-            }
-        });
+                .instrument(tracing::Span::current()),
+            );
 
-        let tools = match tokio::time::timeout(MCP_CONNECT_TIMEOUT, async {
-            client
-                .initialize()
-                .await
-                .map_err(|e| ToolError::Mcp(e.to_string()))?;
-            client
-                .list_tools()
-                .await
-                .map_err(|e| ToolError::Mcp(e.to_string()))
-                .map(|result| result.tools)
-        })
-        .await
-        {
-            Ok(Ok(tools)) => tools,
-            Ok(Err(err)) => return Err(err),
-            Err(_) => {
-                return Err(ToolError::Mcp(format!(
-                    "connect timed out after {}s",
-                    MCP_CONNECT_TIMEOUT.as_secs()
-                )));
-            }
-        };
+            let tools = match tokio::time::timeout(MCP_CONNECT_TIMEOUT, async {
+                client
+                    .initialize()
+                    .await
+                    .map_err(|e| ToolError::Mcp(e.to_string()))?;
+                client
+                    .list_tools()
+                    .await
+                    .map_err(|e| ToolError::Mcp(e.to_string()))
+                    .map(|result| result.tools)
+            })
+            .await
+            {
+                Ok(Ok(tools)) => tools,
+                Ok(Err(err)) => return Err(err),
+                Err(_) => {
+                    return Err(ToolError::Mcp(format!(
+                        "connect timed out after {}s",
+                        MCP_CONNECT_TIMEOUT.as_secs()
+                    )));
+                }
+            };
 
-        let server = Arc::new(McpServer {
-            client: McpClientHandle::new(client),
-            tools,
-        });
+            let server = Arc::new(McpServer {
+                client: McpClientHandle::new(client),
+                tools,
+            });
 
-        let mut map = self.servers.lock().await;
-        map.insert(name, server);
-        Ok(())
+            let mut map = self.servers.lock().await;
+            map.insert(name, server);
+            Ok(())
+        }
+        .instrument(span.clone())
+        .await;
+
+        let latency = started.elapsed();
+        span.record("mcp.duration_ms", latency.as_millis() as u64);
+
+        if let Err(err) = &res {
+            telemetry::metrics::record_mcp_connect_failure(&cfg.name);
+            tracing::warn!(
+                target: "kiliax_core::telemetry",
+                parent: &span,
+                event = "mcp.connect_error",
+                error = %err,
+            );
+        }
+
+        res
     }
 
     pub async fn shutdown_server(&self, name: &str) {
@@ -333,18 +367,46 @@ impl McpHub {
             return Err(ToolError::UnknownTool(exposed_name.to_string()));
         };
 
-        let map = self.servers.lock().await;
-        let server = map
-            .get(server_name)
-            .ok_or_else(|| ToolError::UnknownTool(exposed_name.to_string()))?;
+        let started = Instant::now();
+        let span = tracing::info_span!(
+            "kiliax.mcp.call",
+            mcp.server = %server_name,
+            mcp.tool = %tool_name,
+            mcp.duration_ms = tracing::field::Empty,
+        );
 
-        let result = server
-            .client
-            .call_tool(tool_name, &arguments)
-            .await
-            .map_err(|e| ToolError::Mcp(e.to_string()))?;
+        let res: Result<String, ToolError> = async {
+            let map = self.servers.lock().await;
+            let server = map
+                .get(server_name)
+                .ok_or_else(|| ToolError::UnknownTool(exposed_name.to_string()))?;
 
-        Ok(render_tool_result(result))
+            let result = server
+                .client
+                .call_tool(tool_name, &arguments)
+                .await
+                .map_err(|e| ToolError::Mcp(e.to_string()))?;
+
+            Ok(render_tool_result(result))
+        }
+        .instrument(span.clone())
+        .await;
+
+        let latency = started.elapsed();
+        span.record("mcp.duration_ms", latency.as_millis() as u64);
+        let outcome = if res.is_ok() { "ok" } else { "error" };
+        telemetry::metrics::record_mcp_call(server_name, tool_name, outcome, latency);
+
+        if let Err(err) = &res {
+            tracing::warn!(
+                target: "kiliax_core::telemetry",
+                parent: &span,
+                event = "mcp.call_error",
+                error = %err,
+            );
+        }
+
+        res
     }
 
     pub fn is_mcp_tool_name(name: &str) -> bool {

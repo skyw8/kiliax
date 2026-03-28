@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/kiliax-core",
+  "crates/kiliax-otel",
   "crates/kiliax-tui",
   "crates/kiliax-server",
 ]

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use tokio_stream::{Stream, StreamExt};
+use tracing::Instrument;
 
 use crate::agents::{AgentKind, AgentProfile};
 use async_openai::types::FinishReason;
@@ -8,6 +9,7 @@ use async_openai::types::FinishReason;
 use crate::llm::{
     ChatRequest, ChatStreamChunk, LlmClient, LlmError, Message, ToolCall, ToolCallDelta, ToolChoice,
 };
+use crate::telemetry;
 use crate::tools::{tool_parallelism, ToolEngine, ToolError, ToolParallelism};
 
 #[derive(Debug, thiserror::Error)]
@@ -185,10 +187,15 @@ impl AgentRuntime {
                         for (idx, call) in calls.iter().cloned().enumerate() {
                             let tools = tools.clone();
                             let perms = perms.clone();
-                            set.spawn(async move {
-                                let res = tools.execute_to_messages(perms.as_ref(), &call).await;
-                                (idx, call, res)
-                            });
+                            let parent_span = tracing::Span::current();
+                            set.spawn(
+                                async move {
+                                    let res =
+                                        tools.execute_to_messages(perms.as_ref(), &call).await;
+                                    (idx, call, res)
+                                }
+                                .instrument(parent_span),
+                            );
                         }
 
                         let mut results: Vec<Option<Result<Vec<Message>, ToolError>>> = Vec::new();
@@ -246,7 +253,15 @@ impl AgentRuntime {
         let profile = profile.clone();
         let perms = std::sync::Arc::new(profile.permissions.clone());
 
-        tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        let run_span = tracing::info_span!(
+            "kiliax.agent.run",
+            agent = %profile.name,
+            max_steps = options.max_steps as u64,
+        );
+
+        tokio::spawn(
+            async move {
             for step in 0..options.max_steps {
                 sanitize_tool_call_history(&mut messages);
                 if tx
@@ -267,6 +282,12 @@ impl AgentRuntime {
                 let stream = match llm.chat_stream(req).await {
                     Ok(s) => s,
                     Err(err) => {
+                        telemetry::metrics::record_run_finished(
+                            profile.name,
+                            "error",
+                            (step + 1) as u64,
+                            started.elapsed(),
+                        );
                         let _ = tx.send(Err(err.into())).await;
                         return;
                     }
@@ -279,6 +300,21 @@ impl AgentRuntime {
                         }
                         normalize_stream_step_tool_calls(step, &mut step_out);
                         messages.push(step_out.assistant.clone());
+                        if telemetry::capture_enabled() {
+                            if let Ok(json) = serde_json::to_string(&step_out.assistant) {
+                                let captured = telemetry::capture_text(&json);
+                                tracing::info!(
+                                    target: "kiliax_core::telemetry",
+                                    event = "llm.response",
+                                    llm_stream = true,
+                                    step = (step + 1) as u64,
+                                    response_len = captured.len as u64,
+                                    response_truncated = captured.truncated,
+                                    response_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                                    response = %captured.as_str(),
+                                );
+                            }
+                        }
                         let _ = tx
                             .send(Ok(AgentEvent::AssistantMessage {
                                 message: step_out.assistant.clone(),
@@ -294,6 +330,12 @@ impl AgentRuntime {
                                     finish_reason: step_out.finish_reason,
                                 })))
                                 .await;
+                            telemetry::metrics::record_run_finished(
+                                profile.name,
+                                "done",
+                                (step + 1) as u64,
+                                started.elapsed(),
+                            );
                             return;
                         }
 
@@ -391,12 +433,16 @@ impl AgentRuntime {
                                     for (idx, call) in calls.iter().cloned().enumerate() {
                                         let tools = tools.clone();
                                         let perms = perms.clone();
-                                        set.spawn(async move {
-                                            let res = tools
-                                                .execute_to_messages(perms.as_ref(), &call)
-                                                .await;
-                                            (idx, call, res)
-                                        });
+                                        let parent_span = tracing::Span::current();
+                                        set.spawn(
+                                            async move {
+                                                let res = tools
+                                                    .execute_to_messages(perms.as_ref(), &call)
+                                                    .await;
+                                                (idx, call, res)
+                                            }
+                                            .instrument(parent_span),
+                                        );
                                     }
 
                                     let mut results: Vec<Option<Vec<Message>>> =
@@ -461,18 +507,32 @@ impl AgentRuntime {
                         let _ = tx.send(Ok(AgentEvent::StepEnd { step: step + 1 })).await;
                     }
                     Err(err) => {
+                        telemetry::metrics::record_run_finished(
+                            profile.name,
+                            "error",
+                            (step + 1) as u64,
+                            started.elapsed(),
+                        );
                         let _ = tx.send(Err(err)).await;
                         return;
                     }
                 }
             }
 
+            telemetry::metrics::record_run_finished(
+                profile.name,
+                "max_steps",
+                options.max_steps as u64,
+                started.elapsed(),
+            );
             let _ = tx
                 .send(Err(AgentRuntimeError::MaxSteps {
                     max_steps: options.max_steps,
                 }))
                 .await;
-        });
+            }
+            .instrument(run_span),
+        );
 
         Ok(ReceiverStream::new(rx))
     }

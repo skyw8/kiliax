@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{broadcast, watch, Mutex, Notify};
 use tokio_stream::StreamExt;
+use tracing::{Instrument, Span};
 
 use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
@@ -1568,215 +1569,242 @@ impl LiveSession {
     }
 
     async fn run_one(&self, mut run: api::Run) -> Result<(), ApiError> {
-        let config = self.config_snapshot()?;
+        let span = tracing::info_span!(
+            "kiliax.run",
+            session_id = %self.session_id,
+            run_id = %run.id,
+            agent = tracing::field::Empty,
+            model_id = tracing::field::Empty,
+            workspace_root = tracing::field::Empty,
+        );
 
-        let (cancel_tx, mut cancel_rx) = watch::channel(false);
-        *self.active_cancel.lock().await = Some(cancel_tx);
+        async {
+            let config = self.config_snapshot()?;
 
-        {
-            let mut st = self.status.lock().await;
-            st.run_state = api::SessionRunState::Running;
-            st.active_run_id = Some(run.id.clone());
-            st.step = 0;
-            st.active_tool = None;
-        }
+            let (cancel_tx, mut cancel_rx) = watch::channel(false);
+            *self.active_cancel.lock().await = Some(cancel_tx);
 
-        run.state = api::RunState::Running;
-        run.started_at = Some(now_rfc3339());
-        write_run_file(&self.runs_dir, &run).await?;
-
-        // Persist user message at execution time.
-        let user_text = match &run.input {
-            api::RunInput::Text { text } => text.clone(),
-        };
-        self.record_message(CoreMessage::User {
-            content: UserMessageContent::Text(user_text),
-        })
-        .await?;
-
-        let base_settings = self.settings.lock().await.clone();
-        let mut overrides = run.overrides.take();
-        if let Some(o) = overrides.as_mut() {
-            if let Some(root) = o.workspace_root.take() {
-                let root = validate_client_workspace_root(&root)?;
-                o.workspace_root = Some(root.display().to_string());
+            {
+                let mut st = self.status.lock().await;
+                st.run_state = api::SessionRunState::Running;
+                st.active_run_id = Some(run.id.clone());
+                st.step = 0;
+                st.active_tool = None;
             }
-        }
-        let effective = apply_run_overrides(&base_settings, overrides.as_ref(), config.as_ref())?;
-        run.overrides = overrides;
 
-        // Per-run MCP config.
-        let cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
-        let workspace_root = PathBuf::from(effective.workspace_root.trim());
-        tokio::fs::create_dir_all(&workspace_root)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            run.state = api::RunState::Running;
+            run.started_at = Some(now_rfc3339());
+            write_run_file(&self.runs_dir, &run).await?;
 
-        let tools_for_run = if effective.workspace_root != base_settings.workspace_root {
-            ToolEngine::new(&workspace_root, cfg_for_run)
-        } else {
-            let tools = self.tools.lock().await;
-            tools
-                .set_config(cfg_for_run)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            tools.clone()
-        };
+            // Persist user message at execution time.
+            let user_text = match &run.input {
+                api::RunInput::Text { text } => text.clone(),
+            };
+            self.record_message(CoreMessage::User {
+                content: UserMessageContent::Text(user_text),
+            })
+            .await?;
 
-        let profile = AgentProfile::from_name(&effective.agent).ok_or_else(|| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                ApiErrorCode::AgentNotSupported,
-                "agent not supported",
-            )
-        })?;
-        let options = AgentRuntimeOptions::from_config(&profile, config.as_ref());
-
-        let llm = kiliax_core::llm::LlmClient::from_config(config.as_ref(), Some(&effective.model_id))
-            .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, ApiErrorCode::ModelNotSupported, e.to_string()))?;
-        let runtime = AgentRuntime::new(llm, tools_for_run.clone());
-
-        let mut messages = { self.session.lock().await.messages.clone() };
-        if effective.agent != base_settings.agent
-            || effective.model_id != base_settings.model_id
-            || effective.mcp.servers != base_settings.mcp.servers
-            || effective.workspace_root != base_settings.workspace_root
-        {
-            let preamble = build_preamble(
-                &profile,
-                &effective.model_id,
-                &workspace_root,
-                &tools_for_run,
-            )
-            .await;
-            replace_preamble(&mut messages, preamble);
-        }
-
-        let stream = runtime
-            .run_stream(&profile, messages, options)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        tokio::pin!(stream);
-
-        let mut finish_reason: Option<String> = None;
-        let mut cancelled = false;
-        let mut runtime_error: Option<String> = None;
-
-        loop {
-            tokio::select! {
-                _ = cancel_rx.changed() => {
-                    if *cancel_rx.borrow() {
-                        cancelled = true;
-                        break;
-                    }
+            let base_settings = self.settings.lock().await.clone();
+            let mut overrides = run.overrides.take();
+            if let Some(o) = overrides.as_mut() {
+                if let Some(root) = o.workspace_root.take() {
+                    let root = validate_client_workspace_root(&root)?;
+                    o.workspace_root = Some(root.display().to_string());
                 }
-                maybe = stream.next() => {
-                    let Some(item) = maybe else { break; };
-                    match item {
-                        Ok(ev) => {
-                            if let Some(fr) = self.handle_agent_event(&run, ev).await? {
-                                finish_reason = Some(fr);
-                            }
-                        }
-                        Err(err) => {
-                            match err {
-                                AgentRuntimeError::Cancelled => cancelled = true,
-                                other => runtime_error = Some(other.to_string()),
-                            }
+            }
+            let effective =
+                apply_run_overrides(&base_settings, overrides.as_ref(), config.as_ref())?;
+            run.overrides = overrides;
+
+            Span::current().record("agent", effective.agent.as_str());
+            Span::current().record("model_id", effective.model_id.as_str());
+
+            // Per-run MCP config.
+            let cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
+            let workspace_root = PathBuf::from(effective.workspace_root.trim());
+            Span::current().record(
+                "workspace_root",
+                tracing::field::display(workspace_root.display()),
+            );
+            tokio::fs::create_dir_all(&workspace_root)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+
+            let tools_for_run = if effective.workspace_root != base_settings.workspace_root {
+                ToolEngine::new(&workspace_root, cfg_for_run)
+            } else {
+                let tools = self.tools.lock().await;
+                tools
+                    .set_config(cfg_for_run)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                tools.clone()
+            };
+
+            let profile = AgentProfile::from_name(&effective.agent).ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    ApiErrorCode::AgentNotSupported,
+                    "agent not supported",
+                )
+            })?;
+            let options = AgentRuntimeOptions::from_config(&profile, config.as_ref());
+
+            let llm = kiliax_core::llm::LlmClient::from_config(
+                config.as_ref(),
+                Some(&effective.model_id),
+            )
+            .map_err(|e| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    ApiErrorCode::ModelNotSupported,
+                    e.to_string(),
+                )
+            })?;
+            let runtime = AgentRuntime::new(llm, tools_for_run.clone());
+
+            let mut messages = { self.session.lock().await.messages.clone() };
+            if effective.agent != base_settings.agent
+                || effective.model_id != base_settings.model_id
+                || effective.mcp.servers != base_settings.mcp.servers
+                || effective.workspace_root != base_settings.workspace_root
+            {
+                let preamble = build_preamble(
+                    &profile,
+                    &effective.model_id,
+                    &workspace_root,
+                    &tools_for_run,
+                )
+                .await;
+                replace_preamble(&mut messages, preamble);
+            }
+
+            let stream = runtime
+                .run_stream(&profile, messages, options)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            tokio::pin!(stream);
+
+            let mut finish_reason: Option<String> = None;
+            let mut cancelled = false;
+            let mut runtime_error: Option<String> = None;
+
+            loop {
+                tokio::select! {
+                    _ = cancel_rx.changed() => {
+                        if *cancel_rx.borrow() {
+                            cancelled = true;
                             break;
                         }
                     }
+                    maybe = stream.next() => {
+                        let Some(item) = maybe else { break; };
+                        match item {
+                            Ok(ev) => {
+                                if let Some(fr) = self.handle_agent_event(&run, ev).await? {
+                                    finish_reason = Some(fr);
+                                }
+                            }
+                            Err(err) => {
+                                match err {
+                                    AgentRuntimeError::Cancelled => cancelled = true,
+                                    other => runtime_error = Some(other.to_string()),
+                                }
+                                break;
+                            }
+                        }
+                    }
                 }
             }
-        }
 
-        // Restore tool config to current session defaults (may have changed).
-        let current_settings = self.settings.lock().await.clone();
-        let cfg_for_tools =
-            config_with_mcp_overrides(config.as_ref(), &current_settings.mcp.servers)?;
-        {
-            let tools = self.tools.lock().await;
-            let _ = tools.set_config(cfg_for_tools);
-        }
-
-        {
-            let mut st = self.status.lock().await;
-            st.run_state = api::SessionRunState::Idle;
-            st.active_run_id = None;
-            st.step = 0;
-            st.active_tool = None;
-        }
-        *self.active_cancel.lock().await = None;
-
-        run.finished_at = Some(now_rfc3339());
-        run.finish_reason = finish_reason.clone();
-
-        if cancelled {
-            run.state = api::RunState::Cancelled;
-        } else if let Some(err) = runtime_error {
-            run.state = api::RunState::Error;
-            run.error = Some(api::RunError {
-                code: "internal".to_string(),
-                message: err.clone(),
-            });
-            let mut session = self.session.lock().await;
-            let _ = self.store.record_error(&mut session, err).await;
-        } else {
-            run.state = api::RunState::Done;
-            let persisted_finish_reason = finish_reason
-                .clone()
-                .or_else(|| Some("done".to_string()));
-            run.finish_reason = persisted_finish_reason.clone();
-            let mut session = self.session.lock().await;
-            let _ = self
-                .store
-                .record_finish(
-                    &mut session,
-                    persisted_finish_reason,
-                )
-                .await;
-        }
-
-        write_run_file(&self.runs_dir, &run).await?;
-
-        match run.state {
-            api::RunState::Done => {
-                self.emit_event(api::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
-                    session_id: self.session_id.to_string(),
-                    run_id: Some(run.id.clone()),
-                    event_type: "run_done".to_string(),
-                    data: serde_json::json!({ "run": run }),
-                })
-                .await?;
+            // Restore tool config to current session defaults (may have changed).
+            let current_settings = self.settings.lock().await.clone();
+            let cfg_for_tools =
+                config_with_mcp_overrides(config.as_ref(), &current_settings.mcp.servers)?;
+            {
+                let tools = self.tools.lock().await;
+                let _ = tools.set_config(cfg_for_tools);
             }
-            api::RunState::Cancelled => {
-                self.emit_event(api::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
-                    session_id: self.session_id.to_string(),
-                    run_id: Some(run.id.clone()),
-                    event_type: "run_cancelled".to_string(),
-                    data: serde_json::json!({ "reason": "cancelled" }),
-                })
-                .await?;
-            }
-            api::RunState::Error => {
-                let err = run.error.clone().map(|e| serde_json::json!({"code": e.code, "message": e.message})).unwrap_or(serde_json::json!({"code":"internal","message":"error"}));
-                self.emit_event(api::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
-                    session_id: self.session_id.to_string(),
-                    run_id: Some(run.id.clone()),
-                    event_type: "run_error".to_string(),
-                    data: serde_json::json!({ "error": err }),
-                })
-                .await?;
-            }
-            _ => {}
-        }
 
-        Ok(())
+            {
+                let mut st = self.status.lock().await;
+                st.run_state = api::SessionRunState::Idle;
+                st.active_run_id = None;
+                st.step = 0;
+                st.active_tool = None;
+            }
+            *self.active_cancel.lock().await = None;
+
+            run.finished_at = Some(now_rfc3339());
+            run.finish_reason = finish_reason.clone();
+
+            if cancelled {
+                run.state = api::RunState::Cancelled;
+            } else if let Some(err) = runtime_error {
+                run.state = api::RunState::Error;
+                run.error = Some(api::RunError {
+                    code: "internal".to_string(),
+                    message: err.clone(),
+                });
+                let mut session = self.session.lock().await;
+                let _ = self.store.record_error(&mut session, err).await;
+            } else {
+                run.state = api::RunState::Done;
+                let persisted_finish_reason = finish_reason
+                    .clone()
+                    .or_else(|| Some("done".to_string()));
+                run.finish_reason = persisted_finish_reason.clone();
+                let mut session = self.session.lock().await;
+                let _ = self
+                    .store
+                    .record_finish(&mut session, persisted_finish_reason)
+                    .await;
+            }
+
+            write_run_file(&self.runs_dir, &run).await?;
+
+            match run.state {
+                api::RunState::Done => {
+                    self.emit_event(api::Event {
+                        event_id: self.alloc_event_id(),
+                        ts: now_rfc3339(),
+                        session_id: self.session_id.to_string(),
+                        run_id: Some(run.id.clone()),
+                        event_type: "run_done".to_string(),
+                        data: serde_json::json!({ "run": run }),
+                    })
+                    .await?;
+                }
+                api::RunState::Cancelled => {
+                    self.emit_event(api::Event {
+                        event_id: self.alloc_event_id(),
+                        ts: now_rfc3339(),
+                        session_id: self.session_id.to_string(),
+                        run_id: Some(run.id.clone()),
+                        event_type: "run_cancelled".to_string(),
+                        data: serde_json::json!({ "reason": "cancelled" }),
+                    })
+                    .await?;
+                }
+                api::RunState::Error => {
+                    let err = run.error.clone().map(|e| serde_json::json!({"code": e.code, "message": e.message})).unwrap_or(serde_json::json!({"code":"internal","message":"error"}));
+                    self.emit_event(api::Event {
+                        event_id: self.alloc_event_id(),
+                        ts: now_rfc3339(),
+                        session_id: self.session_id.to_string(),
+                        run_id: Some(run.id.clone()),
+                        event_type: "run_error".to_string(),
+                        data: serde_json::json!({ "error": err }),
+                    })
+                    .await?;
+                }
+                _ => {}
+            }
+
+            Ok(())
+        }
+        .instrument(span)
+        .await
     }
 
     async fn apply_settings_now(&self, emit_event: bool) -> Result<(), ApiError> {

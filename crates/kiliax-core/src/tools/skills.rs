@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+
+use crate::telemetry;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Skill {
@@ -32,9 +35,19 @@ pub enum SkillError {
 }
 
 pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> {
+    let roots = skill_roots(workspace_root);
+    let started = Instant::now();
+    let span = tracing::info_span!(
+        "kiliax.skills.discover",
+        skills.roots = roots.len() as u64,
+        skills.discovered = tracing::field::Empty,
+        skills.duration_ms = tracing::field::Empty,
+    );
+    let _enter = span.enter();
+
     let mut out: BTreeMap<String, Skill> = BTreeMap::new();
 
-    for root in skill_roots(workspace_root) {
+    for root in roots {
         if !root.is_dir() {
             continue;
         }
@@ -91,7 +104,11 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
         }
     }
 
-    Ok(out.into_values().collect())
+    let skills: Vec<Skill> = out.into_values().collect();
+    span.record("skills.discovered", skills.len() as u64);
+    span.record("skills.duration_ms", started.elapsed().as_millis() as u64);
+    telemetry::metrics::record_skills_discovered(skills.len());
+    Ok(skills)
 }
 
 pub fn skill_roots(workspace_root: &Path) -> Vec<PathBuf> {

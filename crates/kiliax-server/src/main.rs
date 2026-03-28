@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{MatchedPath, Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::Html;
 use axum::middleware;
@@ -22,8 +22,9 @@ use kiliax_core::session::SessionId;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio::sync::broadcast;
 use tower::ServiceExt as _;
+use tower_http::trace::TraceLayer;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::Level;
+use tracing::Span;
 
 use crate::error::{ApiError, ApiErrorCode};
 use crate::state::ServerState;
@@ -44,13 +45,53 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .route("/admin/stop", post(stop_server))
         .route("/sessions/{session_id}/events", get(list_events))
         .route("/sessions/{session_id}/events/stream", get(stream_events_sse))
-        .route("/sessions/{session_id}/events/ws", get(stream_events_ws));
+        .route("/sessions/{session_id}/events/ws", get(stream_events_ws))
+        .route_layer(http_trace_layer());
 
     Router::new()
         .nest("/v1", api)
         .fallback(serve_web)
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
+}
+
+fn http_trace_layer() -> TraceLayer<
+    tower_http::trace::HttpMakeClassifier,
+    impl tower_http::trace::MakeSpan<axum::body::Body> + Clone,
+    (),
+    impl tower_http::trace::OnResponse<axum::body::Body> + Clone,
+> {
+    TraceLayer::new_for_http()
+        .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+            let route = request
+                .extensions()
+                .get::<MatchedPath>()
+                .map(|p| p.as_str())
+                .unwrap_or_else(|| request.uri().path());
+            let user_agent = request
+                .headers()
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            let span = tracing::info_span!(
+                "http.request",
+                otel.kind = "server",
+                http.method = %request.method(),
+                http.route = %route,
+                http.target = %request.uri(),
+                http.user_agent = %user_agent,
+                http.status_code = tracing::field::Empty,
+                http.latency_ms = tracing::field::Empty,
+            );
+            let _ = kiliax_otel::set_parent_from_http_headers(&span, request.headers());
+            span
+        })
+        .on_request(())
+        .on_response(|response: &axum::http::Response<axum::body::Body>, latency: std::time::Duration, span: &Span| {
+            span.record("http.status_code", response.status().as_u16() as u64);
+            span.record("http.latency_ms", latency.as_millis() as u64);
+        })
 }
 
 #[tokio::main]
@@ -99,11 +140,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let workspace_root = workspace_root.unwrap_or(std::env::current_dir()?);
     let loaded = if let Some(path) = config_path.clone() {
         kiliax_core::config::load_from_path(path)?
@@ -121,6 +157,13 @@ async fn main() -> anyhow::Result<()> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .ok_or_else(|| anyhow::anyhow!("kiliax-server requires a token (set server.token in kiliax.yaml or pass --token)"))?;
+
+    let _otel = kiliax_otel::init(
+        &loaded.config,
+        "kiliax-server",
+        env!("CARGO_PKG_VERSION"),
+        kiliax_otel::LocalLogs::Stdout,
+    )?;
 
     let state = Arc::new(ServerState::new(
         workspace_root.clone(),
