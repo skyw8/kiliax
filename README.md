@@ -48,10 +48,13 @@ cargo build --release -p kiliax
 
 ```bash
 cargo run -p kiliax
+cargo run -p kiliax -- serve start
+
+
 
 cd workspace 
 cargo run -p kiliax --manifest-path=../Cargo.toml
-cargo run -p kiliax --manifest-path=../Cargo.toml -- start
+cargo run -p kiliax --manifest-path=../Cargo.toml -- serve start
 
 cargo run -p kiliax-core --example chat_hello
 cargo run -p kiliax-core --example stream_chat

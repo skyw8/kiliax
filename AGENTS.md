@@ -95,7 +95,7 @@ Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session
 
 Web UI（React + Vite + Tailwind + shadcn/ui），由 `kiliax-server` 静态托管：
 
-- `web/`: 单页应用（左侧 session 导航 + 主对话区 + 设置/Skills/MCP 弹窗；`/sessions/:id` 路由；ErrorBoundary 防白屏）；通过 `/v1/*` 与 `/v1/sessions/{id}/events/ws` 交互
+- `web/`: 单页应用（左侧 session 导航 + 主对话区 + 设置/Skills/MCP 弹窗；`/sessions/:id` 路由；ErrorBoundary 防白屏；session badge：idle 灰 / step 橙 / done 绿 / error 红）；通过 `/v1/*` 与 `/v1/sessions/{id}/events/ws` 交互
 
 ## constraints
 

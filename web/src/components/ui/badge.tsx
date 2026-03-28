@@ -9,7 +9,7 @@ const badgeVariants = cva(
       variant: {
         neutral: "border-zinc-200 bg-white text-zinc-700",
         idle: "border-zinc-200 bg-zinc-50 text-zinc-600",
-        step: "border-indigo-200 bg-indigo-50 text-indigo-700",
+        step: "border-orange-200 bg-orange-50 text-orange-700",
         done: "border-emerald-200 bg-emerald-50 text-emerald-700",
         error: "border-rose-200 bg-rose-50 text-rose-700",
       },
@@ -29,4 +29,3 @@ export function Badge({
     <div className={cn(badgeVariants({ variant }), className)} {...props} />
   );
 }
-
