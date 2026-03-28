@@ -42,7 +42,9 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  {bin} [plan|general|build] [--resume <SESSION_ID>]");
-    println!("  {bin} stop");
+    println!("  {bin} serve start");
+    println!("  {bin} serve stop");
+    println!("  {bin} serve restart");
     println!();
     println!("Options:");
     println!("  --resume <SESSION_ID>    Resume a session");
@@ -86,6 +88,21 @@ fn write_default_config(paths: &[std::path::PathBuf]) -> Result<std::path::PathB
     Ok(target.clone())
 }
 
+fn load_or_init_config() -> Result<Option<config::LoadedConfig>> {
+    match config::load() {
+        Ok(loaded) => Ok(Some(loaded)),
+        Err(config::ConfigError::NotFound { paths }) => {
+            let path = write_default_config(&paths)?;
+            let bin = env!("CARGO_PKG_NAME");
+            println!("No `kiliax.yaml` found.");
+            println!("Created template config at: {}", path.display());
+            println!("Edit it, then rerun `{bin}`.");
+            Ok(None)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -100,17 +117,47 @@ async fn main() -> Result<()> {
 
     let workspace_root = std::env::current_dir()?;
 
-    if args.first().is_some_and(|a| a == "stop") {
-        match daemon::stop(&workspace_root).await? {
-            daemon::StopOutcome::NotRunning => {
-                println!("kiliax-server not running (no .kiliax/server.json)");
+    if args.first().is_some_and(|a| a == "serve") {
+        match args.get(1).map(String::as_str) {
+            Some("start") => {
+                let Some(loaded) = load_or_init_config()? else {
+                    return Ok(());
+                };
+                let state = daemon::ensure_running(
+                    &workspace_root,
+                    &loaded.path,
+                    &loaded.config.server,
+                )
+                .await?;
+                println!("kiliax-server: {}:{}", state.host, state.port);
             }
-            daemon::StopOutcome::Stopped => {
-                println!("kiliax-server stopped");
+            Some("stop") => {
+                match daemon::stop(&workspace_root).await? {
+                    daemon::StopOutcome::NotRunning => {
+                        println!("kiliax-server not running (no .kiliax/server.json)");
+                    }
+                    daemon::StopOutcome::Stopped => {
+                        println!("kiliax-server stopped");
+                    }
+                    daemon::StopOutcome::NotReachable => {
+                        println!("kiliax-server not reachable (removed stale .kiliax/server.json)");
+                    }
+                }
             }
-            daemon::StopOutcome::NotReachable => {
-                println!("kiliax-server not reachable (removed stale .kiliax/server.json)");
+            Some("restart") => {
+                let _ = daemon::stop(&workspace_root).await?;
+                let Some(loaded) = load_or_init_config()? else {
+                    return Ok(());
+                };
+                let state = daemon::ensure_running(
+                    &workspace_root,
+                    &loaded.path,
+                    &loaded.config.server,
+                )
+                .await?;
+                println!("kiliax-server: {}:{}", state.host, state.port);
             }
+            _ => print_help(),
         }
         return Ok(());
     }
@@ -127,27 +174,14 @@ async fn main() -> Result<()> {
                 };
                 resume_id = Some(SessionId::parse(id)?);
             }
-            _ => {}
+            other if other.starts_with('-') => anyhow::bail!("unknown option: {other}"),
+            other => anyhow::bail!("unknown command: {other}"),
         }
     }
 
-    let loaded = match config::load() {
-        Ok(loaded) => loaded,
-        Err(config::ConfigError::NotFound { paths }) => {
-            let path = write_default_config(&paths)?;
-            let bin = env!("CARGO_PKG_NAME");
-            println!("No `kiliax.yaml` found.");
-            println!("Created template config at: {}", path.display());
-            println!("Edit it, then rerun `{bin}`.");
-            return Ok(());
-        }
-        Err(err) => return Err(err.into()),
+    let Some(loaded) = load_or_init_config()? else {
+        return Ok(());
     };
-
-    // Best-effort: ensure the background session-control server is running.
-    if let Err(err) = daemon::ensure_running(&workspace_root, &loaded.path, &loaded.config.server).await {
-        eprintln!("warning: failed to start kiliax-server: {err:#}");
-    }
     let store = FileSessionStore::project(&workspace_root);
 
     let mut resumed: Option<kiliax_core::session::SessionState> = None;
