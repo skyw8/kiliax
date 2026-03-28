@@ -520,8 +520,18 @@ impl App {
         }
     }
 
-    pub fn session_id(&self) -> &str {
-        self.session.meta.id.as_str()
+    pub fn has_user_messages(&self) -> bool {
+        self.session
+            .messages
+            .iter()
+            .any(|msg| matches!(msg, Message::User { .. }))
+    }
+
+    pub async fn cleanup_empty_session(&self) {
+        if self.has_user_messages() {
+            return;
+        }
+        let _ = self.store.delete(self.session.id()).await;
     }
 
     pub fn model_id(&self) -> &str {
@@ -1042,7 +1052,9 @@ impl App {
             anyhow::bail!("cannot start a new session while a run is in progress");
         }
 
-        let prev = self.session.meta.id.to_string();
+        let prev_id = self.session.meta.id.clone();
+        let prev_empty = !self.has_user_messages();
+        let prev = prev_id.to_string();
         let preamble = build_preamble(
             &self.profile,
             &self.model_id,
@@ -1101,6 +1113,10 @@ impl App {
             Span::from(" -> ").dim(),
             Span::from(next).dim(),
         ]));
+
+        if prev_empty {
+            let _ = self.store.delete(&prev_id).await;
+        }
 
         Ok(())
     }

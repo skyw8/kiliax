@@ -354,8 +354,6 @@ async fn main() -> Result<()> {
         })?;
     }
 
-    let session_id = app.session_id().to_string();
-
     // Clear the viewport so the shell output isn't interleaved with the composer UI.
     terminal.draw(1, |frame| {
         frame.render_widget(ratatui::widgets::Clear, frame.area())
@@ -366,7 +364,7 @@ async fn main() -> Result<()> {
 
     // Clear the full screen after restoring terminal modes to avoid leaving stale UI behind.
     execute!(std::io::stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
-    println!("Resume: cargo run -p kiliax-tui -- --resume {session_id}");
+    app.cleanup_empty_session().await;
 
     Ok(())
 }
