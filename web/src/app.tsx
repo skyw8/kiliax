@@ -1,11 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  api,
-  ApiError,
-  getStoredToken,
-  setStoredToken,
-  wsUrl,
-} from "@/lib/api";
+import { api, ApiError, wsUrl } from "@/lib/api";
+import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
   Capabilities,
   Message,
@@ -68,8 +63,25 @@ function sortSessions(items: SessionSummary[]): SessionSummary[] {
   });
 }
 
-function renderToolCalls(toolCalls: ToolCall[]) {
-  if (!toolCalls.length) return null;
+function tmpWorkspacePath(): string {
+  const now = new Date();
+  const pad2 = (v: number) => v.toString().padStart(2, "0");
+  const ts = [
+    now.getUTCFullYear(),
+    pad2(now.getUTCMonth() + 1),
+    pad2(now.getUTCDate()),
+    "T",
+    pad2(now.getUTCHours()),
+    pad2(now.getUTCMinutes()),
+    pad2(now.getUTCSeconds()),
+    "Z_",
+    now.getUTCMilliseconds().toString().padStart(3, "0"),
+  ].join("");
+  return `~/.kiliax/workspace/tmp_${ts}`;
+}
+
+function renderToolCalls(toolCalls?: ToolCall[]) {
+  if (!toolCalls?.length) return null;
   return (
     <div className="mt-2 space-y-1">
       {toolCalls.map((c) => (
@@ -119,7 +131,7 @@ function MessageRow({ msg }: { msg: Message }) {
               </div>
             </details>
           ) : null}
-          {renderToolCalls(msg.tool_calls)}
+          {renderToolCalls(msg.tool_calls ?? [])}
         </div>
       </div>
     );
@@ -153,7 +165,8 @@ function EmptyState() {
 export default function App() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const route = useRoute();
+  const selectedId = route.name === "session" ? route.sessionId : null;
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
@@ -177,18 +190,17 @@ export default function App() {
   const [cwdOpen, setCwdOpen] = useState(false);
   const [cwdDraft, setCwdDraft] = useState("");
 
-  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
-  const [tokenDraft, setTokenDraft] = useState(getStoredToken());
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const selectedIdRef = useRef<string | null>(selectedId);
 
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
 
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
-      setTokenDraft(getStoredToken());
-      setTokenDialogOpen(true);
+      setAuthError("Unauthorized. Re-open the URL printed by `kiliax serve start`.");
       return;
     }
     // eslint-disable-next-line no-console
@@ -199,6 +211,7 @@ export default function App() {
     try {
       const caps = await api.getCapabilities();
       setCapabilities(caps);
+      setAuthError(null);
     } catch (err) {
       handleApiError(err);
     }
@@ -208,20 +221,32 @@ export default function App() {
     try {
       const list = await api.listSessions();
       setSessions(list.items);
+      setAuthError(null);
     } catch (err) {
       handleApiError(err);
     }
   }
 
-  async function loadSession(sessionId: string) {
+  function selectSession(sessionId: string) {
+    navigate(hrefToSession(sessionId));
+  }
+
+  async function fetchSession(sessionId: string) {
     try {
       const s = await api.getSession(sessionId);
+      if (selectedIdRef.current !== sessionId) return;
       setSession(s);
-      setSelectedId(sessionId);
+
       const msgs = await api.getMessages(sessionId, 200);
+      if (selectedIdRef.current !== sessionId) return;
       setMessages(msgs.items);
       setPending([]);
-      setStream({ thinking: "", assistant: "", assistantStarted: false, toolCalls: [] });
+      setStream({
+        thinking: "",
+        assistant: "",
+        assistantStarted: false,
+        toolCalls: [],
+      });
 
       connectWs(sessionId, s.status.last_event_id);
     } catch (err) {
@@ -311,14 +336,14 @@ export default function App() {
 
     if (type === "session_settings_changed") {
       if (selectedId) {
-        await loadSession(selectedId);
+        await fetchSession(selectedId);
       }
       return;
     }
 
     if (type === "run_done" || type === "run_error" || type === "run_cancelled") {
       if (selectedId) {
-        await loadSession(selectedId);
+        await fetchSession(selectedId);
       }
       return;
     }
@@ -328,7 +353,7 @@ export default function App() {
     try {
       const s = await api.createSession();
       await refreshSessions();
-      await loadSession(s.id);
+      selectSession(s.id);
     } catch (err) {
       handleApiError(err);
     }
@@ -383,7 +408,7 @@ export default function App() {
       setSettingsOpen(false);
       await refreshCapabilities();
       await refreshSessions();
-      if (selectedId) await loadSession(selectedId);
+      if (selectedId) await fetchSession(selectedId);
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -403,14 +428,58 @@ export default function App() {
   }
 
   useEffect(() => {
-    refreshCapabilities();
-    refreshSessions();
+    let cancelled = false;
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get("token")?.trim() ?? "";
+      if (token) {
+        try {
+          await fetch(`/v1/capabilities?token=${encodeURIComponent(token)}`);
+        } catch (err) {
+          handleApiError(err);
+        }
+        if (cancelled) return;
+        const url = new URL(window.location.href);
+        url.searchParams.delete("token");
+        window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+      }
+
+      refreshCapabilities();
+      refreshSessions();
+    }
+
+    init();
     const t = window.setInterval(() => {
       refreshSessions();
     }, 1000);
-    return () => window.clearInterval(t);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+    if (!selectedId) {
+      setSession(null);
+      setMessages([]);
+      setPending([]);
+      setStream({
+        thinking: "",
+        assistant: "",
+        assistantStarted: false,
+        toolCalls: [],
+      });
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      return;
+    }
+    fetchSession(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -421,6 +490,24 @@ export default function App() {
 
   const agentOptions = capabilities?.agents ?? [];
   const modelOptions = capabilities?.models ?? [];
+
+  if (authError) {
+    return (
+      <div className="h-dvh w-full bg-white text-zinc-900">
+        <div className="flex h-full items-center justify-center p-6">
+          <div className="w-full max-w-md rounded-lg border border-zinc-200 bg-white p-6">
+            <div className="text-base font-semibold">Unauthorized</div>
+            <div className="mt-2 text-sm text-zinc-600">{authError}</div>
+            <div className="mt-4 flex justify-end">
+              <Button variant="outline" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-dvh w-full bg-white text-zinc-900">
@@ -457,7 +544,7 @@ export default function App() {
                 return (
                   <button
                     key={s.id}
-                    onClick={() => loadSession(s.id)}
+                    onClick={() => selectSession(s.id)}
                     className={[
                       "w-full rounded-md px-2 py-2 text-left",
                       active ? "bg-white shadow-sm" : "hover:bg-white/70",
@@ -618,7 +705,7 @@ export default function App() {
                   disabled={!session}
                   onClick={() =>
                     patchSession({
-                      workspace_root: `~/.kiliax/tmp_workspace_${Date.now()}`,
+                      workspace_root: tmpWorkspacePath(),
                     })
                   }
                 >
@@ -669,47 +756,6 @@ export default function App() {
           </div>
         </main>
       </div>
-
-      <Dialog open={tokenDialogOpen} onOpenChange={setTokenDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Auth token required</DialogTitle>
-            <DialogDescription>
-              Enter the `server.token` configured in `kiliax.yaml`.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              value={tokenDraft}
-              onChange={(e) => setTokenDraft(e.target.value)}
-              placeholder="Bearer token"
-            />
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setStoredToken("");
-                  setTokenDraft("");
-                  setTokenDialogOpen(false);
-                }}
-              >
-                Clear
-              </Button>
-              <Button
-                onClick={() => {
-                  setStoredToken(tokenDraft);
-                  setTokenDialogOpen(false);
-                  refreshCapabilities();
-                  refreshSessions();
-                  if (selectedId) loadSession(selectedId);
-                }}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <DialogContent className="max-w-3xl">
@@ -813,14 +859,12 @@ export default function App() {
             <Input
               value={cwdDraft}
               onChange={(e) => setCwdDraft(e.target.value)}
-              placeholder="~/.kiliax/tmp_workspace_..."
+              placeholder="~/.kiliax/workspace/tmp_..."
             />
             <div className="flex justify-between gap-2">
               <Button
                 variant="outline"
-                onClick={() =>
-                  setCwdDraft(`~/.kiliax/tmp_workspace_${Date.now()}`)
-                }
+                onClick={() => setCwdDraft(tmpWorkspacePath())}
               >
                 New tmp
               </Button>

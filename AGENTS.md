@@ -85,17 +85,17 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session、发送消息（run）、切换 agent/model/MCP，以及查询 messages/status/capabilities。`kiliax.yaml` 仅作为新 session 默认值；session 覆盖持久化到 `settings.json`。
 
 - `crates/kiliax-server/Cargo.toml`: server 依赖（axum/ws/sse、tracing 等）
-- `crates/kiliax-server/src/main.rs`: `/v1` REST + SSE/WS 路由、鉴权（Bearer + `?token=` 便于 WebSocket）、以及静态托管 `web/dist`（SPA fallback 到 `index.html`）
-- `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行；session settings（含 `workspace_root`）持久化到 `settings.json`；支持 `/v1/config` 读写 YAML 并热更新 live sessions；skills 发现 `/v1/sessions/{id}/skills`
+- `crates/kiliax-server/src/main.rs`: `/v1` REST + SSE/WS 路由；鉴权（API 支持 Bearer/Cookie/`?token=`，Web UI 通过 `?token=` 首次握手写入 HttpOnly cookie 并重定向）；静态托管 `web/dist`（SPA fallback 到 `index.html`）
+- `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行；session settings（含 `workspace_root`）持久化到 `settings.json`；默认 tmp workspace 为 `~/.kiliax/workspace/tmp_<SessionId>`；支持 `/v1/config` 读写 YAML 并热更新 live sessions；skills 发现 `/v1/sessions/{id}/skills`
 - `crates/kiliax-server/src/api.rs`: REST schema（session summary 增强：`updated_at/last_outcome`；新增 `config/skills/workspace_root` 相关结构）
 - `crates/kiliax-server/src/error.rs`: 统一错误模型（`{ error: { code, message, details? } }`）
-- `crates/kiliax-server/src/tests.rs`: server HTTP 行为测试（追加：`/v1/config`、skills、workspace_root 校验、query token auth、web 静态托管与 SPA fallback 等）
+- `crates/kiliax-server/src/tests.rs`: server HTTP 行为测试（追加：`/v1/config`、skills、workspace_root 校验、query token/cookie auth、web 静态托管与 SPA fallback 等）
 
 ### web
 
 Web UI（React + Vite + Tailwind + shadcn/ui），由 `kiliax-server` 静态托管：
 
-- `web/`: 单页应用（左侧 session 导航 + 主对话区 + 设置/Skills/MCP 弹窗）；通过 `/v1/*` 与 `/v1/sessions/{id}/events/ws` 交互
+- `web/`: 单页应用（左侧 session 导航 + 主对话区 + 设置/Skills/MCP 弹窗；`/sessions/:id` 路由；ErrorBoundary 防白屏）；通过 `/v1/*` 与 `/v1/sessions/{id}/events/ws` 交互
 
 ## constraints
 

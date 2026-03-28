@@ -44,6 +44,14 @@ fn req_empty(method: Method, uri: &str) -> Request<Body> {
         .expect("request")
 }
 
+fn req_empty_with_headers(method: Method, uri: &str, headers: &[(&str, &str)]) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(uri);
+    for (k, v) in headers {
+        builder = builder.header(*k, *v);
+    }
+    builder.body(Body::empty()).expect("request")
+}
+
 fn req_json(method: Method, uri: &str, json: serde_json::Value) -> Request<Body> {
     Request::builder()
         .method(method)
@@ -105,15 +113,48 @@ fn assert_error_code(body: &serde_json::Value, code: &str) {
 }
 
 #[tokio::test]
-async fn web_serves_hint_when_dist_missing() {
+async fn web_requires_auth_and_sets_cookie() {
     let dir = TempDir::new().expect("tempdir");
-    let app = build_test_app(&dir, None).await;
+    let app = build_test_app(&dir, Some("secret".to_string())).await;
 
     let resp = app
         .clone()
         .oneshot(req_empty(Method::GET, "/"))
         .await
         .expect("oneshot");
+    let (status, body) = read_text(resp).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(body.contains("Unauthorized"), "body: {body}");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/?token=secret"))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    let set_cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        set_cookie.contains("kiliax_token=secret"),
+        "set-cookie missing token: {set_cookie}"
+    );
+    let location = resp
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(location, "/");
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .header(header::COOKIE, "kiliax_token=secret")
+        .body(Body::empty())
+        .expect("request");
+    let resp = app.clone().oneshot(req).await.expect("oneshot");
     let (status, body) = read_text(resp).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("kiliax-web is not built"), "body: {body}");
@@ -133,11 +174,13 @@ async fn web_serves_dist_and_spa_fallback() {
         .await
         .expect("write asset");
 
-    let app = build_test_app(&dir, None).await;
+    let app = build_test_app(&dir, Some("secret".to_string())).await;
+
+    let cookie = ("Cookie", "kiliax_token=secret");
 
     let resp = app
         .clone()
-        .oneshot(req_empty(Method::GET, "/"))
+        .oneshot(req_empty_with_headers(Method::GET, "/", &[cookie]))
         .await
         .expect("oneshot");
     let (status, body) = read_text(resp).await;
@@ -146,7 +189,7 @@ async fn web_serves_dist_and_spa_fallback() {
 
     let resp = app
         .clone()
-        .oneshot(req_empty(Method::GET, "/some/deep/link"))
+        .oneshot(req_empty_with_headers(Method::GET, "/some/deep/link", &[cookie]))
         .await
         .expect("oneshot");
     let (status, body) = read_text(resp).await;
@@ -155,7 +198,7 @@ async fn web_serves_dist_and_spa_fallback() {
 
     let resp = app
         .clone()
-        .oneshot(req_empty(Method::GET, "/assets/hello.txt"))
+        .oneshot(req_empty_with_headers(Method::GET, "/assets/hello.txt", &[cookie]))
         .await
         .expect("oneshot");
     let (status, body) = read_text(resp).await;
@@ -502,8 +545,17 @@ async fn auth_middleware_enforces_bearer_token() {
         .oneshot(req_empty(Method::GET, "/v1/capabilities?token=secret"))
         .await
         .expect("oneshot");
-    let (status, _body) = read_json(resp).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let set_cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        set_cookie.contains("kiliax_token=secret"),
+        "set-cookie missing token: {set_cookie}"
+    );
+    let (_status, _body) = read_json(resp).await;
 
     let req = Request::builder()
         .method(Method::GET)
@@ -549,9 +601,35 @@ async fn create_session_sets_workspace_root_and_updated_at() {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     assert!(!ws.trim().is_empty(), "workspace_root missing: {body}");
+
+    let ws_path = std::path::Path::new(ws);
     assert!(
-        std::path::Path::new(ws).starts_with(&allowed_home_kiliax_dir()),
+        ws_path.starts_with(&allowed_home_kiliax_dir()),
         "workspace_root not under ~/.kiliax: {ws}"
+    );
+    assert!(
+        ws_path.starts_with(&allowed_home_kiliax_dir().join("workspace")),
+        "workspace_root not under ~/.kiliax/workspace: {ws}"
+    );
+
+    let dir_name = ws_path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("");
+    assert!(
+        dir_name.starts_with("tmp_"),
+        "workspace_root dir must start with tmp_: {ws}"
+    );
+    let id = dir_name.strip_prefix("tmp_").unwrap_or("");
+    assert!(
+        SessionId::parse(id).is_ok(),
+        "workspace_root suffix must be a valid SessionId: {ws}"
+    );
+    assert!(
+        id.len() >= 9
+            && id.chars().take(8).all(|c| c.is_ascii_digit())
+            && id.chars().nth(8) == Some('T'),
+        "workspace_root suffix must include YYYYMMDDT prefix: {ws}"
     );
 
     let updated_at = body.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");

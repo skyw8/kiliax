@@ -779,10 +779,8 @@ fn validate_client_workspace_root(input: &str) -> Result<PathBuf, ApiError> {
 }
 
 fn default_tmp_workspace_root() -> Result<PathBuf, ApiError> {
-    let base = home_kiliax_dir()?;
-    let ts = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
-    let pid = std::process::id();
-    Ok(base.join(format!("tmp_workspace_{ts}_{pid}")))
+    let base = home_kiliax_dir()?.join("workspace");
+    Ok(base.join(format!("tmp_{}", SessionId::new())))
 }
 
 fn default_settings(config: &Config, meta: Option<&SessionMeta>) -> Result<api::SessionSettings, ApiError> {

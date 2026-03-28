@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use kiliax_core::config::ServerConfig;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8123;
@@ -85,6 +86,25 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn generate_token_hex(bytes: usize) -> Result<String> {
+    let mut buf = vec![0u8; bytes];
+    getrandom::getrandom(&mut buf).context("getrandom failed")?;
+    let mut out = String::with_capacity(bytes * 2);
+    for b in buf {
+        out.push(hex_digit(b >> 4));
+        out.push(hex_digit(b & 0x0f));
+    }
+    Ok(out)
+}
+
+fn hex_digit(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'a' + (n - 10)) as char,
+        _ => '?',
+    }
+}
+
 async fn ping(state: &DaemonState) -> bool {
     let url = format!("{}/v1/capabilities", state.url_base());
     let client = reqwest::Client::new();
@@ -99,10 +119,14 @@ async fn ping(state: &DaemonState) -> bool {
 }
 
 async fn ping_web(state: &DaemonState) -> bool {
-    let url = format!("{}/", state.url_base());
+    let Ok(mut url) = Url::parse(&format!("{}/", state.url_base())) else {
+        return false;
+    };
+    url.query_pairs_mut().append_pair("token", state.token.trim());
+
     let client = reqwest::Client::new();
     match client.get(url).timeout(PING_TIMEOUT_FAST).send().await {
-        Ok(resp) => resp.status().is_success(),
+        Ok(resp) => resp.status().is_success() || resp.status().is_redirection(),
         Err(_) => false,
     }
 }
@@ -118,6 +142,15 @@ async fn try_stop_http(state: &DaemonState) -> bool {
     }
     match req.send().await {
         Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+async fn token_is_required(state: &DaemonState) -> bool {
+    let url = format!("{}/v1/capabilities", state.url_base());
+    let client = reqwest::Client::new();
+    match client.get(url).timeout(PING_TIMEOUT_FAST).send().await {
+        Ok(resp) => resp.status() == reqwest::StatusCode::UNAUTHORIZED,
         Err(_) => false,
     }
 }
@@ -154,31 +187,81 @@ pub async fn ensure_running(
         .filter(|t| !t.is_empty())
         .map(|t| t.to_string());
 
+    let mut prior: Option<DaemonState> = None;
     if let Ok(text) = tokio::fs::read_to_string(&state_file).await {
         if let Ok(parsed) = serde_json::from_str::<DaemonState>(&text) {
-            if ping(&parsed).await {
-                if ping_web(&parsed).await {
-                    return Ok(parsed);
-                }
-                if try_stop_http(&parsed).await {
-                    let _ = wait_for_port_to_free(&desired_bind_host, parsed.port).await;
-                    let _ = tokio::fs::remove_file(&state_file).await;
-                } else {
-                    anyhow::bail!(
-                        "kiliax-server is reachable at {}:{}, but the web UI is not available (try `kiliax serve restart`)",
-                        parsed.host,
-                        parsed.port
-                    );
-                }
-            }
-            if parsed
-                .started_at_ms
-                .is_some_and(|ms| now_ms().saturating_sub(ms) < STARTUP_GRACE_PERIOD.as_millis() as u64)
-            {
-                return Ok(parsed);
-            }
+            prior = Some(parsed);
+        } else {
             let _ = tokio::fs::remove_file(&state_file).await;
         }
+    }
+
+    let token = if let Some(t) = desired_token.clone() {
+        t
+    } else if let Some(t) = prior.as_ref().and_then(|s| {
+        let t = s.token.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    }) {
+        t
+    } else {
+        generate_token_hex(32)?
+    };
+
+    if let Some(mut parsed) = prior {
+        let check = DaemonState {
+            token: token.clone(),
+            ..parsed.clone()
+        };
+        if ping(&parsed).await {
+            let api_ok = ping(&check).await;
+            let web_ok = ping_web(&check).await;
+            let token_required = token_is_required(&check).await;
+
+            if api_ok
+                && web_ok
+                && token_required
+                && (desired_token.is_none() || parsed.token.trim() == token)
+            {
+                parsed.token = token.clone();
+                let text = serde_json::to_string_pretty(&parsed)
+                    .context("failed to serialize server state")?;
+                tokio::fs::write(&state_file, text)
+                    .await
+                    .with_context(|| {
+                        format!("failed to write server state file: {}", state_file.display())
+                    })?;
+                return Ok(parsed);
+            }
+
+            let stop_state = if parsed.token.trim().is_empty() {
+                check.clone()
+            } else {
+                parsed.clone()
+            };
+            if try_stop_http(&stop_state).await {
+                let _ = wait_for_port_to_free(&desired_bind_host, parsed.port).await;
+                let _ = tokio::fs::remove_file(&state_file).await;
+            } else {
+                anyhow::bail!(
+                    "kiliax-server is reachable at {}:{}, but cannot be restarted (token mismatch?)",
+                    parsed.host,
+                    parsed.port
+                );
+            }
+        }
+
+        if parsed.started_at_ms.is_some_and(|ms| {
+            now_ms().saturating_sub(ms) < STARTUP_GRACE_PERIOD.as_millis() as u64
+        }) {
+            parsed.token = token.clone();
+            return Ok(parsed);
+        }
+
+        let _ = tokio::fs::remove_file(&state_file).await;
     }
 
     tokio::fs::create_dir_all(workspace_root.join(".kiliax"))
@@ -190,12 +273,14 @@ pub async fn ensure_running(
         let candidate = DaemonState {
             host: desired_host.clone(),
             port,
-            token: desired_token.clone().unwrap_or_default(),
+            token: token.clone(),
             pid: None,
             started_at_ms: None,
         };
         if ping(&candidate).await {
-            if ping_web(&candidate).await {
+            let web_ok = ping_web(&candidate).await;
+            let token_required = token_is_required(&candidate).await;
+            if web_ok && token_required {
                 let text = serde_json::to_string_pretty(&candidate).context("failed to serialize server state")?;
                 tokio::fs::write(&state_file, text)
                     .await
@@ -226,8 +311,6 @@ pub async fn ensure_running(
         }
     }
 
-    let token = desired_token.unwrap_or_default();
-
     let log_file_path = log_path(workspace_root);
     let log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -248,10 +331,8 @@ pub async fn ensure_running(
         "--config".to_string(),
         config_path.display().to_string(),
     ];
-    if !token.trim().is_empty() {
-        server_args.push("--token".to_string());
-        server_args.push(token.clone());
-    }
+    server_args.push("--token".to_string());
+    server_args.push(token.clone());
 
     let repo_manifest = repo_manifest_from_current_exe();
     let mut cmd = if let Some(manifest) = repo_manifest.clone() {
@@ -405,25 +486,6 @@ pub async fn stop(workspace_root: &Path) -> Result<StopOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn generate_token_hex(bytes: usize) -> Result<String> {
-        let mut buf = vec![0u8; bytes];
-        getrandom::getrandom(&mut buf).context("getrandom failed")?;
-        let mut out = String::with_capacity(bytes * 2);
-        for b in buf {
-            out.push(hex_digit(b >> 4));
-            out.push(hex_digit(b & 0x0f));
-        }
-        Ok(out)
-    }
-
-    fn hex_digit(n: u8) -> char {
-        match n {
-            0..=9 => (b'0' + n) as char,
-            10..=15 => (b'a' + (n - 10)) as char,
-            _ => '?',
-        }
-    }
 
     #[test]
     fn token_is_hex() {

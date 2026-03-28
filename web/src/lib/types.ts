@@ -82,7 +82,7 @@ export interface AssistantMessage {
   created_at: string;
   content: string;
   reasoning_content?: string | null;
-  tool_calls: ToolCall[];
+  tool_calls?: ToolCall[];
 }
 
 export interface ToolMessage {
@@ -142,4 +142,3 @@ export interface RunCreateRequest {
 export interface ApiErrorShape {
   error?: { code?: string; message?: string };
 }
-

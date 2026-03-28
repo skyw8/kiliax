@@ -9,8 +9,6 @@ import type {
   SkillListResponse,
 } from "@/lib/types";
 
-const TOKEN_KEY = "kiliax_token";
-
 export class ApiError extends Error {
   status: number;
   code?: string;
@@ -22,31 +20,11 @@ export class ApiError extends Error {
   }
 }
 
-export function getStoredToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-export function setStoredToken(token: string) {
-  try {
-    localStorage.setItem(TOKEN_KEY, token.trim());
-  } catch {
-    // ignore
-  }
-}
-
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getStoredToken();
   const headers = new Headers(init?.headers ?? {});
   headers.set("Accept", "application/json");
   if (!headers.has("Content-Type") && init?.body) {
     headers.set("Content-Type", "application/json");
-  }
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
   }
 
   const resp = await fetch(path, { ...init, headers });
@@ -66,11 +44,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function wsUrl(path: string): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const token = getStoredToken();
   const url = new URL(path, `${proto}://${window.location.host}`);
-  if (token) {
-    url.searchParams.set("token", token);
-  }
   return url.toString();
 }
 
@@ -120,4 +94,3 @@ export const api = {
     return apiFetch<SkillListResponse>(`/v1/sessions/${sessionId}/skills`);
   },
 };
-

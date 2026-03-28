@@ -14,8 +14,10 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      "/v1": "http://127.0.0.1:8123",
+      "/v1": {
+        target: "http://127.0.0.1:8123",
+        ws: true,
+      },
     },
   },
 });
-

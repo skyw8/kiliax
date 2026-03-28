@@ -44,13 +44,13 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .route("/admin/stop", post(stop_server))
         .route("/sessions/{session_id}/events", get(list_events))
         .route("/sessions/{session_id}/events/stream", get(stream_events_sse))
-        .route("/sessions/{session_id}/events/ws", get(stream_events_ws))
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
+        .route("/sessions/{session_id}/events/ws", get(stream_events_ws));
 
     Router::new()
         .nest("/v1", api)
         .fallback(serve_web)
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, auth_middleware))
 }
 
 #[tokio::main]
@@ -119,13 +119,14 @@ async fn main() -> anyhow::Result<()> {
     let token = token.or_else(|| loaded.config.server.token.clone());
     let token = token
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("kiliax-server requires a token (set server.token in kiliax.yaml or pass --token)"))?;
 
     let state = Arc::new(ServerState::new(
         workspace_root.clone(),
         config_path.clone(),
         loaded.config.clone(),
-        token,
+        Some(token),
     ).await?);
 
     let shutdown = state.shutdown.clone();
@@ -192,7 +193,7 @@ fn print_help() {
     println!("  --port <port>           (default: 8123)");
     println!("  --workspace-root <dir>  (default: cwd)");
     println!("  --config <path>         (default: auto खोज kiliax.yaml)");
-    println!("  --token <token>         (optional bearer auth)");
+    println!("  --token <token>         (required bearer/web auth)");
 }
 
 async fn auth_middleware(
@@ -203,24 +204,117 @@ async fn auth_middleware(
     let Some(expected) = state.token.as_deref() else {
         return Ok(next.run(req).await);
     };
+
+    let path = req.uri().path();
+    let is_api = path == "/v1" || path.starts_with("/v1/");
+
     let auth = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let bearer = auth.strip_prefix("Bearer ").unwrap_or("").trim();
-    let query_token_ok = token_from_query(req.uri())
-        .as_deref()
-        .is_some_and(|t| t == expected);
+    let bearer_ok = bearer == expected;
+    let query_token_ok = token_from_query(req.uri()).as_deref() == Some(expected);
+    let cookie_token_ok = cookie_token(req.headers()).as_deref() == Some(expected);
 
-    if bearer != expected && !query_token_ok {
-        return Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            ApiErrorCode::Unauthorized,
-            "unauthorized",
-        ));
+    if is_api {
+        if !bearer_ok && !query_token_ok && !cookie_token_ok {
+            return Err(ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                ApiErrorCode::Unauthorized,
+                "unauthorized",
+            ));
+        }
+        let mut resp = next.run(req).await;
+        if query_token_ok && !cookie_token_ok {
+            if let Ok(v) = build_auth_cookie(expected).parse() {
+                resp.headers_mut().insert(axum::http::header::SET_COOKIE, v);
+            }
+        }
+        return Ok(resp);
     }
-    Ok(next.run(req).await)
+
+    // Web UI: use cookie auth, with a one-time `?token=` → Set-Cookie + redirect handshake.
+    if cookie_token_ok {
+        return Ok(next.run(req).await);
+    }
+
+    if query_token_ok && matches!(req.method(), &Method::GET | &Method::HEAD) {
+        let dest = strip_token_query(req.uri());
+        let resp = Response::builder()
+            .status(StatusCode::FOUND)
+            .header(axum::http::header::LOCATION, dest)
+            .header(axum::http::header::SET_COOKIE, build_auth_cookie(expected))
+            .body(axum::body::Body::empty())
+            .unwrap_or_else(|_| StatusCode::FOUND.into_response());
+        return Ok(resp);
+    }
+
+    let unauthorized = r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>kiliax-web</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; padding: 24px; background: #fff; color: #111; }
+      code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      pre { background: #f6f6f6; padding: 12px; border-radius: 8px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h2>Unauthorized</h2>
+    <p>This UI requires a token.</p>
+    <p>Start the server with <code>kiliax serve start</code> and open the printed URL:</p>
+    <pre>http://127.0.0.1:8123/?token=...</pre>
+    <p>After the first visit, your browser will store a cookie and you can use <code>/</code>.</p>
+  </body>
+</html>
+"#;
+    Ok((StatusCode::UNAUTHORIZED, Html(unauthorized)).into_response())
+}
+
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for part in cookie.split(';') {
+        let part = part.trim();
+        let (k, v) = part.split_once('=')?;
+        if k.trim() == "kiliax_token" {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+fn build_auth_cookie(token: &str) -> String {
+    // Intentionally kept simple: same-origin, local UI.
+    format!("kiliax_token={token}; Path=/; HttpOnly; SameSite=Strict")
+}
+
+fn strip_token_query(uri: &axum::http::Uri) -> String {
+    let path = uri.path();
+    let Some(query) = uri.query() else {
+        return path.to_string();
+    };
+
+    let mut kept: Vec<&str> = Vec::new();
+    for part in query.split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        let k = part.split_once('=').map(|(k, _)| k).unwrap_or(part);
+        if k == "token" {
+            continue;
+        }
+        kept.push(part);
+    }
+
+    if kept.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", kept.join("&"))
+    }
 }
 
 fn token_from_query(uri: &axum::http::Uri) -> Option<String> {
