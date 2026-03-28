@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
 
     // Best-effort: ensure the background session-control server is running.
     if let Err(err) = daemon::ensure_running(&workspace_root, &loaded.path, &loaded.config.server).await {
-        eprintln!("warning: failed to start kiliax-server: {err}");
+        eprintln!("warning: failed to start kiliax-server: {err:#}");
     }
     let store = FileSessionStore::project(&workspace_root);
 

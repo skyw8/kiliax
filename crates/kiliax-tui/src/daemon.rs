@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use kiliax_core::config::ServerConfig;
@@ -8,6 +9,8 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8123;
 const PORT_SCAN_MAX: u16 = 8200;
+const PING_TIMEOUT_FAST: std::time::Duration = std::time::Duration::from_millis(200);
+const STARTUP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonState {
@@ -16,6 +19,8 @@ pub struct DaemonState {
     pub token: String,
     #[serde(default)]
     pub pid: Option<u32>,
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
 }
 
 impl DaemonState {
@@ -54,8 +59,29 @@ fn server_executable() -> Result<PathBuf> {
     }
 }
 
+fn repo_manifest_from_current_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    for ancestor in exe.ancestors() {
+        if ancestor.file_name().is_some_and(|n| n == "target") {
+            let root = ancestor.parent()?;
+            let manifest = root.join("Cargo.toml");
+            if manifest.is_file() {
+                return Some(manifest);
+            }
+        }
+    }
+    None
+}
+
 fn port_is_free(host: &str, port: u16) -> bool {
     std::net::TcpListener::bind((host, port)).is_ok()
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn generate_token_hex(bytes: usize) -> Result<String> {
@@ -80,7 +106,7 @@ fn hex_digit(n: u8) -> char {
 async fn ping(state: &DaemonState) -> bool {
     let url = format!("{}/v1/capabilities", state.url_base());
     let client = reqwest::Client::new();
-    let mut req = client.get(url).timeout(std::time::Duration::from_millis(250));
+    let mut req = client.get(url).timeout(PING_TIMEOUT_FAST);
     if !state.token.trim().is_empty() {
         req = req.bearer_auth(state.token.trim());
     }
@@ -113,12 +139,16 @@ pub async fn ensure_running(
 
     if let Ok(text) = tokio::fs::read_to_string(&state_file).await {
         if let Ok(parsed) = serde_json::from_str::<DaemonState>(&text) {
-            let host_ok = server_cfg.host.as_deref().map(|h| connect_host_for_bind_host(h.trim()) == parsed.host).unwrap_or(true);
-            let port_ok = desired_port.map(|p| p == parsed.port).unwrap_or(true);
-            let token_ok = desired_token.as_deref().map(|t| t == parsed.token.trim()).unwrap_or(true);
-            if host_ok && port_ok && token_ok && ping(&parsed).await {
+            if ping(&parsed).await {
                 return Ok(parsed);
             }
+            if parsed
+                .started_at_ms
+                .is_some_and(|ms| now_ms().saturating_sub(ms) < STARTUP_GRACE_PERIOD.as_millis() as u64)
+            {
+                return Ok(parsed);
+            }
+            let _ = tokio::fs::remove_file(&state_file).await;
         }
     }
 
@@ -133,6 +163,7 @@ pub async fn ensure_running(
             port,
             token: desired_token.clone().unwrap_or_default(),
             pid: None,
+            started_at_ms: None,
         };
         if ping(&candidate).await {
             let text = serde_json::to_string_pretty(&candidate).context("failed to serialize server state")?;
@@ -156,34 +187,43 @@ pub async fn ensure_running(
         port = found.context("no free port found for kiliax-server")?;
     }
 
-    let token = desired_token.unwrap_or(generate_token_hex(32)?);
+    let token = desired_token.unwrap_or_default();
 
-    let server_exe = server_executable()?;
-    let log_path = log_path(workspace_root);
+    let log_file_path = log_path(workspace_root);
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&log_path)
-        .with_context(|| format!("failed to open server log file: {}", log_path.display()))?;
+        .open(&log_file_path)
+        .with_context(|| format!("failed to open server log file: {}", log_file_path.display()))?;
     let log_file_err = log_file
         .try_clone()
         .context("failed to clone server log file handle")?;
 
-    let mut cmd = Command::new(server_exe);
-    cmd.arg("--host")
-        .arg(&desired_bind_host)
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--workspace-root")
-        .arg(workspace_root)
-        .arg("--config")
-        .arg(config_path)
-        .arg("--token")
-        .arg(&token)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log_file))
-        .stderr(Stdio::from(log_file_err))
-        .current_dir(workspace_root);
+    let mut server_args = vec![
+        "--host".to_string(),
+        desired_bind_host.clone(),
+        "--port".to_string(),
+        port.to_string(),
+        "--workspace-root".to_string(),
+        workspace_root.display().to_string(),
+        "--config".to_string(),
+        config_path.display().to_string(),
+    ];
+    if !token.trim().is_empty() {
+        server_args.push("--token".to_string());
+        server_args.push(token.clone());
+    }
+
+    let mut cmd = {
+        let server_exe = server_executable()?;
+        let mut cmd = Command::new(server_exe);
+        cmd.args(&server_args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(log_file_err))
+            .current_dir(workspace_root);
+        cmd
+    };
 
     #[cfg(unix)]
     {
@@ -198,25 +238,63 @@ pub async fn ensure_running(
         }
     }
 
-    let child = cmd.spawn().context("failed to spawn kiliax-server")?;
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let manifest = repo_manifest_from_current_exe()
+                .context("kiliax-server not found (install it, or run from repo with cargo)")?;
+
+            let log_file_path = log_path(workspace_root);
+            let log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file_path)
+                .with_context(|| format!("failed to open server log file: {}", log_file_path.display()))?;
+            let log_file_err = log_file
+                .try_clone()
+                .context("failed to clone server log file handle")?;
+
+            let mut cmd = Command::new("cargo");
+            cmd.arg("run")
+                .arg("-p")
+                .arg("kiliax-server")
+                .arg("--manifest-path")
+                .arg(&manifest)
+                .arg("--")
+                .args(&server_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
+                .current_dir(
+                    manifest
+                        .parent()
+                        .context("manifest path missing parent dir")?,
+                );
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                unsafe {
+                    cmd.pre_exec(|| {
+                        if libc::setsid() == -1 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+            }
+
+            cmd.spawn().context("failed to spawn kiliax-server via cargo")?
+        }
+        Err(err) => return Err(anyhow::Error::new(err).context("failed to spawn kiliax-server")),
+    };
     let state = DaemonState {
         host: desired_host,
         port,
         token,
         pid: Some(child.id()),
+        started_at_ms: Some(now_ms()),
     };
-
-    let mut ready = false;
-    for _ in 0..40 {
-        if ping(&state).await {
-            ready = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    if !ready {
-        anyhow::bail!("kiliax-server did not become ready (see .kiliax/server.log)");
-    }
 
     let text = serde_json::to_string_pretty(&state).context("failed to serialize server state")?;
     tokio::fs::write(&state_file, text)
@@ -263,7 +341,14 @@ pub async fn stop(workspace_root: &Path) -> Result<StopOutcome> {
             anyhow::bail!("failed to stop kiliax-server: HTTP {}", resp.status());
         }
         Err(_) => {
-            let _ = tokio::fs::remove_file(&state_file).await;
+            let grace_ms = STARTUP_GRACE_PERIOD.as_millis() as u64;
+            let should_remove = match state.started_at_ms {
+                Some(ms) => now_ms().saturating_sub(ms) > grace_ms,
+                None => true,
+            };
+            if should_remove {
+                let _ = tokio::fs::remove_file(&state_file).await;
+            }
             Ok(StopOutcome::NotReachable)
         }
     }
