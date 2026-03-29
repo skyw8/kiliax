@@ -37,11 +37,30 @@ type StreamState = {
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
 };
 
+type DebugError = {
+  message: string;
+  status?: number;
+  code?: string;
+  traceId?: string;
+  details?: unknown;
+  bodyText?: string;
+};
+
 const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
 
 function displayModelId(modelId: string): string {
   const idx = modelId.indexOf("/");
   return idx === -1 ? modelId : modelId.slice(idx + 1);
+}
+
+function stringifyUnknown(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
 }
 
 function loadPinnedSessionIds(): string[] {
@@ -241,6 +260,7 @@ export default function App() {
   const [cwdDraft, setCwdDraft] = useState("");
 
   const [authError, setAuthError] = useState<string | null>(null);
+  const [debugError, setDebugError] = useState<DebugError | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -261,7 +281,21 @@ export default function App() {
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
       setAuthError("Unauthorized. Re-open the URL printed by `kiliax serve start`.");
+      setDebugError(null);
       return;
+    }
+    if (err instanceof ApiError) {
+      setDebugError({
+        message: err.message,
+        status: err.status,
+        code: err.code,
+        traceId: err.traceId,
+        details: err.details,
+        bodyText: err.bodyText,
+      });
+    } else {
+      const message = err instanceof Error ? err.message : String(err);
+      setDebugError({ message });
     }
     // eslint-disable-next-line no-console
     console.error(err);
@@ -647,6 +681,56 @@ export default function App() {
 
   return (
     <div className="h-dvh w-full bg-white text-zinc-900">
+      <Dialog
+        open={Boolean(debugError)}
+        onOpenChange={(open) => {
+          if (!open) setDebugError(null);
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Request failed</DialogTitle>
+            <DialogDescription>
+              {debugError?.status ? (
+                <span>
+                  HTTP {debugError.status}
+                  {debugError.code ? ` • ${debugError.code}` : ""}
+                </span>
+              ) : (
+                <span>Unexpected error</span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-[30vh] overflow-auto rounded-md bg-zinc-50 p-3 text-xs text-zinc-800">
+            {debugError?.message ?? ""}
+          </pre>
+          {debugError?.traceId ? (
+            <div className="text-xs text-zinc-600">
+              trace_id: <span className="font-mono">{debugError.traceId}</span>
+            </div>
+          ) : null}
+          {debugError?.details != null ? (
+            <details className="rounded-md border border-zinc-200 bg-white px-3 py-2">
+              <summary className="cursor-pointer select-none text-xs text-zinc-700">
+                details
+              </summary>
+              <pre className="mt-2 max-h-[30vh] overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
+                {stringifyUnknown(debugError.details)}
+              </pre>
+            </details>
+          ) : null}
+          {debugError?.bodyText && !debugError?.details ? (
+            <details className="rounded-md border border-zinc-200 bg-white px-3 py-2">
+              <summary className="cursor-pointer select-none text-xs text-zinc-700">
+                raw body
+              </summary>
+              <pre className="mt-2 max-h-[30vh] overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
+                {debugError.bodyText}
+              </pre>
+            </details>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <div className="flex h-full">
         <aside className="flex w-[280px] flex-col border-r border-zinc-200 bg-zinc-50">
           <div className="space-y-1 p-3">

@@ -1009,8 +1009,14 @@ impl App {
                     return Ok(());
                 }
                 if let Err(err) = self.start_new_session().await {
+                    let text = format_error_chain_text(err.as_ref());
+                    tracing::error!(
+                        event = "tui.session.new_error",
+                        session_id = %self.session.id(),
+                        error = %text,
+                    );
                     self.pending_history_lines
-                        .extend(render_error_lines(&err.to_string()));
+                        .extend(render_error_lines(&text));
                 }
             }
             crate::slash_command::SlashCommand::Model => {
@@ -1025,8 +1031,14 @@ impl App {
                     return Ok(());
                 }
                 if let Err(err) = self.switch_agent(agent).await {
+                    let text = format_error_chain_text(err.as_ref());
+                    tracing::error!(
+                        event = "tui.agent.switch_error",
+                        session_id = %self.session.id(),
+                        error = %text,
+                    );
                     self.pending_history_lines
-                        .extend(render_error_lines(&err.to_string()));
+                        .extend(render_error_lines(&text));
                 }
             }
             crate::slash_command::SlashCommand::Mcp => {
@@ -1118,6 +1130,14 @@ impl App {
             let _ = self.store.delete(&prev_id).await;
         }
 
+        tracing::info!(
+            event = "tui.session.new",
+            from = %prev_id,
+            to = %self.session.id(),
+            agent = %self.agent_name(),
+            model_id = %self.model_id(),
+            prev_empty,
+        );
         Ok(())
     }
 
@@ -1262,26 +1282,45 @@ impl App {
             Span::from("• ").dim(),
             Span::from("agent").bold(),
             Span::from(": ").dim(),
-            Span::from(prev).dim(),
+            Span::from(prev.clone()).dim(),
             Span::from(" -> ").dim(),
             Span::from(self.profile.name.to_string()).dim(),
         ]));
 
+        tracing::info!(
+            event = "tui.agent.changed",
+            session_id = %self.session.id(),
+            from = %prev,
+            to = %self.profile.name,
+            model_id = %self.model_id(),
+        );
         Ok(())
     }
 
     pub async fn apply_model_selection(&mut self, model_id: String) -> Result<()> {
         if let Err(err) = self.apply_model_selection_inner(model_id).await {
+            let text = format_error_chain_text(err.as_ref());
+            tracing::error!(
+                event = "tui.model.switch_error",
+                session_id = %self.session.id(),
+                error = %text,
+            );
             self.pending_history_lines
-                .extend(render_error_lines(&err.to_string()));
+                .extend(render_error_lines(&text));
         }
         Ok(())
     }
 
     pub async fn apply_mcp_toggle(&mut self, server: String, enable: bool) -> Result<()> {
         if let Err(err) = self.apply_mcp_toggle_inner(server, enable).await {
+            let text = format_error_chain_text(err.as_ref());
+            tracing::error!(
+                event = "tui.mcp.toggle_error",
+                session_id = %self.session.id(),
+                error = %text,
+            );
             self.pending_history_lines
-                .extend(render_error_lines(&err.to_string()));
+                .extend(render_error_lines(&text));
         }
         Ok(())
     }
@@ -1354,11 +1393,19 @@ impl App {
                 Span::from("• ").dim(),
                 Span::from("model").bold(),
                 Span::from(": ").dim(),
-                Span::from(prev).dim(),
+                Span::from(prev.clone()).dim(),
                 Span::from(" -> ").dim(),
                 Span::from(self.model_id.clone()).dim(),
             ]));
 
+            tracing::info!(
+                event = "tui.model.changed",
+                session_id = %self.session.id(),
+                from = %prev,
+                to = %self.model_id(),
+                wrote_config = wrote,
+                config_path = %self.config_path.display(),
+            );
             Ok(())
         }
         .await;
@@ -1442,6 +1489,13 @@ impl App {
                 Span::from(action).dim(),
             ]));
 
+            tracing::info!(
+                event = "tui.mcp.toggled",
+                session_id = %self.session.id(),
+                server = %server,
+                enable,
+                config_path = %self.config_path.display(),
+            );
             Ok(())
         }
         .await;
@@ -1475,6 +1529,13 @@ impl App {
         self.turn_output_tokens.reset();
         self.step_output_tokens.reset();
         self.saw_delta_in_step = false;
+        tracing::info!(
+            event = "tui.run.started",
+            session_id = %self.session.id(),
+            agent = %self.agent_name(),
+            model_id = %self.model_id(),
+            messages = self.messages.len() as u64,
+        );
         Ok(self
             .runtime
             .run_stream(&self.profile, self.messages.clone(), self.options.clone())
@@ -1626,6 +1687,15 @@ impl App {
                     )
                     .await?;
 
+                tracing::info!(
+                    event = "tui.run.finished",
+                    session_id = %self.session.id(),
+                    agent = %self.agent_name(),
+                    model_id = %self.model_id(),
+                    steps = out.steps as u64,
+                    finish_reason = ?out.finish_reason,
+                );
+
                 self.messages = out.messages;
                 self.running = false;
                 self.status = Some(format!(
@@ -1654,7 +1724,14 @@ impl App {
     }
 
     pub async fn handle_agent_error(&mut self, err: AgentRuntimeError) -> Result<()> {
-        let text = err.to_string();
+        let text = format_error_chain_text(&err);
+        tracing::error!(
+            event = "tui.run.error",
+            session_id = %self.session.id(),
+            agent = %self.agent_name(),
+            model_id = %self.model_id(),
+            error = %text,
+        );
         let _ = self
             .store
             .record_error(&mut self.session, text.clone())
@@ -2662,13 +2739,38 @@ fn summarize_shell_command_argv(argv: &[String]) -> String {
     summarize_command_tokens(argv)
 }
 
+fn format_error_chain_text(err: &dyn std::error::Error) -> String {
+    let mut out = err.to_string();
+    let mut cur = err.source();
+    while let Some(src) = cur {
+        out.push_str("\ncaused by: ");
+        out.push_str(&src.to_string());
+        cur = src.source();
+    }
+    out
+}
+
 fn render_error_lines(text: &str) -> Vec<Line<'static>> {
-    vec![Line::from(vec![
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or("");
+    out.push(Line::from(vec![
         Span::from("• ").dim(),
         Span::styled("error", Style::default().fg(Color::LightRed).bold()),
         Span::from(": "),
-        Span::from(text.to_string()),
-    ])]
+        Span::from(first.to_string()),
+    ]));
+    for line in lines {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        out.push(Line::from(vec![
+            Span::from("  ").dim(),
+            Span::from(line.to_string()),
+        ]));
+    }
+    out
 }
 
 #[derive(Debug, Deserialize)]

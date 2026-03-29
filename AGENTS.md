@@ -36,7 +36,7 @@ minimal
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
 - `crates/kiliax-core/src/config.rs`: 配置查找/解析（默认仅 `~/.kiliax/kiliax.yaml`）、provider/base_url/api_key、model 路由（按首个 `/` 分割，支持 `openrouter/openai/gpt-4o-mini` 这类 model id）；多 provider 时可按 `providers.*.models` 反查唯一 provider；server 配置（`server.host/port/token`）；**OpenTelemetry 配置（`otel.*`，OTLP base endpoint 校验含 Langfuse 提示）**；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；MCP 配置（`mcp.servers`: `enable` + stdio command+args）；包含 config/resolve_model 单元测试
 - `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义（assistant 支持 `reasoning_content` 以兼容部分 provider 的 tool loop）；User 输入支持 `UserMessageContent`（text + local image path → data URL base64；仅图片输入会自动补 `.` 文本占位避免 400 empty text）；chat/流式均用 `reqwest` 直连 `/chat/completions`（4xx 会读取 body 并转换为 `ApiError`）；解析 provider 扩展 `reasoning_content/thinking/reasoning` → `ChatStreamChunk.thinking_delta`；Moonshot 等 provider 在 assistant tool_calls 消息中要求携带 `reasoning_content` 时自动注入；**OTEL spans（Langfuse GenAI `gen_ai.*` + `langfuse.observation.*`；含 TTFT/TPS attrs）**
-- `crates/kiliax-core/src/telemetry.rs`: 可观测性全局开关（随 Config/ToolEngine 热更新）；full capture（UTF-8 截断 + sha256）；OTEL metrics instruments（LLM / tools / MCP / skills / run）；`telemetry::spans` 用于写入 OTEL span attributes（Langfuse/GenAI 语义）
+- `crates/kiliax-core/src/telemetry.rs`: 可观测性全局开关（随 Config/ToolEngine 热更新）；full capture（UTF-8 截断 + sha256）；OTEL metrics instruments（LLM / tools / MCP / skills / run）；`telemetry::spans` 用于写入 OTEL span attributes + 获取当前 `trace_id`（便于前后端串联排障）
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 请求前规整 tool_calls/Tool 消息序列（补齐缺失/保证顺序），避免 provider 因 tool_call_id 未响应报 400）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`，并在 tool_calls step 中累积为 assistant 的 `reasoning_content` 以便下一轮回放；**OTEL `kiliax.agent.run` + per-step `kiliax.agent.step` spans（Langfuse observation.type=agent/chain）**
@@ -62,7 +62,7 @@ minimal
 
 OpenTelemetry 初始化与导出（OTLP HTTP/gRPC）：按 `kiliax.yaml` 的 `otel.*` 配置安装 global tracer/logger/meter 与 tracing subscriber（HTTP exporter 会用 base endpoint 拼接 `/v1/{signal}`）；支持从 HTTP headers 继承 `traceparent/tracestate`。
 
-- `crates/kiliax-otel/src/lib.rs`: exporters + providers（logs/traces/metrics）构建与 shutdown；`tracing-opentelemetry` / `OpenTelemetryTracingBridge` layers；`set_parent_from_http_headers`
+- `crates/kiliax-otel/src/lib.rs`: exporters + providers（logs/traces/metrics）构建与 shutdown；`tracing-opentelemetry` / `OpenTelemetryTracingBridge` layers；`set_parent_from_http_headers`；本地日志支持 `Stdout`/`File`/`None`
 - `crates/kiliax-otel/src/otlp.rs`: headers/TLS/reqwest client 构建（blocking/async）与 timeout 解析
 
 ### crates/kiliax-tui
@@ -70,9 +70,9 @@ OpenTelemetry 初始化与导出（OTLP HTTP/gRPC）：按 `kiliax.yaml` 的 `ot
 TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 codex）+ 终端 scrollback 历史；启动先插入 header（版本/模型/cwd），输入框从 header 之后开始并随输出自动下推；输入框支持自动换行与动态高度。
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect`/`reqwest` 等）
-- `crates/kiliax-tui/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`、`serve start|stop|restart`）；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）；不再自动拉起 `kiliax-server`；**OTEL 初始化（无 stderr/fmt 输出）**
+- `crates/kiliax-tui/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`、`serve start|stop|restart`）；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）；不再自动拉起 `kiliax-server`；**OTEL 初始化 + 默认落盘 `~/.kiliax/tui.log`（避免污染终端）**
 - `crates/kiliax-tui/src/daemon.rs`: 后台 `kiliax-server` 管理（`kiliax serve start|stop|restart`；健康检查；启动时校验 web root 可用性，不可用则尝试 stop 并重启；开发态优先通过 `cargo run -p kiliax-server` 确保与源码同步）；状态写入 `~/.kiliax/server.json`，日志写入 `~/.kiliax/server.log`
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示（`shell_command` 仅展示关键命令/参数，省略 bash -lc/cd/env 等包装与冗长参数）；`update_plan` 以 `[]` 待办/完成删除线展示（不显示 pending 等状态字样）；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable`（YAML 行编辑，正确处理 `#` 注释/引号）并 checkpoint session（刷新 system preamble）；/new 切换前会清理空 session
+- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示（`shell_command` 仅展示关键命令/参数，省略 bash -lc/cd/env 等包装与冗长参数）；`update_plan` 以 `[]` 待办/完成删除线展示（不显示 pending 等状态字样）；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable`（YAML 行编辑，正确处理 `#` 注释/引号）并 checkpoint session（刷新 system preamble）；错误展示支持 error-chain（多行）并写入 tracing 日志
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；/model、/mcp 等 picker（题头紫色、选中蓝色、未选中白色；MCP 未开启灰色/开启白色）；底部 footer 仅显示 status + agent + model_id（去 provider）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
 - `crates/kiliax-tui/src/clipboard_paste.rs`: 剪切板图片读取→临时 PNG 路径（arboard + WSL PowerShell fallback）；粘贴路径规范化（file://、Windows/UNC、WSL 映射）
@@ -94,18 +94,18 @@ Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session
 
 - `crates/kiliax-server/Cargo.toml`: server 依赖（axum/ws/sse、tracing 等）
 - `crates/kiliax-server/src/main.rs`: `/v1` REST + SSE/WS 路由；包含 `DELETE /v1/sessions/{id}`、`GET /v1/skills`、`PATCH /v1/config/mcp`；鉴权（API 支持 Bearer/Cookie/`?token=`，Web UI 通过 `?token=` 首次握手写入 HttpOnly cookie 并重定向）；静态托管 `web/dist`（SPA fallback 到 `index.html`）；**OTEL 初始化 + HTTP TraceLayer（traceparent 继承）**
-- `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行；`delete_session` + `LiveSession::shutdown`（取消 run + 停止 worker）；`list_global_skills`；`patch_config_mcp`（更新 `kiliax.yaml` 并热更新 ToolEngine）；session settings（含 `workspace_root`）持久化到 `settings.json`；默认 tmp workspace 为 `~/.kiliax/workspace/tmp_<SessionId>`；支持 `/v1/config` 读写 YAML 并热更新 live sessions；skills 发现 `/v1/sessions/{id}/skills`；**OTEL run span 写入 Langfuse trace-level attrs**
+- `crates/kiliax-server/src/state.rs`: `ServerState`/`LiveSession`；run 队列串行执行；`delete_session` + `LiveSession::shutdown`（取消 run + 停止 worker）；`list_global_skills`；`patch_config_mcp`（更新 `kiliax.yaml` 并热更新 ToolEngine）；session settings（含 `workspace_root`）持久化到 `settings.json`；默认 tmp workspace 为 `~/.kiliax/workspace/tmp_<SessionId>`；支持 `/v1/config` 读写 YAML 并热更新 live sessions；skills 发现 `/v1/sessions/{id}/skills`；run/session 生命周期写入 info 日志，runtime error 记录 error-chain；**OTEL run span 写入 Langfuse trace-level attrs**
 - `crates/kiliax-server/src/api.rs`: REST schema（session summary 增强：`updated_at/last_outcome`；新增 `config/skills/workspace_root` 相关结构；`ConfigMcpPatchRequest`、skills list 等）
-- `crates/kiliax-server/src/error.rs`: 统一错误模型（`{ error: { code, message, details? } }`）
+- `crates/kiliax-server/src/error.rs`: 统一错误模型（`{ error: { code, message, details? }, trace_id? }`）；内部错误自动附带 `details.error_chain`；IntoResponse 会写入 structured tracing 日志
 - `crates/kiliax-server/src/tests.rs`: server HTTP 行为测试（包含 session delete、global skills、config mcp patch）
 
 ### web
 
 Web UI（React + Vite + Tailwind + shadcn/ui），由 `kiliax-server` 静态托管：
 
-- `web/src/app.tsx`: 单页应用（顶部栏 Agent/Model/CWD；session list 懒加载；三点菜单 Pin/Delete + 删除确认弹窗；全局 Skills/MCP（kiliax.yaml）；Send/Interrupt；对话渲染）
+- `web/src/app.tsx`: 单页应用（顶部栏 Agent/Model/CWD；session list 懒加载；三点菜单 Pin/Delete + 删除确认弹窗；全局 Skills/MCP（kiliax.yaml）；Send/Interrupt；对话渲染；API 错误弹窗展示 `code/message/details/trace_id`）
 - `web/src/components/markdown.tsx`: 轻量 Markdown 渲染（安全：不渲染 HTML）
-- `web/src/lib/api.ts`: Web API client（包含 `DELETE /v1/sessions/{id}`）
+- `web/src/lib/api.ts`: Web API client（API 错误解析：`code/message/details/trace_id`，并在 UI 侧可展示/复制；包含 `DELETE /v1/sessions/{id}`）
 
 ## constraints
 

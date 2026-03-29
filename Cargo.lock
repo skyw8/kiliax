@@ -1411,6 +1411,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tracing",
  "unicode-width 0.2.0",
  "url",
 ]

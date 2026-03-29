@@ -34,6 +34,25 @@ use crate::app::{AppAction, SubmitDisposition};
 
 const EXAMPLE_CONFIG_YAML: &str = include_str!("../../../kiliax.example.yaml");
 
+fn tui_local_logs() -> kiliax_otel::LocalLogs {
+    if let Ok(v) = std::env::var("KILIAX_TUI_LOG_PATH") {
+        let path = v.trim();
+        if !path.is_empty() {
+            return kiliax_otel::LocalLogs::File {
+                path: std::path::PathBuf::from(path),
+            };
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        return kiliax_otel::LocalLogs::File {
+            path: home.join(".kiliax").join("tui.log"),
+        };
+    }
+
+    kiliax_otel::LocalLogs::None
+}
+
 fn print_help() {
     let bin = env!("CARGO_PKG_NAME");
     let version = env!("CARGO_PKG_VERSION");
@@ -195,8 +214,15 @@ async fn main() -> Result<()> {
         &loaded.config,
         "kiliax-tui",
         env!("CARGO_PKG_VERSION"),
-        kiliax_otel::LocalLogs::None,
+        tui_local_logs(),
     )?;
+    tracing::info!(
+        event = "tui.start",
+        version = env!("CARGO_PKG_VERSION"),
+        cwd = %workspace_root.display(),
+        config_path = %loaded.path.display(),
+        resume = %resume_id.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+    );
     let store = FileSessionStore::global()
         .context("failed to determine home directory for sessions (expected ~/.kiliax/sessions)")?;
 

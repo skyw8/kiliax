@@ -120,6 +120,20 @@ pub mod spans {
     use opentelemetry::trace::TraceContextExt as _;
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
+    pub fn trace_id_hex(span: &tracing::Span) -> Option<String> {
+        let ctx = span.context();
+        let otel_span = ctx.span();
+        let sc = otel_span.span_context();
+        if !sc.is_valid() {
+            return None;
+        }
+        Some(sc.trace_id().to_string())
+    }
+
+    pub fn current_trace_id() -> Option<String> {
+        trace_id_hex(&tracing::Span::current())
+    }
+
     pub fn set_attributes(
         span: &tracing::Span,
         attributes: impl IntoIterator<Item = KeyValue>,

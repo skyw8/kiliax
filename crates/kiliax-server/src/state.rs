@@ -106,7 +106,7 @@ impl ServerState {
         let yaml = match tokio::fs::read_to_string(&self.config_path).await {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(err) => return Err(ApiError::internal(err.to_string())),
+            Err(err) => return Err(ApiError::internal_error(err)),
         };
         let config = self.config_snapshot()?.as_ref().clone();
         Ok(api::ConfigResponse {
@@ -134,7 +134,7 @@ impl ServerState {
         }
         self.tools_for_caps
             .set_config(next.clone())
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
 
         let live_sessions = {
             let guard = self.sessions.lock().await;
@@ -174,8 +174,7 @@ impl ServerState {
             }
         }
 
-        let yaml =
-            serde_yaml::to_string(&next).map_err(|e| ApiError::internal(e.to_string()))?;
+        let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
         let _ = self
             .update_config(api::ConfigUpdateRequest { yaml })
             .await?;
@@ -201,7 +200,7 @@ impl ServerState {
         let root = PathBuf::from(workspace_root.trim());
 
         let skills = kiliax_core::tools::skills::discover_skills(&root)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
         Ok(api::SkillListResponse {
             items: skills
                 .into_iter()
@@ -216,7 +215,7 @@ impl ServerState {
 
     pub async fn list_global_skills(&self) -> Result<api::SkillListResponse, ApiError> {
         let skills = kiliax_core::tools::skills::discover_skills(&self.workspace_root)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
         Ok(api::SkillListResponse {
             items: skills
                 .into_iter()
@@ -302,7 +301,7 @@ impl ServerState {
         let workspace_root = PathBuf::from(settings.workspace_root.trim());
         tokio::fs::create_dir_all(&workspace_root)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
 
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
@@ -322,6 +321,11 @@ impl ServerState {
             .await
             .map_err(map_session_err)?;
 
+        let created_session_id = session.meta.id.clone();
+        let created_agent = settings.agent.clone();
+        let created_model_id = settings.model_id.clone();
+        let created_workspace_root = settings.workspace_root.clone();
+
         if let Some(title) = req.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
             session.meta.title = Some(title.to_string());
             self.store
@@ -335,6 +339,14 @@ impl ServerState {
             .lock()
             .await
             .insert(live.id().to_string(), live.clone());
+
+        tracing::info!(
+            event = "session.created",
+            session_id = %created_session_id,
+            agent = %created_agent,
+            model_id = %created_model_id,
+            workspace_root = %created_workspace_root,
+        );
         live.snapshot().await
     }
 
@@ -553,7 +565,7 @@ impl ServerState {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     ApiError::not_found("session not found")
                 } else {
-                    ApiError::internal(e.to_string())
+                    ApiError::internal_error(e)
                 }
             })?;
         let mut reader = tokio::io::BufReader::new(file);
@@ -565,7 +577,7 @@ impl ServerState {
             let n = reader
                 .read_line(&mut line)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+                .map_err(ApiError::internal_error)?;
             if n == 0 {
                 break;
             }
@@ -663,7 +675,7 @@ impl ServerState {
             if e.kind() == std::io::ErrorKind::NotFound {
                 ApiError::not_found("session not found")
             } else {
-                ApiError::internal(e.to_string())
+                ApiError::internal_error(e)
             }
         })?;
         Ok(())
@@ -674,7 +686,7 @@ fn map_session_err(err: SessionError) -> ApiError {
     match err {
         SessionError::NotFound(_) => ApiError::not_found("session not found"),
         SessionError::InvalidId(msg) => ApiError::invalid_argument(msg),
-        other => ApiError::internal(other.to_string()),
+        other => ApiError::internal_error(other),
     }
 }
 
@@ -699,10 +711,10 @@ async fn read_settings_file(path: &Path) -> Result<Option<SettingsFile>, ApiErro
     let text = match tokio::fs::read_to_string(path).await {
         Ok(t) => t,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(ApiError::internal(err.to_string())),
+        Err(err) => return Err(ApiError::internal_error(err)),
     };
     let parsed: SettingsFile =
-        serde_json::from_str(&text).map_err(|e| ApiError::internal(e.to_string()))?;
+        serde_json::from_str(&text).map_err(ApiError::internal_error)?;
     Ok(Some(parsed))
 }
 
@@ -714,10 +726,10 @@ async fn write_settings_file(path: &Path, settings: &api::SessionSettings) -> Re
         workspace_root: settings.workspace_root.clone(),
     };
     let text =
-        serde_json::to_string_pretty(&file).map_err(|e| ApiError::internal(e.to_string()))?;
+        serde_json::to_string_pretty(&file).map_err(ApiError::internal_error)?;
     tokio::fs::write(path, text)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
     Ok(())
 }
 
@@ -1148,7 +1160,7 @@ async fn read_last_event_id(path: &Path) -> Result<u64, ApiError> {
     let file = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(err) => return Err(ApiError::internal(err.to_string())),
+        Err(err) => return Err(ApiError::internal_error(err)),
     };
     let mut reader = tokio::io::BufReader::new(file);
     let mut line = String::new();
@@ -1158,7 +1170,7 @@ async fn read_last_event_id(path: &Path) -> Result<u64, ApiError> {
         let n = reader
             .read_line(&mut line)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
         if n == 0 {
             break;
         }
@@ -1177,7 +1189,7 @@ async fn read_events_after(path: &Path, after: u64, limit: usize) -> Result<Vec<
     let file = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(ApiError::internal(err.to_string())),
+        Err(err) => return Err(ApiError::internal_error(err)),
     };
     let mut reader = tokio::io::BufReader::new(file);
     let mut line = String::new();
@@ -1187,7 +1199,7 @@ async fn read_events_after(path: &Path, after: u64, limit: usize) -> Result<Vec<
         let n = reader
             .read_line(&mut line)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
         if n == 0 {
             break;
         }
@@ -1209,22 +1221,22 @@ async fn read_events_after(path: &Path, after: u64, limit: usize) -> Result<Vec<
 
 async fn append_event(path: &Path, event: &api::Event) -> Result<(), ApiError> {
     use tokio::io::AsyncWriteExt;
-    let text = serde_json::to_string(event).map_err(|e| ApiError::internal(e.to_string()))?;
+    let text = serde_json::to_string(event).map_err(ApiError::internal_error)?;
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
     file.write_all(text.as_bytes())
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
     file.write_all(b"\n")
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
     file.flush()
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
     Ok(())
 }
 
@@ -1232,12 +1244,12 @@ async fn write_text_atomic(path: &Path, text: &str) -> Result<(), ApiError> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     tokio::fs::create_dir_all(dir)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
 
     let tmp = path.with_extension("tmp");
     tokio::fs::write(&tmp, text)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
 
     match tokio::fs::rename(&tmp, path).await {
         Ok(()) => Ok(()),
@@ -1246,10 +1258,10 @@ async fn write_text_atomic(path: &Path, text: &str) -> Result<(), ApiError> {
                 let _ = tokio::fs::remove_file(path).await;
                 tokio::fs::rename(&tmp, path)
                     .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                    .map_err(ApiError::internal_error)?;
                 Ok(())
             } else {
-                Err(ApiError::internal(err.to_string()))
+                Err(ApiError::internal_error(err))
             }
         }
     }
@@ -1258,12 +1270,12 @@ async fn write_text_atomic(path: &Path, text: &str) -> Result<(), ApiError> {
 async fn write_run_file(dir: &Path, run: &api::Run) -> Result<(), ApiError> {
     tokio::fs::create_dir_all(dir)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
     let path = dir.join(format!("{}.json", run.id));
-    let text = serde_json::to_string_pretty(run).map_err(|e| ApiError::internal(e.to_string()))?;
+    let text = serde_json::to_string_pretty(run).map_err(ApiError::internal_error)?;
     tokio::fs::write(&path, text)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(ApiError::internal_error)?;
     Ok(())
 }
 
@@ -1275,10 +1287,10 @@ async fn read_run_file(dir: &Path, run_id: &str) -> Result<api::Run, ApiError> {
             if e.kind() == std::io::ErrorKind::NotFound {
                 ApiError::not_found("run not found")
             } else {
-                ApiError::internal(e.to_string())
+                ApiError::internal_error(e)
             }
         })?;
-    serde_json::from_str(&text).map_err(|e| ApiError::internal(e.to_string()))
+    serde_json::from_str(&text).map_err(ApiError::internal_error)
 }
 
 fn new_run_id() -> String {
@@ -1287,6 +1299,17 @@ fn new_run_id() -> String {
         .to_string();
     let pid = std::process::id();
     format!("run_{ts}_{pid}")
+}
+
+fn format_error_chain_text(err: &dyn std::error::Error) -> String {
+    let mut out = err.to_string();
+    let mut cur = err.source();
+    while let Some(src) = cur {
+        out.push_str("\ncaused by: ");
+        out.push_str(&src.to_string());
+        cur = src.source();
+    }
+    out
 }
 
 pub struct LiveSession {
@@ -1345,7 +1368,7 @@ impl LiveSession {
         settings.workspace_root = workspace_root.display().to_string();
         tokio::fs::create_dir_all(&workspace_root)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
 
         *self.settings.lock().await = settings.clone();
         write_settings_file(&self.settings_path, &settings).await?;
@@ -1379,12 +1402,24 @@ impl LiveSession {
         let workspace_root = PathBuf::from(settings.workspace_root.trim());
         tokio::fs::create_dir_all(&workspace_root)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
+
+        let resumed_agent = settings.agent.clone();
+        let resumed_model_id = settings.model_id.clone();
+        let resumed_workspace_root = settings.workspace_root.clone();
 
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
 
-        Self::from_state(server, session, settings, tools).await
+        let live = Self::from_state(server, session, settings, tools).await?;
+        tracing::info!(
+            event = "session.resumed",
+            session_id = %live.session_id,
+            agent = %resumed_agent,
+            model_id = %resumed_model_id,
+            workspace_root = %resumed_workspace_root,
+        );
+        Ok(live)
     }
 
     pub async fn from_state(
@@ -1724,6 +1759,17 @@ impl LiveSession {
             Span::current().record("agent", effective.agent.as_str());
             Span::current().record("model_id", effective.model_id.as_str());
 
+            let mcp_enabled = effective.mcp.servers.iter().filter(|s| s.enable).count();
+            tracing::info!(
+                event = "run.started",
+                session_id = %self.session_id,
+                run_id = %run.id,
+                agent = %effective.agent,
+                model_id = %effective.model_id,
+                workspace_root = %effective.workspace_root,
+                mcp_enabled = mcp_enabled as u64,
+            );
+
             // Langfuse OTEL ingest expects trace-level attributes on spans.
             let current_span = Span::current();
             kiliax_core::telemetry::spans::set_attribute(
@@ -1766,7 +1812,7 @@ impl LiveSession {
             );
             tokio::fs::create_dir_all(&workspace_root)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+                .map_err(ApiError::internal_error)?;
 
             let tools_for_run = if effective.workspace_root != base_settings.workspace_root {
                 ToolEngine::new(&workspace_root, cfg_for_run)
@@ -1774,7 +1820,7 @@ impl LiveSession {
                 let tools = self.tools.lock().await;
                 tools
                     .set_config(cfg_for_run)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                    .map_err(ApiError::internal_error)?;
                 tools.clone()
             };
 
@@ -1819,7 +1865,7 @@ impl LiveSession {
             let stream = runtime
                 .run_stream(&profile, messages, options)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+                .map_err(ApiError::internal_error)?;
             tokio::pin!(stream);
 
             let mut finish_reason: Option<String> = None;
@@ -1845,7 +1891,7 @@ impl LiveSession {
                             Err(err) => {
                                 match err {
                                     AgentRuntimeError::Cancelled => cancelled = true,
-                                    other => runtime_error = Some(other.to_string()),
+                                    other => runtime_error = Some(format_error_chain_text(&other)),
                                 }
                                 break;
                             }
@@ -1897,6 +1943,15 @@ impl LiveSession {
                     .record_finish(&mut session, persisted_finish_reason)
                     .await;
             }
+
+            tracing::info!(
+                event = "run.finished",
+                session_id = %self.session_id,
+                run_id = %run.id,
+                state = ?run.state,
+                finish_reason = %run.finish_reason.as_deref().unwrap_or(""),
+                error = %run.error.as_ref().map(|e| e.message.as_str()).unwrap_or(""),
+            );
 
             write_run_file(&self.runs_dir, &run).await?;
 
@@ -1954,7 +2009,7 @@ impl LiveSession {
         let workspace_root = PathBuf::from(settings.workspace_root.trim());
         tokio::fs::create_dir_all(&workspace_root)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .map_err(ApiError::internal_error)?;
 
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = {
@@ -1964,7 +2019,7 @@ impl LiveSession {
             } else {
                 tools
                     .set_config(cfg_for_tools)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                    .map_err(ApiError::internal_error)?;
             }
             tools.clone()
         };

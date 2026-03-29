@@ -1,5 +1,7 @@
 mod otlp;
 
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gethostname::gethostname;
@@ -38,10 +40,11 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalLogs {
     None,
     Stdout,
+    File { path: PathBuf },
 }
 
 #[derive(Default)]
@@ -112,6 +115,49 @@ impl OtelProvider {
     }
 }
 
+#[derive(Clone)]
+struct LockedFileWriter(Arc<Mutex<std::fs::File>>);
+
+impl std::io::Write for LockedFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("kiliax-otel log file lock poisoned")
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0
+            .lock()
+            .expect("kiliax-otel log file lock poisoned")
+            .flush()
+    }
+}
+
+#[derive(Clone)]
+struct MakeLockedFileWriter(LockedFileWriter);
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for MakeLockedFileWriter {
+    type Writer = LockedFileWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.0.clone()
+    }
+}
+
+fn file_writer(path: &Path) -> anyhow::Result<MakeLockedFileWriter> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    Ok(MakeLockedFileWriter(LockedFileWriter(Arc::new(Mutex::new(
+        file,
+    )))))
+}
+
 pub fn init(
     cfg: &kiliax_core::config::Config,
     service_name: &'static str,
@@ -125,12 +171,25 @@ pub fn init(
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
     if !cfg.otel.enabled {
-        if local_logs == LocalLogs::Stdout {
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(tracing_subscriber::fmt::layer())
-                .try_init()
-                .ok();
+        match local_logs {
+            LocalLogs::None => {}
+            LocalLogs::Stdout => {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(tracing_subscriber::fmt::layer())
+                    .try_init()
+                    .ok();
+            }
+            LocalLogs::File { path } => {
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .with_writer(file_writer(&path)?)
+                    .with_ansi(false);
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt_layer)
+                    .try_init()
+                    .ok();
+            }
         }
         return Ok(OtelGuard::default());
     }
@@ -145,14 +204,37 @@ pub fn init(
         global::set_meter_provider(mp);
     }
 
-    let fmt_layer = (local_logs == LocalLogs::Stdout).then_some(tracing_subscriber::fmt::layer());
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(provider.tracing_layer(service_name))
-        .with(provider.logger_layer())
-        .with(fmt_layer)
-        .try_init()
-        .ok();
+    match local_logs {
+        LocalLogs::None => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(provider.tracing_layer(service_name))
+                .with(provider.logger_layer())
+                .try_init()
+                .ok();
+        }
+        LocalLogs::Stdout => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(provider.tracing_layer(service_name))
+                .with(provider.logger_layer())
+                .with(tracing_subscriber::fmt::layer())
+                .try_init()
+                .ok();
+        }
+        LocalLogs::File { path } => {
+            let fmt_layer = tracing_subscriber::fmt::layer()
+                .with_writer(file_writer(&path)?)
+                .with_ansi(false);
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(provider.tracing_layer(service_name))
+                .with(provider.logger_layer())
+                .with(fmt_layer)
+                .try_init()
+                .ok();
+        }
+    }
 
     if matches!(cfg.otel.capture.mode, OtelCaptureMode::Full) {
         tracing::info!(

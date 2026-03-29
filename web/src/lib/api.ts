@@ -13,11 +13,23 @@ import type {
 export class ApiError extends Error {
   status: number;
   code?: string;
+  traceId?: string;
+  details?: unknown;
+  bodyText?: string;
 
   constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
     this.code = code;
+  }
+}
+
+function safeJsonParse(text: string): any | null {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
   }
 }
 
@@ -33,12 +45,21 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
   const text = await resp.text();
-  const json = text ? (JSON.parse(text) as any) : null;
+  const json = safeJsonParse(text);
 
   if (!resp.ok) {
     const code = json?.error?.code ?? undefined;
-    const message = json?.error?.message ?? resp.statusText;
-    throw new ApiError(resp.status, message, code);
+    const message = json?.error?.message ?? (text || resp.statusText);
+    const err = new ApiError(resp.status, message, code);
+    err.traceId = json?.trace_id ?? undefined;
+    err.details = json?.error?.details ?? undefined;
+    err.bodyText = text || undefined;
+    throw err;
+  }
+  if (json == null) {
+    const err = new ApiError(resp.status, "Invalid JSON response");
+    err.bodyText = text || undefined;
+    throw err;
   }
   return json as T;
 }

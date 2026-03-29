@@ -140,5 +140,6 @@ export interface RunCreateRequest {
 }
 
 export interface ApiErrorShape {
-  error?: { code?: string; message?: string };
+  error?: { code?: string; message?: string; details?: unknown };
+  trace_id?: string;
 }
