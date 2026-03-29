@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{MatchedPath, Path, Query, State};
+use axum::extract::{ConnectInfo, MatchedPath, Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::Html;
 use axum::middleware;
@@ -28,6 +28,52 @@ use tracing::Span;
 
 use crate::error::{ApiError, ApiErrorCode};
 use crate::state::ServerState;
+
+async fn access_log_middleware(
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let method = req.method().clone();
+    let version = req.version();
+    let uri = req.uri().clone();
+    let remote = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| *addr);
+
+    let started = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let latency_ms = started.elapsed().as_millis() as u64;
+    let status = resp.status().as_u16();
+
+    let target = strip_token_query(&uri);
+    let version = http_version(version);
+
+    if let Some(remote) = remote {
+        tracing::info!(
+            target: "kiliax_server::access",
+            "{remote} - \"{method} {target} {version}\" {status} {latency_ms}ms"
+        );
+    } else {
+        tracing::info!(
+            target: "kiliax_server::access",
+            "- - \"{method} {target} {version}\" {status} {latency_ms}ms"
+        );
+    }
+
+    resp
+}
+
+fn http_version(version: axum::http::Version) -> &'static str {
+    match version {
+        axum::http::Version::HTTP_09 => "HTTP/0.9",
+        axum::http::Version::HTTP_10 => "HTTP/1.0",
+        axum::http::Version::HTTP_11 => "HTTP/1.1",
+        axum::http::Version::HTTP_2 => "HTTP/2.0",
+        axum::http::Version::HTTP_3 => "HTTP/3.0",
+        _ => "HTTP/?",
+    }
+}
 
 pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
     let api = Router::new()
@@ -55,6 +101,7 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .fallback(serve_web)
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
+        .layer(middleware::from_fn(access_log_middleware))
 }
 
 fn http_trace_layer() -> TraceLayer<
@@ -75,13 +122,14 @@ fn http_trace_layer() -> TraceLayer<
                 .get(axum::http::header::USER_AGENT)
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
+            let target = strip_token_query(request.uri());
 
             let span = tracing::info_span!(
                 "http.request",
                 otel.kind = "server",
                 http.method = %request.method(),
                 http.route = %route,
-                http.target = %request.uri(),
+                http.target = %target,
                 http.user_agent = %user_agent,
                 http.status_code = tracing::field::Empty,
                 http.latency_ms = tracing::field::Empty,
@@ -181,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("kiliax-server listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
             shutdown.notified().await;
         })
