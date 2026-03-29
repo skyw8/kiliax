@@ -18,7 +18,7 @@ fn test_config() -> Config {
         ProviderConfig {
             base_url: "http://127.0.0.1:1".to_string(),
             api_key: None,
-            models: vec!["test-model".to_string()],
+            models: vec!["test-model".to_string(), "new-model".to_string()],
         },
     );
     cfg.mcp.servers = Vec::new();
@@ -587,6 +587,61 @@ async fn patch_settings_persists_and_emits_event() {
             ev.get("type").and_then(|v| v.as_str()) == Some("session_settings_changed")
         }),
         "events missing session_settings_changed: {items:?}"
+    );
+}
+
+#[tokio::test]
+async fn patch_settings_model_updates_config_default_model_for_new_sessions() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (_status, body) = read_json(resp).await;
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            &format!("/v1/sessions/{session_id}/settings"),
+            serde_json::json!({ "model_id": "test/new-model" }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("model_id"))
+            .and_then(|v| v.as_str()),
+        Some("test/new-model")
+    );
+
+    let config_path = dir.path().join("kiliax.yaml");
+    let config_text = tokio::fs::read_to_string(&config_path)
+        .await
+        .expect("kiliax.yaml");
+    assert!(
+        config_text.contains("default_model: test/new-model"),
+        "config default_model not updated: {config_text}"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("model_id"))
+            .and_then(|v| v.as_str()),
+        Some("test/new-model")
     );
 }
 
