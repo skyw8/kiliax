@@ -1,25 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { MoreHorizontal, Pin, Plus, Plug, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
   Capabilities,
   Message,
   Session,
-  SessionLastOutcome,
-  SessionRunState,
   SessionSummary,
   SkillSummary,
   ToolCall,
 } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Markdown } from "@/components/markdown";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -38,6 +37,33 @@ type StreamState = {
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
 };
 
+const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
+
+function displayModelId(modelId: string): string {
+  const idx = modelId.indexOf("/");
+  return idx === -1 ? modelId : modelId.slice(idx + 1);
+}
+
+function loadPinnedSessionIds(): string[] {
+  try {
+    const raw = localStorage.getItem(PINNED_SESSIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v) => typeof v === "string");
+  } catch {
+    return [];
+  }
+}
+
+function savePinnedSessionIds(ids: string[]) {
+  try {
+    localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(ids));
+  } catch {
+    // ignore
+  }
+}
+
 function statusBadge(summary: SessionSummary): {
   label: string;
   variant: "idle" | "step" | "done" | "error";
@@ -52,8 +78,16 @@ function statusBadge(summary: SessionSummary): {
   return { label: "idle", variant: "idle" };
 }
 
-function sortSessions(items: SessionSummary[]): SessionSummary[] {
+function sortSessions(items: SessionSummary[], pinnedIds: string[]): SessionSummary[] {
+  const pinnedRank = new Map(pinnedIds.map((id, idx) => [id, idx]));
   return [...items].sort((a, b) => {
+    const aPinned = pinnedRank.has(a.id);
+    const bPinned = pinnedRank.has(b.id);
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    if (aPinned && bPinned) {
+      return (pinnedRank.get(a.id) ?? 0) - (pinnedRank.get(b.id) ?? 0);
+    }
+
     const aRunning =
       a.status.run_state === "running" || a.status.run_state === "tooling";
     const bRunning =
@@ -115,9 +149,9 @@ function MessageRow({ msg }: { msg: Message }) {
   if (msg.role === "assistant") {
     return (
       <div className="flex justify-start">
-        <div className="max-w-[78%] rounded-2xl border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-900">
+        <div className="max-w-[78%] rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900">
           {msg.content ? (
-            <div className="whitespace-pre-wrap">{msg.content}</div>
+            <Markdown text={msg.content} />
           ) : (
             <div className="text-zinc-500">…</div>
           )}
@@ -165,6 +199,10 @@ function EmptyState() {
 export default function App() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() =>
+    loadPinnedSessionIds(),
+  );
+  const [sessionsVisible, setSessionsVisible] = useState(6);
   const route = useRoute();
   const selectedId = route.name === "session" ? route.sessionId : null;
   const [session, setSession] = useState<Session | null>(null);
@@ -185,7 +223,19 @@ export default function App() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [mcpSaving, setMcpSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const [sessionMenu, setSessionMenu] = useState<{
+    sessionId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const sessionMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    sessionId: string;
+  } | null>(null);
 
   const [cwdOpen, setCwdOpen] = useState(false);
   const [cwdDraft, setCwdDraft] = useState("");
@@ -196,7 +246,17 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
 
-  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
+  const sortedSessions = useMemo(
+    () => sortSessions(sessions, pinnedSessionIds),
+    [sessions, pinnedSessionIds],
+  );
+  const visibleSessions = useMemo(
+    () => sortedSessions.slice(0, sessionsVisible),
+    [sortedSessions, sessionsVisible],
+  );
+  const deleteSessionSummary = deleteConfirm
+    ? sortedSessions.find((s) => s.id === deleteConfirm.sessionId) ?? null
+    : null;
 
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
@@ -379,10 +439,30 @@ export default function App() {
     }
   }
 
-  async function openSkills() {
-    if (!selectedId) return;
+  async function deleteSession(sessionId: string) {
     try {
-      const res = await api.listSkills(selectedId);
+      await api.deleteSession(sessionId);
+      setPinnedSessionIds((prev) => prev.filter((id) => id !== sessionId));
+      if (selectedIdRef.current === sessionId) {
+        navigate("/", { replace: true });
+      }
+      await refreshSessions();
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  function togglePinnedSession(sessionId: string) {
+    setPinnedSessionIds((prev) => {
+      const exists = prev.includes(sessionId);
+      const next = exists ? prev.filter((id) => id !== sessionId) : [sessionId, ...prev];
+      return next;
+    });
+  }
+
+  async function openSkills() {
+    try {
+      const res = await api.listGlobalSkills();
       setSkills(res.items);
       setSkillsOpen(true);
     } catch (err) {
@@ -399,6 +479,11 @@ export default function App() {
     } catch (err) {
       handleApiError(err);
     }
+  }
+
+  async function openMcp() {
+    await refreshCapabilities();
+    setMcpOpen(true);
   }
 
   async function saveConfig() {
@@ -460,6 +545,52 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    savePinnedSessionIds(pinnedSessionIds);
+  }, [pinnedSessionIds]);
+
+  useEffect(() => {
+    setPinnedSessionIds((prev) => {
+      if (!prev.length) return prev;
+      const ids = new Set(sessions.map((s) => s.id));
+      const next = prev.filter((id) => ids.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [sessions]);
+
+  useEffect(() => {
+    setSessionsVisible((v) => {
+      const min = 6;
+      const next = Math.max(min, v);
+      return Math.min(next, sortedSessions.length || next);
+    });
+  }, [sortedSessions.length]);
+
+  useEffect(() => {
+    if (!sessionMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const el = sessionMenuRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      setSessionMenu(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSessionMenu(null);
+    };
+    const onScrollOrResize = () => setSessionMenu(null);
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [sessionMenu]);
+
+  useEffect(() => {
     selectedIdRef.current = selectedId;
     if (!selectedId) {
       setSession(null);
@@ -488,6 +619,11 @@ export default function App() {
   const selectedSummary = sortedSessions.find((s) => s.id === selectedId) ?? null;
   const selectedBadge = selectedSummary ? statusBadge(selectedSummary) : null;
 
+  const composerHasText = composerText.trim().length > 0;
+  const cancellableRunId =
+    selectedSummary?.status.active_run_id ?? pending[pending.length - 1]?.runId ?? null;
+  const showInterrupt = Boolean(selectedId) && Boolean(cancellableRunId) && !composerHasText;
+
   const agentOptions = capabilities?.agents ?? [];
   const modelOptions = capabilities?.models ?? [];
 
@@ -513,22 +649,27 @@ export default function App() {
     <div className="h-dvh w-full bg-white text-zinc-900">
       <div className="flex h-full">
         <aside className="flex w-[280px] flex-col border-r border-zinc-200 bg-zinc-50">
-          <div className="p-3">
-            <Button className="w-full" onClick={onNewSession}>
+          <div className="space-y-1 p-3">
+            <Button variant="ghost" className="w-full justify-start gap-2" onClick={onNewSession}>
+              <Plus className="h-4 w-4 text-violet-600" />
               New Session
             </Button>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <Button variant="outline" onClick={openSkills} disabled={!selectedId}>
-                Skills
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setMcpOpen(true)}
-                disabled={!selectedId}
-              >
-                MCP
-              </Button>
-            </div>
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2"
+              onClick={openSkills}
+            >
+              <Sparkles className="h-4 w-4 text-amber-600" />
+              Skills
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2"
+              onClick={openMcp}
+            >
+              <Plug className="h-4 w-4 text-emerald-600" />
+              MCP
+            </Button>
           </div>
 
           <Separator />
@@ -538,28 +679,54 @@ export default function App() {
               Sessions
             </div>
             <div className="space-y-1">
-              {sortedSessions.map((s) => {
+              {visibleSessions.map((s) => {
                 const badge = statusBadge(s);
                 const active = s.id === selectedId;
+                const pinned = pinnedSessionIds.includes(s.id);
                 return (
-                  <button
+                  <div
                     key={s.id}
-                    onClick={() => selectSession(s.id)}
                     className={[
-                      "w-full rounded-md px-2 py-2 text-left",
+                      "group flex items-start gap-1 rounded-md px-2 py-2",
                       active ? "bg-white shadow-sm" : "hover:bg-white/70",
                     ].join(" ")}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="truncate text-sm text-zinc-900">
-                        {s.title || s.id}
+                    <button
+                      onClick={() => selectSession(s.id)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex items-center gap-1 text-sm text-zinc-900">
+                          {pinned ? (
+                            <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
+                          ) : null}
+                          <div className="truncate">{s.title || s.id}</div>
+                        </div>
+                        <Badge variant={badge.variant}>{badge.label}</Badge>
                       </div>
-                      <Badge variant={badge.variant}>{badge.label}</Badge>
-                    </div>
-                    <div className="mt-1 truncate text-xs text-zinc-500">
-                      {s.settings.agent} · {s.settings.model_id}
-                    </div>
-                  </button>
+                      <div className="mt-1 truncate text-xs text-zinc-500">
+                        {displayModelId(s.settings.model_id)}
+                      </div>
+                    </button>
+
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      aria-label="Session actions"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                        setSessionMenu((prev) => {
+                          if (prev?.sessionId === s.id) return null;
+                          return { sessionId: s.id, x: rect.right, y: rect.bottom };
+                        });
+                      }}
+                    >
+                      <MoreHorizontal className="h-4 w-4 text-zinc-500" />
+                    </Button>
+                  </div>
                 );
               })}
               {!sortedSessions.length ? (
@@ -567,20 +734,35 @@ export default function App() {
                   No sessions
                 </div>
               ) : null}
+              {sortedSessions.length > sessionsVisible ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start text-xs text-zinc-600"
+                  onClick={() => setSessionsVisible((v) => v + 6)}
+                >
+                  Load more
+                </Button>
+              ) : null}
             </div>
           </div>
 
           <Separator />
 
           <div className="p-3">
-            <Button variant="ghost" className="w-full justify-start" onClick={openSettings}>
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2"
+              onClick={openSettings}
+            >
+              <Settings className="h-4 w-4 text-blue-600" />
               Settings
             </Button>
           </div>
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
+          <div className="flex items-start justify-between gap-4 border-b border-zinc-200 px-4 py-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">
                 {selectedSummary?.title ?? "New thread"}
@@ -593,11 +775,56 @@ export default function App() {
                 )}
                 {session ? (
                   <span className="truncate">
-                    {session.settings.agent} · {session.settings.model_id}
+                    {session.settings.agent} · {displayModelId(session.settings.model_id)}
                   </span>
                 ) : null}
               </div>
             </div>
+
+            {session ? (
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <label className="text-xs text-zinc-600">Agent</label>
+                <select
+                  className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs"
+                  value={session.settings.agent}
+                  onChange={(e) => patchSession({ agent: e.target.value })}
+                >
+                  {agentOptions.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="ml-2 text-xs text-zinc-600">Model</label>
+                <select
+                  className="h-8 min-w-[220px] rounded-md border border-zinc-200 bg-white px-2 text-xs"
+                  value={session.settings.model_id}
+                  onChange={(e) => patchSession({ model_id: e.target.value })}
+                >
+                  {modelOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="max-w-[360px] justify-start gap-2"
+                  onClick={() => {
+                    setCwdDraft(session.settings.workspace_root ?? "");
+                    setCwdOpen(true);
+                  }}
+                >
+                  <span className="text-xs text-zinc-600">cwd</span>
+                  <span className="min-w-0 truncate font-mono text-xs text-zinc-800">
+                    {session.settings.workspace_root ?? ""}
+                  </span>
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex-1 overflow-auto px-4 py-4">
@@ -611,7 +838,6 @@ export default function App() {
                   <div key={`pending:${p.runId}`} className="flex justify-end">
                     <div className="max-w-[78%] rounded-2xl bg-zinc-900/90 px-4 py-2 text-sm text-zinc-50">
                       {p.content}
-                      <div className="mt-1 text-xs text-zinc-200">queued</div>
                     </div>
                   </div>
                 ))}
@@ -649,8 +875,8 @@ export default function App() {
 
                 {stream.assistant ? (
                   <div className="flex justify-start">
-                    <div className="max-w-[78%] rounded-2xl border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-900">
-                      <div className="whitespace-pre-wrap">{stream.assistant}</div>
+                    <div className="max-w-[78%] rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900">
+                      <Markdown text={stream.assistant} />
                     </div>
                   </div>
                 ) : null}
@@ -664,76 +890,6 @@ export default function App() {
 
           <div className="border-t border-zinc-200 bg-white px-4 py-3">
             <div className="mx-auto w-full max-w-3xl">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <label className="text-xs text-zinc-600">Agent</label>
-                <select
-                  className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs"
-                  value={session?.settings.agent ?? ""}
-                  disabled={!session}
-                  onChange={(e) => patchSession({ agent: e.target.value })}
-                >
-                  <option value="" disabled>
-                    -
-                  </option>
-                  {agentOptions.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-
-                <label className="ml-2 text-xs text-zinc-600">Model</label>
-                <select
-                  className="h-8 min-w-[220px] rounded-md border border-zinc-200 bg-white px-2 text-xs"
-                  value={session?.settings.model_id ?? ""}
-                  disabled={!session}
-                  onChange={(e) => patchSession({ model_id: e.target.value })}
-                >
-                  <option value="" disabled>
-                    -
-                  </option>
-                  {modelOptions.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!session}
-                  onClick={() =>
-                    patchSession({
-                      workspace_root: tmpWorkspacePath(),
-                    })
-                  }
-                >
-                  New tmp cwd
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!session}
-                  onClick={() => {
-                    setCwdDraft(session?.settings.workspace_root ?? "");
-                    setCwdOpen(true);
-                  }}
-                >
-                  Set cwd
-                </Button>
-
-                {session ? (
-                  <div className="truncate text-xs text-zinc-600">
-                    cwd:{" "}
-                    <span className="font-mono text-zinc-800">
-                      {session.settings.workspace_root}
-                    </span>
-                  </div>
-                ) : null}
-              </div>
-
               <div className="flex items-end gap-2">
                 <Textarea
                   value={composerText}
@@ -748,9 +904,26 @@ export default function App() {
                     }
                   }}
                 />
-                <Button onClick={onSend} disabled={!selectedId || !composerText.trim()}>
-                  Send
-                </Button>
+                {showInterrupt ? (
+                  <Button
+                    className="bg-red-600 text-zinc-50 hover:bg-red-500"
+                    onClick={async () => {
+                      if (!cancellableRunId) return;
+                      try {
+                        await api.cancelRun(cancellableRunId);
+                        await refreshSessions();
+                      } catch (err) {
+                        handleApiError(err);
+                      }
+                    }}
+                  >
+                    Interrupt
+                  </Button>
+                ) : (
+                  <Button onClick={onSend} disabled={!selectedId || !composerHasText}>
+                    Send
+                  </Button>
+                )}
               </div>
             </div>
           </div>
@@ -785,7 +958,7 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Skills</DialogTitle>
-            <DialogDescription>Discovered for current workspace</DialogDescription>
+            <DialogDescription>Discovered from skills roots</DialogDescription>
           </DialogHeader>
           <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
             {skills.length ? (
@@ -813,10 +986,10 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>MCP</DialogTitle>
-            <DialogDescription>Toggle per-session MCP servers</DialogDescription>
+            <DialogDescription>Global MCP servers (kiliax.yaml)</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            {(session?.settings.mcp.servers ?? []).map((s) => (
+            {(capabilities?.mcp_servers ?? []).map((s) => (
               <label
                 key={s.id}
                 className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2"
@@ -824,25 +997,89 @@ export default function App() {
                 <div className="min-w-0">
                   <div className="truncate text-sm">{s.id}</div>
                   <div className="mt-0.5 truncate text-xs text-zinc-600">
-                    {(session?.mcp_status ?? [])
-                      .find((x) => x.id === s.id)
-                      ?.state?.toString() ?? "unknown"}
+                    {s.state?.toString() ?? "unknown"}
+                    {s.last_error ? ` · ${s.last_error}` : ""}
                   </div>
                 </div>
                 <input
                   type="checkbox"
                   checked={s.enable}
-                  onChange={(e) =>
-                    patchSession({
-                      mcp: { servers: [{ id: s.id, enable: e.target.checked }] },
-                    })
-                  }
+                  disabled={mcpSaving}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setMcpSaving(true);
+                    try {
+                      await api.patchConfigMcp({ servers: [{ id: s.id, enable: next }] });
+                      await refreshCapabilities();
+                    } catch (err) {
+                      handleApiError(err);
+                    } finally {
+                      setMcpSaving(false);
+                    }
+                  }}
                 />
               </label>
             ))}
-            {!session?.settings.mcp.servers.length ? (
+            {!capabilities?.mcp_servers.length ? (
               <div className="text-center text-sm text-zinc-500">No MCP servers</div>
             ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {sessionMenu ? (
+        <div
+          ref={sessionMenuRef}
+          style={{ left: sessionMenu.x, top: sessionMenu.y }}
+          className="fixed z-50 mt-1 w-44 -translate-x-full rounded-md border border-zinc-200 bg-white p-1 shadow-lg"
+        >
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
+            onClick={() => {
+              const id = sessionMenu.sessionId;
+              togglePinnedSession(id);
+              setSessionMenu(null);
+            }}
+          >
+            <Pin className="h-4 w-4 text-violet-600" />
+            {pinnedSessionIds.includes(sessionMenu.sessionId) ? "Unpin" : "Pin"}
+          </button>
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+            onClick={() => {
+              setDeleteConfirm({ sessionId: sessionMenu.sessionId });
+              setSessionMenu(null);
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </button>
+        </div>
+      ) : null}
+
+      <Dialog open={Boolean(deleteConfirm)} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete session?</DialogTitle>
+            <DialogDescription className="truncate">
+              {deleteSessionSummary?.title ?? deleteSessionSummary?.id ?? ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 text-zinc-50 hover:bg-red-500"
+              onClick={async () => {
+                const id = deleteConfirm?.sessionId;
+                if (!id) return;
+                setDeleteConfirm(null);
+                await deleteSession(id);
+              }}
+            >
+              Delete
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

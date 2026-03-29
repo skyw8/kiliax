@@ -3,6 +3,7 @@ import type {
   ConfigResponse,
   ConfigUpdateRequest,
   MessageListResponse,
+  McpServerSetting,
   RunCreateRequest,
   Session,
   SessionListResponse,
@@ -61,6 +62,9 @@ export const api = {
   getSession(sessionId: string): Promise<Session> {
     return apiFetch<Session>(`/v1/sessions/${sessionId}`);
   },
+  deleteSession(sessionId: string): Promise<void> {
+    return apiFetch<void>(`/v1/sessions/${sessionId}`, { method: "DELETE" });
+  },
   patchSessionSettings(sessionId: string, patch: unknown): Promise<Session> {
     return apiFetch<Session>(`/v1/sessions/${sessionId}/settings`, {
       method: "PATCH",
@@ -90,7 +94,16 @@ export const api = {
       body: JSON.stringify(req),
     });
   },
+  patchConfigMcp(req: { servers: McpServerSetting[] }): Promise<void> {
+    return apiFetch<void>("/v1/config/mcp", {
+      method: "PATCH",
+      body: JSON.stringify(req),
+    });
+  },
   listSkills(sessionId: string): Promise<SkillListResponse> {
     return apiFetch<SkillListResponse>(`/v1/sessions/${sessionId}/skills`);
+  },
+  listGlobalSkills(): Promise<SkillListResponse> {
+    return apiFetch<SkillListResponse>("/v1/skills");
   },
 };
