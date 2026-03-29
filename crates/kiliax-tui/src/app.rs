@@ -1854,7 +1854,10 @@ fn update_mcp_server_enable_yaml(text: &str, server_name: &str, enable: bool) ->
         let Some(rest) = rest.strip_prefix("name:") else {
             continue;
         };
-        let raw_value = rest.split('#').next().unwrap_or("").trim();
+        let raw_value = match yaml_comment_hash_pos(rest) {
+            Some(pos) => &rest[..pos],
+            None => rest,
+        };
         let value = parse_yaml_scalar_string(raw_value);
         if value == server_name {
             start_idx = Some(idx);
@@ -1931,12 +1934,69 @@ fn parse_yaml_scalar_string(raw: &str) -> String {
     raw.to_string()
 }
 
+fn yaml_comment_hash_pos(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if in_double {
+            if b == b'\\' {
+                i = i.saturating_add(2);
+                continue;
+            }
+            if b == b'"' {
+                in_double = false;
+            }
+            i = i.saturating_add(1);
+            continue;
+        }
+
+        if in_single {
+            if b == b'\'' {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                    i = i.saturating_add(2);
+                    continue;
+                }
+                in_single = false;
+            }
+            i = i.saturating_add(1);
+            continue;
+        }
+
+        match b {
+            b'\'' => {
+                in_single = true;
+                i = i.saturating_add(1);
+            }
+            b'"' => {
+                in_double = true;
+                i = i.saturating_add(1);
+            }
+            b'#' => {
+                if i == 0 || bytes[i - 1].is_ascii_whitespace() {
+                    return Some(i);
+                }
+                i = i.saturating_add(1);
+            }
+            _ => {
+                i = i.saturating_add(1);
+            }
+        }
+    }
+
+    None
+}
+
 fn comment_start(line: &str) -> Option<usize> {
-    let hash = line.find('#')?;
+    let hash = yaml_comment_hash_pos(line)?;
     let bytes = line.as_bytes();
     let mut start = hash;
     while start > 0 && bytes[start - 1].is_ascii_whitespace() {
-        start = start.saturating_sub(1);
+        start -= 1;
     }
     Some(start)
 }
@@ -3210,5 +3270,29 @@ mod tests {
         let out = update_mcp_server_enable_yaml(input, "context7", false).unwrap();
         assert!(out.contains("enable: false # keep"));
         assert!(!out.contains("enable: true"));
+    }
+
+    #[test]
+    fn update_mcp_server_enable_yaml_matches_unquoted_name_with_hash() {
+        let input = "mcp:\n  servers:\n    - name: context#7\n      enable: true\n      command: npx\n";
+        let out = update_mcp_server_enable_yaml(input, "context#7", false).unwrap();
+        assert!(out.contains("- name: context#7\n      enable: false\n      command: npx"));
+    }
+
+    #[test]
+    fn update_mcp_server_enable_yaml_matches_quoted_name_with_hash() {
+        let input = "mcp:\n  servers:\n    - name: \"context#7\"\n      enable: true # keep\n      command: npx\n";
+        let out = update_mcp_server_enable_yaml(input, "context#7", false).unwrap();
+        assert!(out.contains("enable: false # keep"));
+        assert!(!out.contains("enable: true"));
+    }
+
+    #[test]
+    fn comment_start_ignores_hash_without_whitespace() {
+        assert!(comment_start("enable: true#keep").is_none());
+
+        let line = "enable: true   # keep";
+        let pos = comment_start(line).unwrap();
+        assert_eq!(&line[pos..], "   # keep");
     }
 }
