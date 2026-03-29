@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = FileSessionStore::global().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "failed to determine home directory for sessions (expected ~/sessions)",
+            "failed to determine home directory for sessions (expected ~/.kiliax/sessions)",
         )
     })?;
 

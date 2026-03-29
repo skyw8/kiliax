@@ -31,12 +31,13 @@ impl DaemonState {
     }
 }
 
-fn state_path(workspace_root: &Path) -> PathBuf {
-    workspace_root.join(".kiliax").join("server.json")
+fn home_kiliax_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("failed to resolve home directory for ~/.kiliax")?;
+    Ok(home.join(".kiliax"))
 }
 
-fn log_path(workspace_root: &Path) -> PathBuf {
-    workspace_root.join(".kiliax").join("server.log")
+fn state_path() -> Result<PathBuf> {
+    Ok(home_kiliax_dir()?.join("server.json"))
 }
 
 fn connect_host_for_bind_host(bind_host: &str) -> &str {
@@ -171,7 +172,7 @@ pub async fn ensure_running(
     config_path: &Path,
     server_cfg: &ServerConfig,
 ) -> Result<DaemonState> {
-    let state_file = state_path(workspace_root);
+    let state_file = state_path()?;
     let desired_bind_host = server_cfg
         .host
         .as_deref()
@@ -264,9 +265,10 @@ pub async fn ensure_running(
         let _ = tokio::fs::remove_file(&state_file).await;
     }
 
-    tokio::fs::create_dir_all(workspace_root.join(".kiliax"))
+    let kiliax_dir = home_kiliax_dir()?;
+    tokio::fs::create_dir_all(&kiliax_dir)
         .await
-        .context("failed to create .kiliax dir")?;
+        .context("failed to create ~/.kiliax dir")?;
 
     let mut port = desired_port.unwrap_or(DEFAULT_PORT);
     if !port_is_free(&desired_bind_host, port) {
@@ -311,7 +313,7 @@ pub async fn ensure_running(
         }
     }
 
-    let log_file_path = log_path(workspace_root);
+    let log_file_path = kiliax_dir.join("server.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -392,8 +394,18 @@ pub async fn ensure_running(
                 .arg("--")
                 .args(&server_args)
                 .stdin(Stdio::null())
-                .stdout(Stdio::from(std::fs::OpenOptions::new().create(true).append(true).open(log_path(workspace_root))?))
-                .stderr(Stdio::from(std::fs::OpenOptions::new().create(true).append(true).open(log_path(workspace_root))?))
+                .stdout(Stdio::from(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&log_file_path)?,
+                ))
+                .stderr(Stdio::from(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&log_file_path)?,
+                ))
                 .current_dir(
                     manifest
                         .parent()
@@ -440,8 +452,8 @@ pub enum StopOutcome {
     NotReachable,
 }
 
-pub async fn stop(workspace_root: &Path) -> Result<StopOutcome> {
-    let state_file = state_path(workspace_root);
+pub async fn stop() -> Result<StopOutcome> {
+    let state_file = state_path()?;
     let text = match tokio::fs::read_to_string(&state_file).await {
         Ok(t) => t,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(StopOutcome::NotRunning),

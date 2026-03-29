@@ -40,7 +40,7 @@ minimal
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
 - `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 请求前规整 tool_calls/Tool 消息序列（补齐缺失/保证顺序），避免 provider 因 tool_call_id 未响应报 400）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`，并在 tool_calls step 中累积为 assistant 的 `reasoning_content` 以便下一轮回放；**OTEL run span + streaming response 捕获**
-- `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `~/sessions/<session_id>/`）；title 从首条 user 文本派生并做 UTF-8 安全截断（避免中文等多字节字符触发 panic）
+- `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `~/.kiliax/sessions/<session_id>/`）；title 从首条 user 文本派生并做 UTF-8 安全截断（避免中文等多字节字符触发 panic）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`；定义 `ToolParallelism` 与并行能力判定
   - `builtin/`: codex 风格内置工具 schema + 执行（按工具拆分）
@@ -71,7 +71,7 @@ TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 co
 
 - `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect`/`reqwest` 等）
 - `crates/kiliax-tui/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`、`serve start|stop|restart`）；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）；不再自动拉起 `kiliax-server`；**OTEL 初始化（无 stderr/fmt 输出）**
-- `crates/kiliax-tui/src/daemon.rs`: 后台 `kiliax-server` 管理（`kiliax serve start|stop|restart`；健康检查；启动时校验 web root 可用性，不可用则尝试 stop 并重启；开发态优先通过 `cargo run -p kiliax-server` 确保与源码同步）；状态写入 `.kiliax/server.json`，日志写入 `.kiliax/server.log`
+- `crates/kiliax-tui/src/daemon.rs`: 后台 `kiliax-server` 管理（`kiliax serve start|stop|restart`；健康检查；启动时校验 web root 可用性，不可用则尝试 stop 并重启；开发态优先通过 `cargo run -p kiliax-server` 确保与源码同步）；状态写入 `~/.kiliax/server.json`，日志写入 `~/.kiliax/server.log`
 - `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示（`shell_command` 仅展示关键命令/参数，省略 bash -lc/cd/env 等包装与冗长参数）；`update_plan` 以 `[]` 待办/完成删除线展示（不显示 pending 等状态字样）；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable`（YAML 行编辑，正确处理 `#` 注释/引号）并 checkpoint session（刷新 system preamble）；/new 切换前会清理空 session
 - `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；/model、/mcp 等 picker（题头紫色、选中蓝色、未选中白色；MCP 未开启灰色/开启白色）；底部 footer 仅显示 status + agent + model_id（去 provider）
 - `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines

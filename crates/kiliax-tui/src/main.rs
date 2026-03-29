@@ -136,20 +136,20 @@ async fn main() -> Result<()> {
                 );
             }
             Some("stop") => {
-                match daemon::stop(&workspace_root).await? {
+                match daemon::stop().await? {
                     daemon::StopOutcome::NotRunning => {
-                        println!("kiliax-server not running (no .kiliax/server.json)");
+                        println!("kiliax-server not running (no ~/.kiliax/server.json)");
                     }
                     daemon::StopOutcome::Stopped => {
                         println!("kiliax-server stopped");
                     }
                     daemon::StopOutcome::NotReachable => {
-                        println!("kiliax-server not reachable (removed stale .kiliax/server.json)");
+                        println!("kiliax-server not reachable (removed stale ~/.kiliax/server.json)");
                     }
                 }
             }
             Some("restart") => {
-                let _ = daemon::stop(&workspace_root).await?;
+                let _ = daemon::stop().await?;
                 let Some(loaded) = load_or_init_config()? else {
                     return Ok(());
                 };
@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
         kiliax_otel::LocalLogs::None,
     )?;
     let store = FileSessionStore::global()
-        .context("failed to determine home directory for sessions (expected ~/sessions)")?;
+        .context("failed to determine home directory for sessions (expected ~/.kiliax/sessions)")?;
 
     let mut resumed: Option<kiliax_core::session::SessionState> = None;
     if let Some(id) = resume_id.as_ref() {

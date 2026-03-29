@@ -46,7 +46,7 @@ impl ServerState {
         token: Option<String>,
     ) -> Result<Self, anyhow::Error> {
         let store = FileSessionStore::global()
-            .ok_or_else(|| anyhow::anyhow!("failed to determine home directory for sessions (expected ~/sessions)"))?;
+            .ok_or_else(|| anyhow::anyhow!("failed to determine home directory for sessions (expected ~/.kiliax/sessions)"))?;
         Self::new_inner(workspace_root, config_path, config, token, true, store).await
     }
 
@@ -69,7 +69,14 @@ impl ServerState {
         runner_enabled: bool,
         store: FileSessionStore,
     ) -> Result<Self, anyhow::Error> {
-        let runs_dir = workspace_root.join(".kiliax").join("runs");
+        let runs_dir = if runner_enabled {
+            let home = dirs::home_dir().ok_or_else(|| {
+                anyhow::anyhow!("failed to resolve home directory for ~/.kiliax/runs")
+            })?;
+            home.join(".kiliax").join("runs")
+        } else {
+            workspace_root.join(".kiliax").join("runs")
+        };
         tokio::fs::create_dir_all(&runs_dir).await?;
 
         let tools_for_caps = ToolEngine::new(&workspace_root, config.clone());
