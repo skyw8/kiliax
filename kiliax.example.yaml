@@ -17,6 +17,17 @@ otel:
     # Base endpoint for your OTEL Collector.
     # HTTP: http://localhost:4318
     # gRPC: http://localhost:4317
+    #
+    # Langfuse (OTLP ingest):
+    # - endpoint: https://<LANGFUSE_HOST>/api/public/otel
+    # - headers.authorization: Basic <base64(public_key:secret_key)>
+    #   (tip) echo -n "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 | tr -d '\n'
+    #
+    # Example:
+    #   endpoint: https://cloud.langfuse.com/api/public/otel
+    #   protocol: http_protobuf
+    #   headers:
+    #     authorization: Basic <...>
     endpoint: http://localhost:4318
     # http_protobuf (default) | http_json | grpc
     protocol: http_protobuf

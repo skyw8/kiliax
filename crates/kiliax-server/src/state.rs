@@ -1705,7 +1705,7 @@ impl LiveSession {
                 api::RunInput::Text { text } => text.clone(),
             };
             self.record_message(CoreMessage::User {
-                content: UserMessageContent::Text(user_text),
+                content: UserMessageContent::Text(user_text.clone()),
             })
             .await?;
 
@@ -1723,6 +1723,39 @@ impl LiveSession {
 
             Span::current().record("agent", effective.agent.as_str());
             Span::current().record("model_id", effective.model_id.as_str());
+
+            // Langfuse OTEL ingest expects trace-level attributes on spans.
+            let current_span = Span::current();
+            kiliax_core::telemetry::spans::set_attribute(
+                &current_span,
+                "langfuse.session.id",
+                self.session_id.to_string(),
+            );
+            kiliax_core::telemetry::spans::set_attribute(
+                &current_span,
+                "langfuse.environment",
+                config.otel.environment.clone(),
+            );
+            let trace_name = if kiliax_core::telemetry::capture_full() {
+                user_text.chars().take(80).collect::<String>()
+            } else {
+                format!("{} {}", effective.agent, effective.model_id)
+            };
+            if !trace_name.trim().is_empty() {
+                kiliax_core::telemetry::spans::set_attribute(
+                    &current_span,
+                    "langfuse.trace.name",
+                    trace_name,
+                );
+            }
+            if kiliax_core::telemetry::capture_full() {
+                let captured = kiliax_core::telemetry::capture_text(&user_text);
+                kiliax_core::telemetry::spans::set_attribute(
+                    &current_span,
+                    "langfuse.trace.input",
+                    captured.as_str().to_string(),
+                );
+            }
 
             // Per-run MCP config.
             let cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;

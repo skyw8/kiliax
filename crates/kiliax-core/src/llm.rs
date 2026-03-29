@@ -19,6 +19,7 @@ use async_openai::{
     Client,
 };
 use base64::Engine as _;
+use opentelemetry::KeyValue;
 use reqwest::header::{HeaderMap, AUTHORIZATION};
 use reqwest_eventsource::{Event, RequestBuilderExt};
 use secrecy::{ExposeSecret, SecretString};
@@ -100,9 +101,24 @@ impl LlmClient {
             request.tools = tools.len() as u64,
         );
 
+        telemetry::spans::set_attributes(
+            &span,
+            [
+                KeyValue::new("gen_ai.system", self.route.provider.clone()),
+                KeyValue::new("gen_ai.request.model", self.route.model.clone()),
+            ],
+        );
+
         if telemetry::capture_enabled() {
             if let Ok(json) = serde_json::to_string(&internal_messages) {
                 let captured = telemetry::capture_text(&json);
+                if telemetry::capture_full() {
+                    telemetry::spans::set_attribute(
+                        &span,
+                        "gen_ai.prompt",
+                        captured.as_str().to_string(),
+                    );
+                }
                 tracing::info!(
                     target: "kiliax_core::telemetry",
                     parent: &span,
@@ -188,6 +204,18 @@ impl LlmClient {
         match &res {
             Ok(ok) => {
                 let usage = ok.usage.as_ref();
+                if let Some(usage) = usage {
+                    telemetry::spans::set_attributes(
+                        &span,
+                        [
+                            KeyValue::new("gen_ai.usage.input_tokens", usage.prompt_tokens as i64),
+                            KeyValue::new(
+                                "gen_ai.usage.output_tokens",
+                                usage.completion_tokens as i64,
+                            ),
+                        ],
+                    );
+                }
                 telemetry::metrics::record_llm_call(
                     &self.route.provider,
                     &self.route.model,
@@ -201,6 +229,13 @@ impl LlmClient {
                 if telemetry::capture_enabled() {
                     if let Ok(json) = serde_json::to_string(&ok.message) {
                         let captured = telemetry::capture_text(&json);
+                        if telemetry::capture_full() {
+                            telemetry::spans::set_attribute(
+                                &span,
+                                "gen_ai.completion",
+                                captured.as_str().to_string(),
+                            );
+                        }
                         tracing::info!(
                             target: "kiliax_core::telemetry",
                             parent: &span,
@@ -259,9 +294,24 @@ impl LlmClient {
             request.tools = tools.len() as u64,
         );
 
+        telemetry::spans::set_attributes(
+            &span,
+            [
+                KeyValue::new("gen_ai.system", self.route.provider.clone()),
+                KeyValue::new("gen_ai.request.model", self.route.model.clone()),
+            ],
+        );
+
         if telemetry::capture_enabled() {
             if let Ok(json) = serde_json::to_string(&internal_messages) {
                 let captured = telemetry::capture_text(&json);
+                if telemetry::capture_full() {
+                    telemetry::spans::set_attribute(
+                        &span,
+                        "gen_ai.prompt",
+                        captured.as_str().to_string(),
+                    );
+                }
                 tracing::info!(
                     target: "kiliax_core::telemetry",
                     parent: &span,
@@ -336,10 +386,14 @@ impl LlmClient {
             let span_for_task = span.clone();
             let provider = provider.clone();
             let model = model.clone();
+            let capture_completion = telemetry::capture_full();
+            let max_completion_bytes = telemetry::capture_max_bytes();
             tokio::spawn(
                 async move {
                     let mut last_usage: Option<CompletionUsage> = None;
                     let mut outcome = "ok";
+                    let mut completion = String::new();
+                    let mut completion_truncated = false;
 
                     while let Some(ev) = event_source.next().await {
                         match ev {
@@ -361,6 +415,30 @@ impl LlmClient {
                                         let chunk = chat_stream_chunk_from_byot(resp);
                                         if let Some(usage) = chunk.usage.clone() {
                                             last_usage = Some(usage);
+                                        }
+                                        if capture_completion && !completion_truncated {
+                                            if let Some(delta) = chunk.content_delta.as_deref() {
+                                                if max_completion_bytes == 0 {
+                                                    completion_truncated = true;
+                                                } else if completion.len() + delta.len()
+                                                    <= max_completion_bytes
+                                                {
+                                                    completion.push_str(delta);
+                                                } else {
+                                                    let remaining = max_completion_bytes
+                                                        .saturating_sub(completion.len());
+                                                    if remaining > 0 {
+                                                        let mut end = remaining;
+                                                        while end > 0
+                                                            && !delta.is_char_boundary(end)
+                                                        {
+                                                            end -= 1;
+                                                        }
+                                                        completion.push_str(&delta[..end]);
+                                                    }
+                                                    completion_truncated = true;
+                                                }
+                                            }
                                         }
                                         Ok(chunk)
                                     }
@@ -395,6 +473,30 @@ impl LlmClient {
                         last_usage.as_ref().map(|u| u.prompt_tokens as u64),
                         last_usage.as_ref().map(|u| u.completion_tokens as u64),
                     );
+
+                    let current_span = tracing::Span::current();
+                    if capture_completion && !completion.is_empty() {
+                        telemetry::spans::set_attribute(
+                            &current_span,
+                            "gen_ai.completion",
+                            completion,
+                        );
+                    }
+                    if let Some(usage) = last_usage.as_ref() {
+                        telemetry::spans::set_attributes(
+                            &current_span,
+                            [
+                                KeyValue::new(
+                                    "gen_ai.usage.input_tokens",
+                                    usage.prompt_tokens as i64,
+                                ),
+                                KeyValue::new(
+                                    "gen_ai.usage.output_tokens",
+                                    usage.completion_tokens as i64,
+                                ),
+                            ],
+                        );
+                    }
 
                     if outcome != "ok" {
                         tracing::warn!(

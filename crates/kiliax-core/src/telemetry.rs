@@ -115,6 +115,35 @@ fn sha256_hex(bytes: &[u8]) -> String {
     s
 }
 
+pub mod spans {
+    use opentelemetry::{Key, KeyValue, Value};
+    use opentelemetry::trace::TraceContextExt as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    pub fn set_attributes(
+        span: &tracing::Span,
+        attributes: impl IntoIterator<Item = KeyValue>,
+    ) {
+        let ctx = span.context();
+        let otel_span = ctx.span();
+        if !otel_span.span_context().is_valid() {
+            return;
+        }
+
+        for kv in attributes {
+            otel_span.set_attribute(kv);
+        }
+    }
+
+    pub fn set_attribute<K, V>(span: &tracing::Span, key: K, value: V)
+    where
+        K: Into<Key>,
+        V: Into<Value>,
+    {
+        set_attributes(span, [KeyValue::new(key, value)]);
+    }
+}
+
 pub mod metrics {
     use std::sync::OnceLock;
     use std::time::Duration;

@@ -82,6 +82,32 @@ server:
   # token: your-long-random-token
 ```
 
+## observability (OpenTelemetry / Langfuse)
+
+Kiliax exports OTEL logs/traces/metrics via OTLP (HTTP/gRPC). Configure it in `kiliax.yaml`:
+
+```yaml
+otel:
+  enabled: true
+  environment: dev
+  otlp:
+    # Langfuse OTLP ingest base endpoint (no /v1/traces suffix).
+    endpoint: https://cloud.langfuse.com/api/public/otel
+    protocol: http_protobuf
+    headers:
+      # Basic base64(public_key:secret_key)
+      authorization: "Basic <...>"
+  signals:
+    traces: true
+    logs: false
+    metrics: false
+```
+
+Generate the auth header:
+```bash
+echo -n "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 | tr -d '\n'
+```
+
 ## References
 
 This project is inspired by and built in the spirit of the following open-source AI coding agents:

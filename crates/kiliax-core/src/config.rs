@@ -719,7 +719,7 @@ fn validate_otel_config(cfg: &OtelConfig) -> Result<(), ConfigError> {
         || endpoint_no_trailing_slash.ends_with("/v1/metrics")
     {
         return Err(ConfigError::Invalid(
-            "otel.otlp.endpoint must be the collector base URL (e.g. http://localhost:4318), not include OTLP signal paths like /v1/traces"
+            "otel.otlp.endpoint must be the collector base URL (e.g. http://localhost:4318), not include OTLP signal paths like /v1/traces (Langfuse: use https://<host>/api/public/otel)"
                 .to_string(),
         ));
     }
