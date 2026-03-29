@@ -190,6 +190,16 @@ impl ToolEngine {
             tool.duration_ms = tracing::field::Empty,
         );
 
+        telemetry::spans::set_attribute(&span, "langfuse.observation.type", "tool");
+        if telemetry::capture_full() {
+            let captured = telemetry::capture_text(&call.arguments);
+            telemetry::spans::set_attribute(
+                &span,
+                "langfuse.observation.input",
+                captured.as_str().to_string(),
+            );
+        }
+
         if telemetry::capture_enabled() {
             let captured = telemetry::capture_text(&call.arguments);
             tracing::info!(
@@ -277,8 +287,21 @@ impl ToolEngine {
                         output = %captured.as_str(),
                     );
                 }
+                if telemetry::capture_full() {
+                    let captured = telemetry::capture_text(output);
+                    telemetry::spans::set_attribute(
+                        &span,
+                        "langfuse.observation.output",
+                        captured.as_str().to_string(),
+                    );
+                }
             }
             Err(err) => {
+                telemetry::spans::set_attribute(
+                    &span,
+                    "langfuse.observation.status_message",
+                    err.to_string(),
+                );
                 tracing::warn!(
                     target: "kiliax_core::telemetry",
                     parent: &span,
@@ -323,6 +346,16 @@ impl ToolEngine {
                 mcp.tool = "",
                 tool.duration_ms = tracing::field::Empty,
             );
+
+            telemetry::spans::set_attribute(&span, "langfuse.observation.type", "tool");
+            if telemetry::capture_full() {
+                let captured = telemetry::capture_text(&call.arguments);
+                telemetry::spans::set_attribute(
+                    &span,
+                    "langfuse.observation.input",
+                    captured.as_str().to_string(),
+                );
+            }
 
             if telemetry::capture_enabled() {
                 let captured = telemetry::capture_text(&call.arguments);
@@ -369,8 +402,21 @@ impl ToolEngine {
                             output = %captured.as_str(),
                         );
                     }
+                    if telemetry::capture_full() {
+                        let captured = telemetry::capture_text(output);
+                        telemetry::spans::set_attribute(
+                            &span,
+                            "langfuse.observation.output",
+                            captured.as_str().to_string(),
+                        );
+                    }
                 }
                 Err(err) => {
+                    telemetry::spans::set_attribute(
+                        &span,
+                        "langfuse.observation.status_message",
+                        err.to_string(),
+                    );
                     tracing::warn!(
                         target: "kiliax_core::telemetry",
                         parent: &span,

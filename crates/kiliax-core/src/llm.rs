@@ -104,6 +104,7 @@ impl LlmClient {
         telemetry::spans::set_attributes(
             &span,
             [
+                KeyValue::new("langfuse.observation.type", "generation"),
                 KeyValue::new("gen_ai.system", self.route.provider.clone()),
                 KeyValue::new("gen_ai.request.model", self.route.model.clone()),
             ],
@@ -215,6 +216,11 @@ impl LlmClient {
                             ),
                         ],
                     );
+                    let total_s = latency.as_secs_f64();
+                    if total_s > 0.0 {
+                        let output_tps = usage.completion_tokens as f64 / total_s;
+                        telemetry::spans::set_attribute(&span, "kiliax.llm.output_tps", output_tps);
+                    }
                 }
                 telemetry::metrics::record_llm_call(
                     &self.route.provider,
@@ -284,6 +290,7 @@ impl LlmClient {
         } = req;
 
         let started = std::time::Instant::now();
+        let started_wall_time = std::time::SystemTime::now();
         let span = tracing::info_span!(
             "kiliax.llm.chat_stream",
             llm.provider = %self.route.provider,
@@ -297,6 +304,7 @@ impl LlmClient {
         telemetry::spans::set_attributes(
             &span,
             [
+                KeyValue::new("langfuse.observation.type", "generation"),
                 KeyValue::new("gen_ai.system", self.route.provider.clone()),
                 KeyValue::new("gen_ai.request.model", self.route.model.clone()),
             ],
@@ -394,6 +402,8 @@ impl LlmClient {
                     let mut outcome = "ok";
                     let mut completion = String::new();
                     let mut completion_truncated = false;
+                    let mut ttft: Option<std::time::Duration> = None;
+                    let mut completion_start_time: Option<String> = None;
 
                     while let Some(ev) = event_source.next().await {
                         match ev {
@@ -415,6 +425,20 @@ impl LlmClient {
                                         let chunk = chat_stream_chunk_from_byot(resp);
                                         if let Some(usage) = chunk.usage.clone() {
                                             last_usage = Some(usage);
+                                        }
+                                        if ttft.is_none()
+                                            && chunk
+                                                .content_delta
+                                                .as_deref()
+                                                .is_some_and(|d| !d.is_empty())
+                                        {
+                                            let seen = started.elapsed();
+                                            ttft = Some(seen);
+                                            if let Some(wall) = started_wall_time.checked_add(seen)
+                                            {
+                                                completion_start_time =
+                                                    format_system_time_rfc3339(wall);
+                                            }
                                         }
                                         if capture_completion && !completion_truncated {
                                             if let Some(delta) = chunk.content_delta.as_deref() {
@@ -475,6 +499,20 @@ impl LlmClient {
                     );
 
                     let current_span = tracing::Span::current();
+                    if let Some(ttft) = ttft {
+                        telemetry::spans::set_attribute(
+                            &current_span,
+                            "kiliax.llm.ttft_ms",
+                            ttft.as_millis() as i64,
+                        );
+                        if let Some(ts) = completion_start_time {
+                            telemetry::spans::set_attribute(
+                                &current_span,
+                                "langfuse.observation.completion_start_time",
+                                ts,
+                            );
+                        }
+                    }
                     if capture_completion && !completion.is_empty() {
                         telemetry::spans::set_attribute(
                             &current_span,
@@ -496,6 +534,27 @@ impl LlmClient {
                                 ),
                             ],
                         );
+                        let total_s = latency.as_secs_f64();
+                        if total_s > 0.0 {
+                            let output_tps = usage.completion_tokens as f64 / total_s;
+                            telemetry::spans::set_attribute(
+                                &current_span,
+                                "kiliax.llm.output_tps",
+                                output_tps,
+                            );
+                        }
+                        if let Some(ttft) = ttft {
+                            let gen = latency.saturating_sub(ttft);
+                            let gen_s = gen.as_secs_f64();
+                            if gen_s > 0.0 {
+                                let output_tps = usage.completion_tokens as f64 / gen_s;
+                                telemetry::spans::set_attribute(
+                                    &current_span,
+                                    "kiliax.llm.output_tps_after_ttft",
+                                    output_tps,
+                                );
+                            }
+                        }
                     }
 
                     if outcome != "ok" {
@@ -538,6 +597,15 @@ impl LlmClient {
             rx,
         )))
     }
+}
+
+fn format_system_time_rfc3339(ts: std::time::SystemTime) -> Option<String> {
+    use time::format_description::well_known::Rfc3339;
+
+    let unix = ts.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let nanos = i128::try_from(unix.as_nanos()).ok()?;
+    let dt = time::OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()?;
+    dt.format(&Rfc3339).ok()
 }
 
 #[derive(Debug, Clone)]

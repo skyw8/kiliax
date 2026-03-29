@@ -35,11 +35,11 @@ minimal
   - `agent_loop.rs`: AgentRuntime + PromptBuilder 的闭环示例（流式输出 + 自动执行工具）
 - `crates/kiliax-core/src/lib.rs`: 模块导出入口
 - `crates/kiliax-core/src/config.rs`: 配置查找/解析（默认仅 `~/.kiliax/kiliax.yaml`）、provider/base_url/api_key、model 路由（按首个 `/` 分割，支持 `openrouter/openai/gpt-4o-mini` 这类 model id）；多 provider 时可按 `providers.*.models` 反查唯一 provider；server 配置（`server.host/port/token`）；**OpenTelemetry 配置（`otel.*`，OTLP base endpoint 校验含 Langfuse 提示）**；agent 运行参数（`runtime`/`agents.*`）；工具配置（`web_search.*` 与兼容 `tools.tavily.*`）；MCP 配置（`mcp.servers`: `enable` + stdio command+args）；包含 config/resolve_model 单元测试
-- `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义（assistant 支持 `reasoning_content` 以兼容部分 provider 的 tool loop）；User 输入支持 `UserMessageContent`（text + local image path → data URL base64；仅图片输入会自动补 `.` 文本占位避免 400 empty text）；chat/流式均用 `reqwest` 直连 `/chat/completions`（4xx 会读取 body 并转换为 `ApiError`）；解析 provider 扩展 `reasoning_content/thinking/reasoning` → `ChatStreamChunk.thinking_delta`；Moonshot 等 provider 在 assistant tool_calls 消息中要求携带 `reasoning_content` 时自动注入；**OTEL spans/logs/metrics（含 prompt/response 全量捕获 + Langfuse GenAI `gen_ai.*` attrs）**
+- `crates/kiliax-core/src/llm.rs`: OpenAI-compatible 客户端封装；消息/工具定义（assistant 支持 `reasoning_content` 以兼容部分 provider 的 tool loop）；User 输入支持 `UserMessageContent`（text + local image path → data URL base64；仅图片输入会自动补 `.` 文本占位避免 400 empty text）；chat/流式均用 `reqwest` 直连 `/chat/completions`（4xx 会读取 body 并转换为 `ApiError`）；解析 provider 扩展 `reasoning_content/thinking/reasoning` → `ChatStreamChunk.thinking_delta`；Moonshot 等 provider 在 assistant tool_calls 消息中要求携带 `reasoning_content` 时自动注入；**OTEL spans（Langfuse GenAI `gen_ai.*` + `langfuse.observation.*`；含 TTFT/TPS attrs）**
 - `crates/kiliax-core/src/telemetry.rs`: 可观测性全局开关（随 Config/ToolEngine 热更新）；full capture（UTF-8 截断 + sha256）；OTEL metrics instruments（LLM / tools / MCP / skills / run）；`telemetry::spans` 用于写入 OTEL span attributes（Langfuse/GenAI 语义）
 - `crates/kiliax-core/src/agents/`: `AgentProfile`（plan/general）及其可用工具集合与权限模型（按 agent 拆分）
 - `crates/kiliax-core/src/prompt.rs`: `PromptBuilder`（分层 system prompt；tools 说明按 `AgentProfile.tools` 动态渲染并标注并行能力；工具使用约束收敛到各 tool 的 description/parameters）
-- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 请求前规整 tool_calls/Tool 消息序列（补齐缺失/保证顺序），避免 provider 因 tool_call_id 未响应报 400）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`，并在 tool_calls step 中累积为 assistant 的 `reasoning_content` 以便下一轮回放；**OTEL run span + streaming response 捕获**
+- `crates/kiliax-core/src/runtime.rs`: `AgentRuntime`（ReAct/tool-calling 闭环；支持并行执行可并行工具调用；tool_call_id 空/重复自动归一化；流式 run 支持取消；支持工具返回多条消息用于 image attach；每 step 请求前规整 tool_calls/Tool 消息序列（补齐缺失/保证顺序），避免 provider 因 tool_call_id 未响应报 400）；转发 `thinking_delta` 为 `AgentEvent::AssistantThinkingDelta`，并在 tool_calls step 中累积为 assistant 的 `reasoning_content` 以便下一轮回放；**OTEL `kiliax.agent.run` + per-step `kiliax.agent.step` spans（Langfuse observation.type=agent/chain）**
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `~/.kiliax/sessions/<session_id>/`）；title 从首条 user 文本派生并做 UTF-8 安全截断（避免中文等多字节字符触发 panic）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`；定义 `ToolParallelism` 与并行能力判定
@@ -54,9 +54,9 @@ minimal
     - `shell.rs`: `shell_command`/`write_stdin`（argv allowlist + sessions）
     - `apply_patch.rs`: `apply_patch`（Begin/End Patch）
     - `update_plan.rs`: `update_plan`
-  - `engine.rs`: 工具统一执行入口（维护 shell sessions；持有 Config 并支持 `set_config` 热更新；支持 tool 输出多条消息用于 image attach；MCP servers 后台连接/重试（指数 backoff），支持 `enable` 开关（禁用的不连接/不重试/调用时报错）；提供 `mcp_status` 快照给 UI）；**OTEL tool span + args/output 捕获 + metrics**
+  - `engine.rs`: 工具统一执行入口（维护 shell sessions；持有 Config 并支持 `set_config` 热更新；支持 tool 输出多条消息用于 image attach；MCP servers 后台连接/重试（指数 backoff），支持 `enable` 开关（禁用的不连接/不重试/调用时报错）；提供 `mcp_status` 快照给 UI）；**OTEL tool span + args/output 捕获 + metrics（Langfuse tool observation input/output）**
   - `mcp.rs`: MCP stdio hub（QuietStdioTransport：drain stderr 避免污染 TUI + `kill_on_drop` 防止失败连接遗留子进程；connect/list_tools 超时；`mcp__<server>__<tool>` 命名空间、调用工具；shutdown 超时；提供已连接 server 概览）；**OTEL connect/call spans + metrics**
-  - `skills.rs`: skills 发现（扫描 roots；按 `id` 去重；解析 `SKILL.md` YAML front matter 的 `name/description`；剥离 front matter 得到正文）；**OTEL span + metrics**
+  - `skills.rs`: skills 发现（扫描 roots；按 `id` 去重；解析 `SKILL.md` YAML front matter 的 `name/description`；剥离 front matter 得到正文）；**OTEL span + metrics（Langfuse observation.type=span）**
 
 ### crates/kiliax-otel
 

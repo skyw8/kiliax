@@ -43,6 +43,7 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
         skills.discovered = tracing::field::Empty,
         skills.duration_ms = tracing::field::Empty,
     );
+    telemetry::spans::set_attribute(&span, "langfuse.observation.type", "span");
     let _enter = span.enter();
 
     let mut out: BTreeMap<String, Skill> = BTreeMap::new();

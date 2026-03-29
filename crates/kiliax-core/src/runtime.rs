@@ -246,6 +246,11 @@ impl AgentRuntime {
     > {
         use tokio_stream::wrappers::ReceiverStream;
 
+        enum LoopControl {
+            Continue,
+            Return,
+        }
+
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(64);
 
         let llm = self.llm.clone();
@@ -259,277 +264,328 @@ impl AgentRuntime {
             agent = %profile.name,
             max_steps = options.max_steps as u64,
         );
+        telemetry::spans::set_attribute(&run_span, "langfuse.observation.type", "agent");
 
         tokio::spawn(
             async move {
-            for step in 0..options.max_steps {
-                sanitize_tool_call_history(&mut messages);
-                if tx
-                    .send(Ok(AgentEvent::StepStart { step: step + 1 }))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
+                for step in 0..options.max_steps {
+                    let step_no = step + 1;
+                    let step_span = tracing::info_span!(
+                        "kiliax.agent.step",
+                        agent = %profile.name,
+                        step = step_no as u64,
+                    );
+                    telemetry::spans::set_attribute(
+                        &step_span,
+                        "langfuse.observation.type",
+                        "chain",
+                    );
 
-                let mut req = ChatRequest::new(messages.clone());
-                req.tools = tool_definitions_for(&profile, &tools).await;
-                req.tool_choice = options.tool_choice.clone();
-                req.parallel_tool_calls = options.parallel_tool_calls;
-                req.temperature = options.temperature;
-                req.max_completion_tokens = options.max_completion_tokens;
-
-                let stream = match llm.chat_stream(req).await {
-                    Ok(s) => s,
-                    Err(err) => {
-                        telemetry::metrics::record_run_finished(
-                            profile.name,
-                            "error",
-                            (step + 1) as u64,
-                            started.elapsed(),
-                        );
-                        let _ = tx.send(Err(err.into())).await;
-                        return;
-                    }
-                };
-
-                match drive_stream_step(step, stream, &tx).await {
-                    Ok(mut step_out) => {
-                        if tx.is_closed() {
-                            return;
+                    let control: LoopControl = async {
+                        sanitize_tool_call_history(&mut messages);
+                        if tx
+                            .send(Ok(AgentEvent::StepStart { step: step_no }))
+                            .await
+                            .is_err()
+                        {
+                            return LoopControl::Return;
                         }
-                        normalize_stream_step_tool_calls(step, &mut step_out);
-                        messages.push(step_out.assistant.clone());
-                        if telemetry::capture_enabled() {
-                            if let Ok(json) = serde_json::to_string(&step_out.assistant) {
-                                let captured = telemetry::capture_text(&json);
-                                tracing::info!(
-                                    target: "kiliax_core::telemetry",
-                                    event = "llm.response",
-                                    llm_stream = true,
-                                    step = (step + 1) as u64,
-                                    response_len = captured.len as u64,
-                                    response_truncated = captured.truncated,
-                                    response_sha256 = %captured.sha256.as_deref().unwrap_or(""),
-                                    response = %captured.as_str(),
+
+                        let mut req = ChatRequest::new(messages.clone());
+                        req.tools = tool_definitions_for(&profile, &tools).await;
+                        req.tool_choice = options.tool_choice.clone();
+                        req.parallel_tool_calls = options.parallel_tool_calls;
+                        req.temperature = options.temperature;
+                        req.max_completion_tokens = options.max_completion_tokens;
+
+                        let stream = match llm.chat_stream(req).await {
+                            Ok(s) => s,
+                            Err(err) => {
+                                telemetry::metrics::record_run_finished(
+                                    profile.name,
+                                    "error",
+                                    step_no as u64,
+                                    started.elapsed(),
                                 );
+                                let _ = tx.send(Err(err.into())).await;
+                                return LoopControl::Return;
                             }
-                        }
-                        let _ = tx
-                            .send(Ok(AgentEvent::AssistantMessage {
-                                message: step_out.assistant.clone(),
-                            }))
-                            .await;
+                        };
 
-                        if step_out.tool_calls.is_empty() {
-                            let _ = tx.send(Ok(AgentEvent::StepEnd { step: step + 1 })).await;
-                            let _ = tx
-                                .send(Ok(AgentEvent::Done(AgentRunOutput {
-                                    steps: step + 1,
-                                    messages,
-                                    finish_reason: step_out.finish_reason,
-                                })))
-                                .await;
-                            telemetry::metrics::record_run_finished(
-                                profile.name,
-                                "done",
-                                (step + 1) as u64,
-                                started.elapsed(),
-                            );
-                            return;
-                        }
-
-                        for group in group_tool_calls(&step_out.tool_calls) {
-                            match group {
-                                ToolCallGroup::Exclusive(call) => {
-                                    if tx.is_closed() {
-                                        return;
-                                    }
-                                    let _ = tx
-                                        .send(Ok(AgentEvent::ToolCall { call: call.clone() }))
-                                        .await;
-
-                                    match tools.execute_to_messages(perms.as_ref(), call).await {
-                                        Ok(tool_msgs) => {
-                                            for msg in tool_msgs {
-                                                let _ = tx
-                                                    .send(Ok(AgentEvent::ToolResult {
-                                                        message: msg.clone(),
-                                                    }))
-                                                    .await;
-                                                messages.push(msg);
-                                            }
-                                        }
-                                        Err(err) => match options.tool_error_mode {
-                                            ToolErrorMode::FailFast => {
-                                                let _ = tx.send(Err(err.into())).await;
-                                                return;
-                                            }
-                                            ToolErrorMode::ToolMessage => {
-                                                let tool_msg = Message::Tool {
-                                                    tool_call_id: call.id.clone(),
-                                                    content: format!("error: {err}"),
-                                                };
-                                                let _ = tx
-                                                    .send(Ok(AgentEvent::ToolResult {
-                                                        message: tool_msg.clone(),
-                                                    }))
-                                                    .await;
-                                                messages.push(tool_msg);
-                                            }
-                                        },
-                                    }
+                        match drive_stream_step(step, stream, &tx).await {
+                            Ok(mut step_out) => {
+                                if tx.is_closed() {
+                                    return LoopControl::Return;
                                 }
-                                ToolCallGroup::Parallel(calls) => {
-                                    if tx.is_closed() {
-                                        return;
-                                    }
-
-                                    for call in calls.iter() {
-                                        let _ = tx
-                                            .send(Ok(AgentEvent::ToolCall { call: call.clone() }))
-                                            .await;
-                                    }
-
-                                    if calls.len() == 1 {
-                                        let call = &calls[0];
-                                        match tools.execute_to_messages(perms.as_ref(), call).await
-                                        {
-                                            Ok(tool_msgs) => {
-                                                for msg in tool_msgs {
-                                                    let _ = tx
-                                                        .send(Ok(AgentEvent::ToolResult {
-                                                            message: msg.clone(),
-                                                        }))
-                                                        .await;
-                                                    messages.push(msg);
-                                                }
-                                            }
-                                            Err(err) => match options.tool_error_mode {
-                                                ToolErrorMode::FailFast => {
-                                                    let _ = tx.send(Err(err.into())).await;
-                                                    return;
-                                                }
-                                                ToolErrorMode::ToolMessage => {
-                                                    let tool_msg = Message::Tool {
-                                                        tool_call_id: call.id.clone(),
-                                                        content: format!("error: {err}"),
-                                                    };
-                                                    let _ = tx
-                                                        .send(Ok(AgentEvent::ToolResult {
-                                                            message: tool_msg.clone(),
-                                                        }))
-                                                        .await;
-                                                    messages.push(tool_msg);
-                                                }
-                                            },
-                                        }
-                                        continue;
-                                    }
-
-                                    let mut set = tokio::task::JoinSet::new();
-                                    let tools = tools.clone();
-
-                                    for (idx, call) in calls.iter().cloned().enumerate() {
-                                        let tools = tools.clone();
-                                        let perms = perms.clone();
-                                        let parent_span = tracing::Span::current();
-                                        set.spawn(
-                                            async move {
-                                                let res = tools
-                                                    .execute_to_messages(perms.as_ref(), &call)
-                                                    .await;
-                                                (idx, call, res)
-                                            }
-                                            .instrument(parent_span),
+                                normalize_stream_step_tool_calls(step, &mut step_out);
+                                messages.push(step_out.assistant.clone());
+                                if telemetry::capture_enabled() {
+                                    if let Ok(json) = serde_json::to_string(&step_out.assistant) {
+                                        let captured = telemetry::capture_text(&json);
+                                        tracing::info!(
+                                            target: "kiliax_core::telemetry",
+                                            event = "llm.response",
+                                            llm_stream = true,
+                                            step = step_no as u64,
+                                            response_len = captured.len as u64,
+                                            response_truncated = captured.truncated,
+                                            response_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+                                            response = %captured.as_str(),
                                         );
                                     }
+                                }
+                                let _ = tx
+                                    .send(Ok(AgentEvent::AssistantMessage {
+                                        message: step_out.assistant.clone(),
+                                    }))
+                                    .await;
 
-                                    let mut results: Vec<Option<Vec<Message>>> =
-                                        vec![None; calls.len()];
-                                    while let Some(joined) = set.join_next().await {
-                                        if tx.is_closed() {
-                                            return;
+                                if step_out.tool_calls.is_empty() {
+                                    let _ = tx
+                                        .send(Ok(AgentEvent::StepEnd { step: step_no }))
+                                        .await;
+                                    let _ = tx
+                                        .send(Ok(AgentEvent::Done(AgentRunOutput {
+                                            steps: step_no,
+                                            messages: std::mem::take(&mut messages),
+                                            finish_reason: step_out.finish_reason,
+                                        })))
+                                        .await;
+                                    telemetry::metrics::record_run_finished(
+                                        profile.name,
+                                        "done",
+                                        step_no as u64,
+                                        started.elapsed(),
+                                    );
+                                    return LoopControl::Return;
+                                }
+
+                                for group in group_tool_calls(&step_out.tool_calls) {
+                                    match group {
+                                        ToolCallGroup::Exclusive(call) => {
+                                            if tx.is_closed() {
+                                                return LoopControl::Return;
+                                            }
+                                            let _ = tx
+                                                .send(Ok(AgentEvent::ToolCall {
+                                                    call: call.clone(),
+                                                }))
+                                                .await;
+
+                                            match tools
+                                                .execute_to_messages(perms.as_ref(), call)
+                                                .await
+                                            {
+                                                Ok(tool_msgs) => {
+                                                    for msg in tool_msgs {
+                                                        let _ = tx
+                                                            .send(Ok(AgentEvent::ToolResult {
+                                                                message: msg.clone(),
+                                                            }))
+                                                            .await;
+                                                        messages.push(msg);
+                                                    }
+                                                }
+                                                Err(err) => match options.tool_error_mode {
+                                                    ToolErrorMode::FailFast => {
+                                                        let _ = tx.send(Err(err.into())).await;
+                                                        return LoopControl::Return;
+                                                    }
+                                                    ToolErrorMode::ToolMessage => {
+                                                        let tool_msg = Message::Tool {
+                                                            tool_call_id: call.id.clone(),
+                                                            content: format!("error: {err}"),
+                                                        };
+                                                        let _ = tx
+                                                            .send(Ok(AgentEvent::ToolResult {
+                                                                message: tool_msg.clone(),
+                                                            }))
+                                                            .await;
+                                                        messages.push(tool_msg);
+                                                    }
+                                                },
+                                            }
                                         }
-                                        let (idx, call, res) = match joined {
-                                            Ok(v) => v,
-                                            Err(err) => {
+                                        ToolCallGroup::Parallel(calls) => {
+                                            if tx.is_closed() {
+                                                return LoopControl::Return;
+                                            }
+
+                                            for call in calls.iter() {
                                                 let _ = tx
-                                                    .send(Err(ToolError::Io(std::io::Error::new(
-                                                        std::io::ErrorKind::Other,
-                                                        err,
-                                                    ))
-                                                    .into()))
+                                                    .send(Ok(AgentEvent::ToolCall {
+                                                        call: call.clone(),
+                                                    }))
                                                     .await;
-                                                return;
                                             }
-                                        };
 
-                                        match res {
-                                            Ok(tool_msgs) => {
-                                                for msg in &tool_msgs {
-                                                    let _ = tx
-                                                        .send(Ok(AgentEvent::ToolResult {
-                                                            message: msg.clone(),
-                                                        }))
-                                                        .await;
+                                            if calls.len() == 1 {
+                                                let call = &calls[0];
+                                                match tools
+                                                    .execute_to_messages(perms.as_ref(), call)
+                                                    .await
+                                                {
+                                                    Ok(tool_msgs) => {
+                                                        for msg in tool_msgs {
+                                                            let _ = tx
+                                                                .send(Ok(
+                                                                    AgentEvent::ToolResult {
+                                                                        message: msg.clone(),
+                                                                    },
+                                                                ))
+                                                                .await;
+                                                            messages.push(msg);
+                                                        }
+                                                    }
+                                                    Err(err) => match options.tool_error_mode {
+                                                        ToolErrorMode::FailFast => {
+                                                            let _ =
+                                                                tx.send(Err(err.into())).await;
+                                                            return LoopControl::Return;
+                                                        }
+                                                        ToolErrorMode::ToolMessage => {
+                                                            let tool_msg = Message::Tool {
+                                                                tool_call_id: call.id.clone(),
+                                                                content: format!("error: {err}"),
+                                                            };
+                                                            let _ = tx
+                                                                .send(Ok(
+                                                                    AgentEvent::ToolResult {
+                                                                        message: tool_msg.clone(),
+                                                                    },
+                                                                ))
+                                                                .await;
+                                                            messages.push(tool_msg);
+                                                        }
+                                                    },
                                                 }
-                                                results[idx] = Some(tool_msgs);
+                                                continue;
                                             }
-                                            Err(err) => match options.tool_error_mode {
-                                                ToolErrorMode::FailFast => {
-                                                    let _ = tx.send(Err(err.into())).await;
-                                                    return;
+
+                                            let mut set = tokio::task::JoinSet::new();
+                                            let tools = tools.clone();
+
+                                            for (idx, call) in calls.iter().cloned().enumerate() {
+                                                let tools = tools.clone();
+                                                let perms = perms.clone();
+                                                let parent_span = tracing::Span::current();
+                                                set.spawn(
+                                                    async move {
+                                                        let res = tools
+                                                            .execute_to_messages(
+                                                                perms.as_ref(),
+                                                                &call,
+                                                            )
+                                                            .await;
+                                                        (idx, call, res)
+                                                    }
+                                                    .instrument(parent_span),
+                                                );
+                                            }
+
+                                            let mut results: Vec<Option<Vec<Message>>> =
+                                                vec![None; calls.len()];
+                                            while let Some(joined) = set.join_next().await {
+                                                if tx.is_closed() {
+                                                    return LoopControl::Return;
                                                 }
-                                                ToolErrorMode::ToolMessage => {
-                                                    let tool_msg = Message::Tool {
-                                                        tool_call_id: call.id,
-                                                        content: format!("error: {err}"),
-                                                    };
-                                                    results[idx] = Some(vec![tool_msg.clone()]);
-                                                    let _ = tx
-                                                        .send(Ok(AgentEvent::ToolResult {
-                                                            message: tool_msg,
-                                                        }))
-                                                        .await;
+                                                let (idx, call, res) = match joined {
+                                                    Ok(v) => v,
+                                                    Err(err) => {
+                                                        let _ = tx
+                                                            .send(Err(ToolError::Io(
+                                                                std::io::Error::new(
+                                                                    std::io::ErrorKind::Other,
+                                                                    err,
+                                                                ),
+                                                            )
+                                                            .into()))
+                                                            .await;
+                                                        return LoopControl::Return;
+                                                    }
+                                                };
+
+                                                match res {
+                                                    Ok(tool_msgs) => {
+                                                        for msg in &tool_msgs {
+                                                            let _ = tx
+                                                                .send(Ok(
+                                                                    AgentEvent::ToolResult {
+                                                                        message: msg.clone(),
+                                                                    },
+                                                                ))
+                                                                .await;
+                                                        }
+                                                        results[idx] = Some(tool_msgs);
+                                                    }
+                                                    Err(err) => match options.tool_error_mode {
+                                                        ToolErrorMode::FailFast => {
+                                                            let _ =
+                                                                tx.send(Err(err.into())).await;
+                                                            return LoopControl::Return;
+                                                        }
+                                                        ToolErrorMode::ToolMessage => {
+                                                            let tool_msg = Message::Tool {
+                                                                tool_call_id: call.id,
+                                                                content: format!("error: {err}"),
+                                                            };
+                                                            results[idx] =
+                                                                Some(vec![tool_msg.clone()]);
+                                                            let _ = tx
+                                                                .send(Ok(
+                                                                    AgentEvent::ToolResult {
+                                                                        message: tool_msg,
+                                                                    },
+                                                                ))
+                                                                .await;
+                                                        }
+                                                    },
                                                 }
-                                            },
+                                            }
+
+                                            for group in results.into_iter().flatten() {
+                                                messages.extend(group);
+                                            }
                                         }
-                                    }
-
-                                    for group in results.into_iter().flatten() {
-                                        messages.extend(group);
                                     }
                                 }
+
+                                let _ = tx.send(Ok(AgentEvent::StepEnd { step: step_no })).await;
+                            }
+                            Err(err) => {
+                                telemetry::metrics::record_run_finished(
+                                    profile.name,
+                                    "error",
+                                    step_no as u64,
+                                    started.elapsed(),
+                                );
+                                let _ = tx.send(Err(err)).await;
+                                return LoopControl::Return;
                             }
                         }
 
-                        let _ = tx.send(Ok(AgentEvent::StepEnd { step: step + 1 })).await;
+                        LoopControl::Continue
                     }
-                    Err(err) => {
-                        telemetry::metrics::record_run_finished(
-                            profile.name,
-                            "error",
-                            (step + 1) as u64,
-                            started.elapsed(),
-                        );
-                        let _ = tx.send(Err(err)).await;
-                        return;
+                    .instrument(step_span)
+                    .await;
+
+                    match control {
+                        LoopControl::Continue => {}
+                        LoopControl::Return => return,
                     }
                 }
-            }
 
-            telemetry::metrics::record_run_finished(
-                profile.name,
-                "max_steps",
-                options.max_steps as u64,
-                started.elapsed(),
-            );
-            let _ = tx
-                .send(Err(AgentRuntimeError::MaxSteps {
-                    max_steps: options.max_steps,
-                }))
-                .await;
+                telemetry::metrics::record_run_finished(
+                    profile.name,
+                    "max_steps",
+                    options.max_steps as u64,
+                    started.elapsed(),
+                );
+                let _ = tx
+                    .send(Err(AgentRuntimeError::MaxSteps {
+                        max_steps: options.max_steps,
+                    }))
+                    .await;
             }
             .instrument(run_span),
         );
