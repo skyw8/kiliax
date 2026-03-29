@@ -181,14 +181,16 @@ pub fn init(
                     .ok();
             }
             LocalLogs::File { path } => {
-                let fmt_layer = tracing_subscriber::fmt::layer()
-                    .with_writer(file_writer(&path)?)
-                    .with_ansi(false);
-                tracing_subscriber::registry()
-                    .with(env_filter)
-                    .with(fmt_layer)
-                    .try_init()
-                    .ok();
+                if let Ok(writer) = file_writer(&path) {
+                    let fmt_layer = tracing_subscriber::fmt::layer()
+                        .with_writer(writer)
+                        .with_ansi(false);
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(fmt_layer)
+                        .try_init()
+                        .ok();
+                }
             }
         }
         return Ok(OtelGuard::default());
@@ -223,16 +225,34 @@ pub fn init(
                 .ok();
         }
         LocalLogs::File { path } => {
-            let fmt_layer = tracing_subscriber::fmt::layer()
-                .with_writer(file_writer(&path)?)
-                .with_ansi(false);
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(provider.tracing_layer(service_name))
-                .with(provider.logger_layer())
-                .with(fmt_layer)
-                .try_init()
-                .ok();
+            match file_writer(&path) {
+                Ok(writer) => {
+                    let fmt_layer = tracing_subscriber::fmt::layer()
+                        .with_writer(writer)
+                        .with_ansi(false);
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(provider.tracing_layer(service_name))
+                        .with(provider.logger_layer())
+                        .with(fmt_layer)
+                        .try_init()
+                        .ok();
+                }
+                Err(err) => {
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(provider.tracing_layer(service_name))
+                        .with(provider.logger_layer())
+                        .try_init()
+                        .ok();
+                    tracing::warn!(
+                        target: "kiliax_otel",
+                        event = "local_log_file_failed",
+                        path = %path.display(),
+                        error = %err,
+                    );
+                }
+            }
         }
     }
 
@@ -531,4 +551,36 @@ fn build_meter_provider(cfg: &OtelConfig, resource: &Resource) -> anyhow::Result
 
 fn is_kiliax_target(target: &str) -> bool {
     target.starts_with("kiliax")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    fn unique_tmp_path(prefix: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let pid = std::process::id();
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("{prefix}_{pid}_{n}"))
+    }
+
+    #[test]
+    fn local_log_file_failure_is_non_fatal() {
+        let parent_as_file = unique_tmp_path("kiliax_otel_test_parent_is_file");
+        std::fs::write(&parent_as_file, b"not a dir").unwrap();
+        let log_path = parent_as_file.join("tui.log");
+
+        let cfg = kiliax_core::config::Config::default();
+        let res = init(
+            &cfg,
+            "kiliax-test",
+            "0.0.0",
+            LocalLogs::File { path: log_path },
+        );
+
+        let _ = std::fs::remove_file(&parent_as_file);
+        assert!(res.is_ok());
+    }
 }

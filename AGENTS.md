@@ -62,7 +62,7 @@ minimal
 
 OpenTelemetry 初始化与导出（OTLP HTTP/gRPC）：按 `kiliax.yaml` 的 `otel.*` 配置安装 global tracer/logger/meter 与 tracing subscriber（HTTP exporter 会用 base endpoint 拼接 `/v1/{signal}`）；支持从 HTTP headers 继承 `traceparent/tracestate`。
 
-- `crates/kiliax-otel/src/lib.rs`: exporters + providers（logs/traces/metrics）构建与 shutdown；`tracing-opentelemetry` / `OpenTelemetryTracingBridge` layers；`set_parent_from_http_headers`；本地日志支持 `Stdout`/`File`/`None`
+- `crates/kiliax-otel/src/lib.rs`: exporters + providers（logs/traces/metrics）构建与 shutdown；`tracing-opentelemetry` / `OpenTelemetryTracingBridge` layers；`set_parent_from_http_headers`；本地日志支持 `Stdout`/`File`/`None`（`File` 失败不致命，best-effort）
 - `crates/kiliax-otel/src/otlp.rs`: headers/TLS/reqwest client 构建（blocking/async）与 timeout 解析
 
 ### crates/kiliax-tui
