@@ -9,6 +9,8 @@ type InlineToken =
   | { type: "strike"; children: InlineToken[] }
   | { type: "link"; href: string; children: InlineToken[] };
 
+type TableAlign = "left" | "center" | "right" | null;
+
 type Block =
   | { type: "paragraph"; text: string }
   | { type: "heading"; level: number; text: string }
@@ -16,7 +18,8 @@ type Block =
   | { type: "ol"; items: string[] }
   | { type: "blockquote"; text: string }
   | { type: "hr" }
-  | { type: "code"; lang: string | null; code: string };
+  | { type: "code"; lang: string | null; code: string }
+  | { type: "table"; header: string[]; align: TableAlign[]; rows: string[][] };
 
 function safeHref(raw: string): string | null {
   const href = raw.trim();
@@ -116,6 +119,111 @@ function tokenizeInline(input: string): InlineToken[] {
   return tokens;
 }
 
+function splitTableRow(line: string): string[] | null {
+  if (!line.includes("|")) return null;
+
+  const cells: string[] = [];
+  let buf = "";
+  let inCode = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i] ?? "";
+
+    if (ch === "`") {
+      inCode = !inCode;
+      buf += ch;
+      continue;
+    }
+
+    if (ch === "\\" && i + 1 < line.length) {
+      const next = line[i + 1] ?? "";
+      if (next === "|" || next === "\\") {
+        buf += next;
+        i += 1;
+        continue;
+      }
+    }
+
+    if (ch === "|" && !inCode) {
+      cells.push(buf.trim());
+      buf = "";
+      continue;
+    }
+
+    buf += ch;
+  }
+
+  cells.push(buf.trim());
+
+  const trimmed = line.trim();
+  let out = cells;
+  if (trimmed.startsWith("|")) out = out.slice(1);
+  if (trimmed.endsWith("|")) out = out.slice(0, -1);
+  if (!out.length) return null;
+  return out;
+}
+
+function parseTableAlign(cells: string[], columns: number): TableAlign[] | null {
+  if (cells.length !== columns) return null;
+  const re = /^:?-{3,}:?$/;
+  const align: TableAlign[] = [];
+  for (let i = 0; i < columns; i += 1) {
+    const cell = (cells[i] ?? "").trim();
+    if (!re.test(cell)) return null;
+    const starts = cell.startsWith(":");
+    const ends = cell.endsWith(":");
+    if (starts && ends) align.push("center");
+    else if (ends) align.push("right");
+    else if (starts) align.push("left");
+    else align.push(null);
+  }
+  return align;
+}
+
+function normalizeTableRow(cells: string[], columns: number): string[] {
+  if (cells.length === columns) return cells;
+  if (cells.length < columns) {
+    return [...cells, ...Array.from({ length: columns - cells.length }, () => "")];
+  }
+  const head = cells.slice(0, columns - 1);
+  const tail = cells.slice(columns - 1).join(" | ");
+  return [...head, tail];
+}
+
+function parseTableBlock(
+  lines: string[],
+  startIndex: number,
+): { block: Extract<Block, { type: "table" }>; nextIndex: number } | null {
+  const headerCells = splitTableRow(lines[startIndex] ?? "");
+  if (!headerCells) return null;
+
+  const separatorLine = lines[startIndex + 1];
+  if (separatorLine == null) return null;
+  const separatorCells = splitTableRow(separatorLine);
+  if (!separatorCells) return null;
+
+  const columns = Math.max(headerCells.length, separatorCells.length);
+  if (separatorCells.length !== columns) return null;
+
+  const align = parseTableAlign(separatorCells, columns);
+  if (!align) return null;
+
+  const header = normalizeTableRow(headerCells, columns);
+  const rows: string[][] = [];
+
+  let i = startIndex + 2;
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    if (!line.trim()) break;
+    const rowCells = splitTableRow(line);
+    if (!rowCells) break;
+    rows.push(normalizeTableRow(rowCells, columns));
+    i += 1;
+  }
+
+  return { block: { type: "table", header, align, rows }, nextIndex: i };
+}
+
 function parseMarkdown(input: string): Block[] {
   const lines = input.replace(/\r\n/g, "\n").split("\n");
   const blocks: Block[] = [];
@@ -177,6 +285,13 @@ function parseMarkdown(input: string): Block[] {
       continue;
     }
 
+    const table = parseTableBlock(lines, i);
+    if (table) {
+      blocks.push(table.block);
+      i = table.nextIndex;
+      continue;
+    }
+
     const ul = ulMatch(line);
     if (ul) {
       const items: string[] = [];
@@ -212,6 +327,7 @@ function parseMarkdown(input: string): Block[] {
       if (isCodeFence(next)) break;
       if (isHeading(next)) break;
       if (isBlockquote(next)) break;
+      if (parseTableBlock(lines, i)) break;
       if (ulMatch(next) || olMatch(next)) break;
       paraLines.push(next);
       i += 1;
@@ -307,6 +423,53 @@ function renderBlock(block: Block, key: string): React.ReactNode {
       >
         <code className="font-mono">{block.code}</code>
       </pre>
+    );
+  }
+
+  if (block.type === "table") {
+    const alignClass = (a: TableAlign) => {
+      if (a === "center") return "text-center";
+      if (a === "right") return "text-right";
+      return "text-left";
+    };
+
+    return (
+      <div key={key} className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm">
+          <thead className="bg-zinc-50 text-zinc-900">
+            <tr>
+              {block.header.map((cell, idx) => (
+                <th
+                  key={`${key}:th:${idx}`}
+                  className={cn(
+                    "border border-zinc-200 px-2 py-1 font-semibold",
+                    alignClass(block.align[idx] ?? null),
+                  )}
+                >
+                  {renderInline(cell, `${key}:th:${idx}`)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, rowIdx) => (
+              <tr key={`${key}:tr:${rowIdx}`} className="even:bg-zinc-50/40">
+                {row.map((cell, colIdx) => (
+                  <td
+                    key={`${key}:td:${rowIdx}:${colIdx}`}
+                    className={cn(
+                      "border border-zinc-200 px-2 py-1 align-top",
+                      alignClass(block.align[colIdx] ?? null),
+                    )}
+                  >
+                    {renderInline(cell, `${key}:td:${rowIdx}:${colIdx}`)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     );
   }
 
