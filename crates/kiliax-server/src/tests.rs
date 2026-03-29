@@ -781,6 +781,36 @@ async fn list_skills_returns_workspace_skills() {
 }
 
 #[tokio::test]
+async fn list_global_skills_returns_workspace_skills() {
+    let dir = TempDir::new().expect("tempdir");
+    let skill_dir = dir.path().join("skills").join("demo_skill");
+    tokio::fs::create_dir_all(&skill_dir)
+        .await
+        .expect("create skill dir");
+    tokio::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: Demo Skill\ndescription: Hello\n---\n# Demo\n",
+    )
+    .await
+    .expect("write SKILL.md");
+
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/skills"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    assert!(
+        items.iter().any(|it| it.get("id").and_then(|v| v.as_str()) == Some("demo_skill")),
+        "missing demo_skill: {items:?}"
+    );
+}
+
+#[tokio::test]
 async fn put_config_updates_live_session_model_when_removed() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;
@@ -829,6 +859,69 @@ mcp:
             .and_then(|v| v.as_str()),
         Some("test/new-model"),
         "session settings not normalized after config update: {body}"
+    );
+}
+
+#[tokio::test]
+async fn patch_config_mcp_updates_enable_flag() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let yaml = r#"
+default_model: test/test-model
+providers:
+  test:
+    base_url: http://127.0.0.1:1
+    models:
+      - test-model
+mcp:
+  servers:
+    - name: demo
+      enable: false
+      command: true
+      args: []
+"#;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PUT,
+            "/v1/config",
+            serde_json::json!({ "yaml": yaml }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            "/v1/config/mcp",
+            serde_json::json!({ "servers": [{ "id": "demo", "enable": true }] }),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("config")
+            .and_then(|c| c.get("mcp"))
+            .and_then(|m| m.get("servers"))
+            .and_then(|s| s.as_array())
+            .and_then(|s| s.first())
+            .and_then(|s| s.get("enable"))
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "config mcp not updated: {body}"
     );
 }
 

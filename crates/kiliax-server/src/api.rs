@@ -226,6 +226,11 @@ pub struct ConfigUpdateRequest {
     pub yaml: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigMcpPatchRequest {
+    pub servers: Vec<McpServerSetting>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillListResponse {
     pub items: Vec<SkillSummary>,

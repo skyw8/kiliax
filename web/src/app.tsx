@@ -223,6 +223,7 @@ export default function App() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [mcpSaving, setMcpSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [sessionMenu, setSessionMenu] = useState<{
@@ -460,9 +461,8 @@ export default function App() {
   }
 
   async function openSkills() {
-    if (!selectedId) return;
     try {
-      const res = await api.listSkills(selectedId);
+      const res = await api.listGlobalSkills();
       setSkills(res.items);
       setSkillsOpen(true);
     } catch (err) {
@@ -479,6 +479,11 @@ export default function App() {
     } catch (err) {
       handleApiError(err);
     }
+  }
+
+  async function openMcp() {
+    await refreshCapabilities();
+    setMcpOpen(true);
   }
 
   async function saveConfig() {
@@ -653,7 +658,6 @@ export default function App() {
               variant="ghost"
               className="w-full justify-start gap-2"
               onClick={openSkills}
-              disabled={!selectedId}
             >
               <Sparkles className="h-4 w-4 text-amber-600" />
               Skills
@@ -661,8 +665,7 @@ export default function App() {
             <Button
               variant="ghost"
               className="w-full justify-start gap-2"
-              onClick={() => setMcpOpen(true)}
-              disabled={!selectedId}
+              onClick={openMcp}
             >
               <Plug className="h-4 w-4 text-emerald-600" />
               MCP
@@ -759,7 +762,7 @@ export default function App() {
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
+          <div className="flex items-start justify-between gap-4 border-b border-zinc-200 px-4 py-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">
                 {selectedSummary?.title ?? "New thread"}
@@ -777,6 +780,51 @@ export default function App() {
                 ) : null}
               </div>
             </div>
+
+            {session ? (
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <label className="text-xs text-zinc-600">Agent</label>
+                <select
+                  className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs"
+                  value={session.settings.agent}
+                  onChange={(e) => patchSession({ agent: e.target.value })}
+                >
+                  {agentOptions.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="ml-2 text-xs text-zinc-600">Model</label>
+                <select
+                  className="h-8 min-w-[220px] rounded-md border border-zinc-200 bg-white px-2 text-xs"
+                  value={session.settings.model_id}
+                  onChange={(e) => patchSession({ model_id: e.target.value })}
+                >
+                  {modelOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="max-w-[360px] justify-start gap-2"
+                  onClick={() => {
+                    setCwdDraft(session.settings.workspace_root ?? "");
+                    setCwdOpen(true);
+                  }}
+                >
+                  <span className="text-xs text-zinc-600">cwd</span>
+                  <span className="min-w-0 truncate font-mono text-xs text-zinc-800">
+                    {session.settings.workspace_root ?? ""}
+                  </span>
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex-1 overflow-auto px-4 py-4">
@@ -842,76 +890,6 @@ export default function App() {
 
           <div className="border-t border-zinc-200 bg-white px-4 py-3">
             <div className="mx-auto w-full max-w-3xl">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <label className="text-xs text-zinc-600">Agent</label>
-                <select
-                  className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs"
-                  value={session?.settings.agent ?? ""}
-                  disabled={!session}
-                  onChange={(e) => patchSession({ agent: e.target.value })}
-                >
-                  <option value="" disabled>
-                    -
-                  </option>
-                  {agentOptions.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-
-                <label className="ml-2 text-xs text-zinc-600">Model</label>
-                <select
-                  className="h-8 min-w-[220px] rounded-md border border-zinc-200 bg-white px-2 text-xs"
-                  value={session?.settings.model_id ?? ""}
-                  disabled={!session}
-                  onChange={(e) => patchSession({ model_id: e.target.value })}
-                >
-                  <option value="" disabled>
-                    -
-                  </option>
-                  {modelOptions.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!session}
-                  onClick={() =>
-                    patchSession({
-                      workspace_root: tmpWorkspacePath(),
-                    })
-                  }
-                >
-                  New tmp cwd
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!session}
-                  onClick={() => {
-                    setCwdDraft(session?.settings.workspace_root ?? "");
-                    setCwdOpen(true);
-                  }}
-                >
-                  Set cwd
-                </Button>
-
-                {session ? (
-                  <div className="truncate text-xs text-zinc-600">
-                    cwd:{" "}
-                    <span className="font-mono text-zinc-800">
-                      {session.settings.workspace_root}
-                    </span>
-                  </div>
-                ) : null}
-              </div>
-
               <div className="flex items-end gap-2">
                 <Textarea
                   value={composerText}
@@ -980,7 +958,7 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Skills</DialogTitle>
-            <DialogDescription>Discovered for current workspace</DialogDescription>
+            <DialogDescription>Discovered from skills roots</DialogDescription>
           </DialogHeader>
           <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
             {skills.length ? (
@@ -1008,10 +986,10 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>MCP</DialogTitle>
-            <DialogDescription>Toggle per-session MCP servers</DialogDescription>
+            <DialogDescription>Global MCP servers (kiliax.yaml)</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            {(session?.settings.mcp.servers ?? []).map((s) => (
+            {(capabilities?.mcp_servers ?? []).map((s) => (
               <label
                 key={s.id}
                 className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2"
@@ -1019,23 +997,30 @@ export default function App() {
                 <div className="min-w-0">
                   <div className="truncate text-sm">{s.id}</div>
                   <div className="mt-0.5 truncate text-xs text-zinc-600">
-                    {(session?.mcp_status ?? [])
-                      .find((x) => x.id === s.id)
-                      ?.state?.toString() ?? "unknown"}
+                    {s.state?.toString() ?? "unknown"}
+                    {s.last_error ? ` · ${s.last_error}` : ""}
                   </div>
                 </div>
                 <input
                   type="checkbox"
                   checked={s.enable}
-                  onChange={(e) =>
-                    patchSession({
-                      mcp: { servers: [{ id: s.id, enable: e.target.checked }] },
-                    })
-                  }
+                  disabled={mcpSaving}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setMcpSaving(true);
+                    try {
+                      await api.patchConfigMcp({ servers: [{ id: s.id, enable: next }] });
+                      await refreshCapabilities();
+                    } catch (err) {
+                      handleApiError(err);
+                    } finally {
+                      setMcpSaving(false);
+                    }
+                  }}
                 />
               </label>
             ))}
-            {!session?.settings.mcp.servers.length ? (
+            {!capabilities?.mcp_servers.length ? (
               <div className="text-center text-sm text-zinc-500">No MCP servers</div>
             ) : null}
           </div>

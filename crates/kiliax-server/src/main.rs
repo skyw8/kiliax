@@ -32,6 +32,8 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
     let api = Router::new()
         .route("/sessions", post(create_session).get(list_sessions))
         .route("/config", get(get_config).put(put_config))
+        .route("/config/mcp", patch(patch_config_mcp))
+        .route("/skills", get(list_global_skills))
         .route("/sessions/{session_id}", get(get_session).delete(delete_session))
         .route("/sessions/{session_id}/resume", post(resume_session))
         .route("/sessions/{session_id}/settings", patch(patch_settings))
@@ -400,6 +402,14 @@ async fn put_config(
     Ok(Json(state.update_config(req).await?))
 }
 
+async fn patch_config_mcp(
+    State(state): State<Arc<ServerState>>,
+    Json(req): Json<api::ConfigMcpPatchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.patch_config_mcp(req).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn list_sessions(
     State(state): State<Arc<ServerState>>,
     Query(q): Query<ListSessionsQuery>,
@@ -472,6 +482,13 @@ async fn list_skills(
 ) -> Result<impl IntoResponse, ApiError> {
     let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.list_skills(&id).await?;
+    Ok(Json(out))
+}
+
+async fn list_global_skills(
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let out = state.list_global_skills().await?;
     Ok(Json(out))
 }
 
