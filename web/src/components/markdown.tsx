@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { CodeBlock } from "@/components/code-block";
 
 type InlineToken =
   | { type: "text"; value: string }
@@ -417,12 +418,7 @@ function renderBlock(block: Block, key: string): React.ReactNode {
 
   if (block.type === "code") {
     return (
-      <pre
-        key={key}
-        className="overflow-auto rounded-md bg-zinc-900/95 p-3 text-xs text-zinc-50"
-      >
-        <code className="font-mono">{block.code}</code>
-      </pre>
+      <CodeBlock key={key} code={block.code} lang={block.lang} />
     );
   }
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { MoreHorizontal, Pin, Plus, Plug, Settings, Sparkles, Trash2 } from "lucide-react";
+import { ArrowUp, CircleStop, MoreHorizontal, Pin, Plus, Plug, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
@@ -12,6 +12,7 @@ import type {
 } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CodeBlock } from "@/components/code-block";
 import { Markdown } from "@/components/markdown";
 import {
   Dialog,
@@ -25,6 +26,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 
 type PendingMessage = {
+  sessionId: string;
   runId: string;
   createdAt: string;
   content: string;
@@ -145,9 +147,7 @@ function renderToolCalls(toolCalls?: ToolCall[]) {
           <summary className="cursor-pointer select-none text-xs text-zinc-700">
             tool_call: <span className="font-mono">{c.name}</span>
           </summary>
-          <pre className="mt-2 overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
-            {c.arguments}
-          </pre>
+          <CodeBlock className="mt-2" code={c.arguments} lang="json" />
         </details>
       ))}
     </div>
@@ -196,9 +196,7 @@ function MessageRow({ msg }: { msg: Message }) {
         <summary className="cursor-pointer select-none text-xs text-zinc-700">
           tool_result: <span className="font-mono">{msg.tool_call_id}</span>
         </summary>
-        <pre className="mt-2 overflow-auto rounded bg-white p-2 text-xs text-zinc-800">
-          {msg.content}
-        </pre>
+        <CodeBlock className="mt-2" code={msg.content} lang="json" />
       </details>
     </div>
   );
@@ -209,7 +207,7 @@ function EmptyState() {
     <div className="flex h-full w-full items-center justify-center">
       <div className="text-center">
         <div className="text-xl font-semibold text-zinc-900">Let&apos;s build</div>
-        <div className="mt-1 text-sm text-zinc-600">Create or select a session</div>
+        <div className="mt-1 text-sm text-zinc-600">Start typing below to create a session</div>
       </div>
     </div>
   );
@@ -265,6 +263,7 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
+  const skipNextFetchRef = useRef<string | null>(null);
 
   const sortedSessions = useMemo(
     () => sortSessions(sessions, pinnedSessionIds),
@@ -334,7 +333,7 @@ export default function App() {
       const msgs = await api.getMessages(sessionId, 200);
       if (selectedIdRef.current !== sessionId) return;
       setMessages(msgs.items);
-      setPending([]);
+      setPending((p) => p.filter((m) => m.sessionId !== sessionId));
       setStream({
         thinking: "",
         assistant: "",
@@ -454,17 +453,32 @@ export default function App() {
   }
 
   async function onSend() {
-    if (!selectedId) return;
     const text = composerText.trim();
     if (!text) return;
 
     try {
-      const run: any = await api.createRun(selectedId, {
+      let sessionId = selectedId;
+
+      if (!sessionId) {
+        const s = await api.createSession();
+        sessionId = s.id;
+        skipNextFetchRef.current = sessionId;
+        selectSession(sessionId);
+        selectedIdRef.current = sessionId;
+        await fetchSession(sessionId);
+      }
+
+      const run: any = await api.createRun(sessionId, {
         input: { type: "text", text },
       });
       setPending((p) => [
         ...p,
-        { runId: String(run?.id ?? ""), createdAt: new Date().toISOString(), content: text },
+        {
+          sessionId,
+          runId: String(run?.id ?? ""),
+          createdAt: new Date().toISOString(),
+          content: text,
+        },
       ]);
       setComposerText("");
       await refreshSessions();
@@ -629,7 +643,6 @@ export default function App() {
     if (!selectedId) {
       setSession(null);
       setMessages([]);
-      setPending([]);
       setStream({
         thinking: "",
         assistant: "",
@@ -642,20 +655,31 @@ export default function App() {
       }
       return;
     }
+    if (skipNextFetchRef.current === selectedId) {
+      skipNextFetchRef.current = null;
+      return;
+    }
     fetchSession(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
+  const pendingForSelected = useMemo(
+    () => pending.filter((p) => p.sessionId === selectedId),
+    [pending, selectedId],
+  );
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pending, stream.assistant, stream.thinking, stream.toolCalls.length]);
+  }, [messages, pendingForSelected.length, stream.assistant, stream.thinking, stream.toolCalls.length]);
 
   const selectedSummary = sortedSessions.find((s) => s.id === selectedId) ?? null;
   const selectedBadge = selectedSummary ? statusBadge(selectedSummary) : null;
 
   const composerHasText = composerText.trim().length > 0;
   const cancellableRunId =
-    selectedSummary?.status.active_run_id ?? pending[pending.length - 1]?.runId ?? null;
+    selectedSummary?.status.active_run_id ??
+    pendingForSelected[pendingForSelected.length - 1]?.runId ??
+    null;
   const showInterrupt = Boolean(selectedId) && Boolean(cancellableRunId) && !composerHasText;
 
   const agentOptions = capabilities?.agents ?? [];
@@ -918,7 +942,7 @@ export default function App() {
                   <MessageRow key={`${m.role}:${m.id}`} msg={m} />
                 ))}
 
-                {pending.map((p) => (
+                {pendingForSelected.map((p) => (
                   <div key={`pending:${p.runId}`} className="flex justify-end">
                     <div className="max-w-[78%] rounded-2xl bg-zinc-900/90 px-4 py-2 text-sm text-zinc-50">
                       {p.content}
@@ -949,9 +973,7 @@ export default function App() {
                         <summary className="cursor-pointer select-none text-xs text-zinc-700">
                           tool_call: <span className="font-mono">{c.name}</span>
                         </summary>
-                        <pre className="mt-2 overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
-                          {c.arguments}
-                        </pre>
+                        <CodeBlock className="mt-2" code={c.arguments} lang="json" />
                       </details>
                     ))}
                   </div>
@@ -980,7 +1002,6 @@ export default function App() {
                   onChange={(e) => setComposerText(e.target.value)}
                   placeholder="Ask anything…"
                   className="min-h-[52px] resize-none"
-                  disabled={!selectedId}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -990,7 +1011,9 @@ export default function App() {
                 />
                 {showInterrupt ? (
                   <Button
-                    className="bg-red-600 text-zinc-50 hover:bg-red-500"
+                    size="icon"
+                    aria-label="Interrupt"
+                    className="h-[52px] w-[52px] bg-red-600 text-zinc-50 hover:bg-red-500"
                     onClick={async () => {
                       if (!cancellableRunId) return;
                       try {
@@ -1001,11 +1024,17 @@ export default function App() {
                       }
                     }}
                   >
-                    Interrupt
+                    <CircleStop className="h-5 w-5" />
                   </Button>
                 ) : (
-                  <Button onClick={onSend} disabled={!selectedId || !composerHasText}>
-                    Send
+                  <Button
+                    size="icon"
+                    aria-label="Send"
+                    onClick={onSend}
+                    disabled={!composerHasText}
+                    className="h-[52px] w-[52px]"
+                  >
+                    <ArrowUp className="h-5 w-5" />
                   </Button>
                 )}
               </div>
