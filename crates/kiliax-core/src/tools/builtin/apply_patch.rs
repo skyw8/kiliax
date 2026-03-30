@@ -11,14 +11,14 @@ use super::TOOL_APPLY_PATCH;
 pub fn apply_patch_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_APPLY_PATCH.to_string(),
-        description: Some(
-            "Apply a file-oriented patch to the workspace. File paths in the patch must be workspace-relative (no `..`)."
-                .to_string(),
-        ),
+        description: Some("Edit files using a custom patch format.".to_string()),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
-                "patch": { "type": "string", "description": "Patch text in the *** Begin Patch / *** End Patch format (paths are workspace-relative; no `..`)." }
+                "patch": {
+                    "type": "string",
+                    "description": "Patch text. Format: *** Begin Patch..*** End Patch. Ops: Add/Delete/Update (+Move to). Hunks: @@ [header]; lines: ' ' ctx, -del, +add. New file lines need '+'. Paths workspace-relative, no `..`. Default 3 lines context."
+                }
             },
             "required": ["patch"],
             "additionalProperties": false
