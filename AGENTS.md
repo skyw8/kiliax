@@ -29,6 +29,7 @@ minimal
   - `plan.md`: plan agent 提示词（只读/受限命令）
   - `general.md`: general agent 提示词（可写/可执行）
   - `how_to_use_skills.md`: skills 使用规范（与 skills 列表一起注入）
+  - `tools/*.md`: 内置工具提示词/说明（编译期 `include_str!`）
 - `crates/kiliax-core/examples/`: 可运行示例
   - `chat_hello.rs`: 非流式 chat 示例
   - `stream_chat.rs`: 流式 chat 示例（展示 delta 与 tool_call delta 合并）
@@ -46,9 +47,12 @@ minimal
   - `builtin/`: codex 风格内置工具 schema + 执行（按工具拆分）
     - `mod.rs`: tool name 常量 + dispatcher + re-export
     - `common.rs`: args/path 解析（workspace/skills roots；拒绝 `..`，防 symlink escape）
+    - `file_tracker.rs`: 文件读写追踪（要求先 `read_file` 再 `write_file`/`edit_file`；检测读后变更）
     - `read_file.rs`: `read_file`
     - `list_dir.rs`: `list_dir`
     - `grep_files.rs`: `grep_files`（ignore/grep-searcher；尊重 ignore）
+    - `write_file.rs`: `write_file`
+    - `edit_file.rs`: `edit_file`
     - `web_search.rs`: `web_search`（Tavily API；从 `kiliax.yaml` 的 `web_search.*` 加载，兼容 `tools.tavily.*` 与 env `TAVILY_API_KEY` / `TAVILY_API_BASE_URL`）
     - `view_image.rs`: `view_image`（读取并 attach 本地图片到下一轮上下文）
     - `shell.rs`: `shell_command`/`write_stdin`（argv allowlist + sessions）

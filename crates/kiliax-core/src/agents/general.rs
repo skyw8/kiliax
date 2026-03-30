@@ -15,6 +15,8 @@ pub(super) fn profile() -> AgentProfile {
             builtin::web_search_tool_definition(),
             builtin::shell_command_tool_definition(),
             builtin::write_stdin_tool_definition(),
+            builtin::write_file_tool_definition(),
+            builtin::edit_file_tool_definition(),
             builtin::apply_patch_tool_definition(),
             builtin::update_plan_tool_definition(),
         ],

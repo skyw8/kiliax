@@ -31,7 +31,9 @@ pub fn tool_parallelism(tool_name: &str) -> ToolParallelism {
         | builtin::TOOL_SHELL_COMMAND
         | builtin::TOOL_WRITE_STDIN
         | builtin::TOOL_APPLY_PATCH => ToolParallelism::Parallel,
-        builtin::TOOL_UPDATE_PLAN => ToolParallelism::Exclusive,
+        builtin::TOOL_UPDATE_PLAN | builtin::TOOL_WRITE_FILE | builtin::TOOL_EDIT_FILE => {
+            ToolParallelism::Exclusive
+        }
         _ => ToolParallelism::Exclusive,
     }
 }

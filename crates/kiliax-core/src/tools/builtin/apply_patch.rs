@@ -8,10 +8,13 @@ use crate::tools::{Permissions, ToolError};
 use super::common::{parse_args, resolve_workspace_path};
 use super::TOOL_APPLY_PATCH;
 
+const DESCRIPTION: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools/apply_patch.md"));
+
 pub fn apply_patch_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_APPLY_PATCH.to_string(),
-        description: Some("Edit files using a custom patch format.".to_string()),
+        description: Some(DESCRIPTION.to_string()),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {

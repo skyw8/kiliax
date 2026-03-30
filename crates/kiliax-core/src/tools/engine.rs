@@ -45,6 +45,7 @@ impl ConnectedMcpServer {
 pub struct ToolEngine {
     workspace_root: PathBuf,
     shell_sessions: Arc<builtin::ShellSessions>,
+    file_tracker: Arc<builtin::FileAccessTracker>,
     config: Arc<RwLock<Arc<crate::config::Config>>>,
     mcp: crate::tools::mcp::McpHub,
     mcp_state: Arc<Mutex<McpState>>,
@@ -56,6 +57,7 @@ impl ToolEngine {
         Self {
             workspace_root: workspace_root.into(),
             shell_sessions: Arc::new(builtin::ShellSessions::new()),
+            file_tracker: Arc::new(builtin::FileAccessTracker::new()),
             config: Arc::new(RwLock::new(Arc::new(config))),
             mcp: crate::tools::mcp::McpHub::new(),
             mcp_state: Arc::new(Mutex::new(McpState::default())),
@@ -256,6 +258,7 @@ impl ToolEngine {
                 &self.workspace_root,
                 perms,
                 self.shell_sessions.as_ref(),
+                self.file_tracker.as_ref(),
                 cfg.as_ref(),
                 call,
             )

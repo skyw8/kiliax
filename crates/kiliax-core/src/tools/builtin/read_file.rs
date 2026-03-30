@@ -44,6 +44,7 @@ struct ReadFileArgs {
 pub(super) async fn execute(
     workspace_root: &Path,
     perms: &Permissions,
+    file_tracker: &super::FileAccessTracker,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
     if !perms.file_read {
@@ -61,6 +62,8 @@ pub(super) async fn execute(
     if args.start_line.is_some() || args.end_line.is_some() {
         text = slice_lines(&text, args.start_line, args.end_line);
     }
+
+    file_tracker.record_read(&path).await?;
 
     Ok(text)
 }
