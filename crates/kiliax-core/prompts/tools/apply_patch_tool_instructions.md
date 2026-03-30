@@ -2,6 +2,7 @@
 DEPRECATED: This file is no longer used.
 The tool description has been moved inline to apply_patch.rs.
 Not implemented: shell {"command":["apply_patch","*** Begin Patch\n*** Add File: hello.txt\n+Hello, world!\n*** End Patch\n"]}
+codex/codex-rs/apply-patch/apply_patch_tool_instructions.md
 -->
 
 ## `apply_patch`
