@@ -109,9 +109,9 @@ Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session
 
 Web UI（React + Vite + Tailwind + shadcn/ui），由 `kiliax-server` 静态托管：
 
-- `web/src/app.tsx`: 单页应用（顶部栏 Agent/Model + 只读 workspace（仅显示末级目录）；支持 “Add folder” 追加 `extra_workspace_roots`；侧边栏可折叠并拆成 Workspaces/Sessions 两个独立滚动区（默认加载 6 条 + Load more；Workspaces 仅显示非 tmp、默认折叠、支持按 workspace 新建/批量删除 session；Sessions 仅显示 tmp workspace 的 session；workspace item 右侧 meatball actions：pin/unpin + delete）；发送时乐观插入 user bubble，避免 streaming tool 输出乱序；中断按钮根据 `active_run_id/run_state/last_event_id` 自动切换；工具调用 JSON 格式化+高亮；API 错误弹窗展示 `code/message/details/trace_id`）
+- `web/src/app.tsx`: 单页应用（聊天流式事件 WS；thinking/tool_call/tool_result 块右上角一键复制；assistant 消息尾部 divider + copy + kebab（占位）；基于事件流做 thinking/tool/output 用时统计并在 UI 中展示）
 - `web/src/components/markdown.tsx`: 轻量 Markdown 渲染（安全：不渲染 HTML；支持嵌套列表/有序列表连续编号；支持 GFM 表格/对齐；fenced code block 走 VSCode 风格高亮）
-- `web/src/components/code-block.tsx`: VSCode Dark+ 风格代码渲染（JSON pretty-print + 轻量 token 高亮）
+- `web/src/components/code-block.tsx`: VSCode Dark+ 风格代码渲染（右上角复制；`mermaid` fenced code 渲染为图，失败时回退为文本）
 - `web/src/lib/api.ts`: Web API client（API 错误解析：`code/message/details/trace_id`，并在 UI 侧可展示/复制；包含 `DELETE /v1/sessions/{id}`）
 
 ## constraints

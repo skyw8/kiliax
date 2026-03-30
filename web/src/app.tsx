@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, FolderPlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, FolderPlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Trash2, X } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
@@ -73,6 +73,49 @@ function stringifyUnknown(v: unknown): string {
 
 function newAlertId(prefix: string): string {
   return `${prefix}_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`;
+}
+
+function monotonicNowMs(): number {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function fmtDurationCompact(durationMs: number): string {
+  const ms = Math.max(0, Math.round(durationMs));
+  if (ms >= 60_000) {
+    const sec = Math.floor(ms / 1000);
+    const minutes = Math.floor(sec / 60);
+    const seconds = sec % 60;
+    return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+  }
+  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  const value = text ?? "";
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    try {
+      const el = document.createElement("textarea");
+      el.value = value;
+      el.style.position = "fixed";
+      el.style.left = "-9999px";
+      el.style.top = "0";
+      document.body.appendChild(el);
+      el.focus();
+      el.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(el);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function AlertStack({
@@ -268,26 +311,51 @@ function isTmpWorkspaceRoot(root: string): boolean {
   return p.includes("/.kiliax/workspace/tmp_");
 }
 
-function renderToolCalls(toolCalls?: ToolCall[]) {
+function renderToolCalls(
+  toolCalls: ToolCall[] | undefined,
+  toolDurationsMs: Record<string, number>,
+) {
   if (!toolCalls?.length) return null;
   return (
     <div className="mt-2 space-y-1">
       {toolCalls.map((c) => (
         <details
           key={c.id}
-          className="rounded-md border border-zinc-200 bg-white px-3 py-2"
+          className="relative rounded-md border border-zinc-200 bg-white px-3 py-2"
         >
-          <summary className="cursor-pointer select-none text-xs text-zinc-700">
+          <button
+            type="button"
+            className="absolute right-1 top-1 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+            aria-label="Copy tool call"
+            title="Copy tool call"
+            onClick={() => copyToClipboard(c.arguments)}
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </button>
+          <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-700">
             tool_call: <span className="font-mono">{c.name}</span>
+            {toolDurationsMs[c.id] != null ? (
+              <span className="ml-2 text-zinc-500">({fmtDurationCompact(toolDurationsMs[c.id]!)})</span>
+            ) : null}
           </summary>
-          <CodeBlock className="mt-2" code={c.arguments} lang="json" />
+          <CodeBlock className="mt-2" code={c.arguments} lang="json" copyButton={false} />
         </details>
       ))}
     </div>
   );
 }
 
-function MessageRow({ msg }: { msg: Message }) {
+function MessageRow({
+  msg,
+  toolDurationsMs,
+  thinkingDurationsMs,
+  assistantDurationsMs,
+}: {
+  msg: Message;
+  toolDurationsMs: Record<string, number>;
+  thinkingDurationsMs: Record<string, number>;
+  assistantDurationsMs: Record<string, number>;
+}) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
@@ -308,16 +376,55 @@ function MessageRow({ msg }: { msg: Message }) {
             <div className="text-zinc-500">…</div>
           )}
           {msg.reasoning_content ? (
-            <details className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
-              <summary className="cursor-pointer select-none text-xs text-zinc-600">
+            <details className="relative mt-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+              <button
+                type="button"
+                className="absolute right-1 top-1 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                aria-label="Copy thinking"
+                title="Copy thinking"
+                onClick={() => copyToClipboard(msg.reasoning_content ?? "")}
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+              <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-600">
                 thinking
+                {thinkingDurationsMs[msg.id] != null ? (
+                  <span className="ml-2 text-zinc-500">({fmtDurationCompact(thinkingDurationsMs[msg.id]!)})</span>
+                ) : null}
               </summary>
               <div className="mt-2 whitespace-pre-wrap text-xs italic text-zinc-700">
                 {msg.reasoning_content}
               </div>
             </details>
           ) : null}
-          {renderToolCalls(msg.tool_calls ?? [])}
+          {renderToolCalls(msg.tool_calls ?? [], toolDurationsMs)}
+
+          <div className="mt-2 border-t border-zinc-200 pt-1">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                aria-label="Copy message"
+                title="Copy message"
+                onClick={() => copyToClipboard(msg.content ?? "")}
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                aria-label="Menu"
+                title="Menu"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+              {assistantDurationsMs[msg.id] != null ? (
+                <span className="ml-auto text-xs text-zinc-500">
+                  {fmtDurationCompact(assistantDurationsMs[msg.id]!)}
+                </span>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -325,11 +432,23 @@ function MessageRow({ msg }: { msg: Message }) {
 
   return (
     <div className="flex justify-start">
-      <details className="w-full max-w-[78%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2">
-        <summary className="cursor-pointer select-none text-xs text-zinc-700">
+      <details className="relative w-full max-w-[78%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2">
+        <button
+          type="button"
+          className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+          aria-label="Copy tool result"
+          title="Copy tool result"
+          onClick={() => copyToClipboard(msg.content ?? "")}
+        >
+          <Copy className="h-3.5 w-3.5" />
+        </button>
+        <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-700">
           tool_result: <span className="font-mono">{msg.tool_call_id}</span>
+          {toolDurationsMs[msg.tool_call_id] != null ? (
+            <span className="ml-2 text-zinc-500">({fmtDurationCompact(toolDurationsMs[msg.tool_call_id]!)})</span>
+          ) : null}
         </summary>
-        <CodeBlock className="mt-2" code={msg.content} lang="json" />
+        <CodeBlock className="mt-2" code={msg.content} lang="json" copyButton={false} />
       </details>
     </div>
   );
@@ -376,6 +495,14 @@ export default function App() {
     assistantStarted: false,
     toolCalls: [],
   });
+  const [toolDurationsMs, setToolDurationsMs] = useState<Record<string, number>>({});
+  const [assistantDurationsMs, setAssistantDurationsMs] = useState<Record<string, number>>({});
+  const [thinkingDurationsMs, setThinkingDurationsMs] = useState<Record<string, number>>({});
+  const [clockNowMs, setClockNowMs] = useState<number>(() => monotonicNowMs());
+  const toolStartsRef = useRef<Record<string, { name: string; startedAt: number }>>({});
+  const thinkingStartedAtRef = useRef<number | null>(null);
+  const assistantStartedAtRef = useRef<number | null>(null);
+  const nextThinkingDurationMsRef = useRef<number | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const [composerText, setComposerText] = useState("");
@@ -577,6 +704,13 @@ export default function App() {
         assistantStarted: false,
         toolCalls: [],
       });
+      setToolDurationsMs({});
+      setAssistantDurationsMs({});
+      setThinkingDurationsMs({});
+      toolStartsRef.current = {};
+      thinkingStartedAtRef.current = null;
+      assistantStartedAtRef.current = null;
+      nextThinkingDurationMsRef.current = null;
 
       connectWs(sessionId, s.status.last_event_id);
     } catch (err) {
@@ -614,10 +748,21 @@ export default function App() {
   async function handleEvent(ev: any) {
     const type = ev?.type ?? ev?.event_type;
     if (!type) return;
+    const now = monotonicNowMs();
+
+    if (type === "step_start") {
+      thinkingStartedAtRef.current = now;
+      assistantStartedAtRef.current = null;
+      nextThinkingDurationMsRef.current = null;
+      return;
+    }
 
     if (type === "assistant_thinking_delta") {
       const delta = ev?.data?.delta ?? "";
       if (!delta) return;
+      if (thinkingStartedAtRef.current == null && assistantStartedAtRef.current == null) {
+        thinkingStartedAtRef.current = now;
+      }
       setStream((s) => {
         if (s.assistantStarted) return s;
         return { ...s, thinking: s.thinking + delta };
@@ -628,6 +773,12 @@ export default function App() {
     if (type === "assistant_delta") {
       const delta = ev?.data?.delta ?? "";
       if (!delta) return;
+      if (assistantStartedAtRef.current == null) {
+        assistantStartedAtRef.current = now;
+        if (thinkingStartedAtRef.current != null && nextThinkingDurationMsRef.current == null) {
+          nextThinkingDurationMsRef.current = now - thinkingStartedAtRef.current;
+        }
+      }
       setStream((s) => ({
         ...s,
         assistantStarted: true,
@@ -639,11 +790,16 @@ export default function App() {
     if (type === "tool_call") {
       const call = ev?.data?.call;
       if (!call?.name) return;
+      const callId = String(call.id ?? "");
+      toolStartsRef.current[callId] = {
+        name: String(call.name),
+        startedAt: now,
+      };
       setStream((s) => ({
         ...s,
         toolCalls: [
           ...s.toolCalls,
-          { id: String(call.id ?? ""), name: String(call.name), arguments: String(call.arguments ?? "") },
+          { id: callId, name: String(call.name), arguments: String(call.arguments ?? "") },
         ],
       }));
       return;
@@ -652,6 +808,15 @@ export default function App() {
     if (type === "tool_result") {
       const msg = ev?.data?.message;
       if (!msg?.role) return;
+      const toolCallId = String(msg?.tool_call_id ?? "");
+      const startedAt = toolStartsRef.current[toolCallId]?.startedAt ?? null;
+      if (startedAt != null && toolCallId) {
+        const elapsed = now - startedAt;
+        setToolDurationsMs((prev) => {
+          if (prev[toolCallId] != null) return prev;
+          return { ...prev, [toolCallId]: elapsed };
+        });
+      }
       setMessages((m) => [...m, msg as Message]);
       return;
     }
@@ -659,8 +824,30 @@ export default function App() {
     if (type === "assistant_message") {
       const msg = ev?.data?.message;
       if (!msg?.role) return;
+      const messageId = String(msg?.id ?? "");
+      if (assistantStartedAtRef.current != null && messageId) {
+        const elapsed = now - assistantStartedAtRef.current!;
+        setAssistantDurationsMs((prev) => {
+          if (prev[messageId] != null) return prev;
+          return { ...prev, [messageId]: elapsed };
+        });
+      }
+      const thinkingElapsed =
+        nextThinkingDurationMsRef.current != null
+          ? nextThinkingDurationMsRef.current
+          : thinkingStartedAtRef.current != null
+            ? now - thinkingStartedAtRef.current
+            : null;
+      if (thinkingElapsed != null && messageId) {
+        setThinkingDurationsMs((prev) => {
+          if (prev[messageId] != null) return prev;
+          return { ...prev, [messageId]: thinkingElapsed };
+        });
+      }
       setMessages((m) => [...m, msg as Message]);
       setStream({ thinking: "", assistant: "", assistantStarted: false, toolCalls: [] });
+      assistantStartedAtRef.current = null;
+      nextThinkingDurationMsRef.current = null;
       return;
     }
 
@@ -694,6 +881,9 @@ export default function App() {
     }
 
     if (type === "run_done" || type === "run_error" || type === "run_cancelled") {
+      thinkingStartedAtRef.current = null;
+      assistantStartedAtRef.current = null;
+      nextThinkingDurationMsRef.current = null;
       if (selectedId) {
         await fetchSession(selectedId);
       }
@@ -1083,6 +1273,13 @@ export default function App() {
         wsRef.current.close();
         wsRef.current = null;
       }
+      setToolDurationsMs({});
+      setAssistantDurationsMs({});
+      setThinkingDurationsMs({});
+      toolStartsRef.current = {};
+      thinkingStartedAtRef.current = null;
+      assistantStartedAtRef.current = null;
+      nextThinkingDurationMsRef.current = null;
       return;
     }
     if (skipNextFetchRef.current === selectedId) {
@@ -1130,6 +1327,27 @@ export default function App() {
 
   const agentOptions = capabilities?.agents ?? [];
   const modelOptions = capabilities?.models ?? [];
+  const streamHasThinking = stream.thinking.length > 0;
+  const streamHasAssistant = stream.assistant.length > 0;
+  const streamToolCallCount = stream.toolCalls.length;
+  const liveThinkingElapsedMs =
+    nextThinkingDurationMsRef.current ??
+    (thinkingStartedAtRef.current != null ? clockNowMs - thinkingStartedAtRef.current : null);
+  const liveAssistantElapsedMs =
+    assistantStartedAtRef.current != null ? clockNowMs - assistantStartedAtRef.current : null;
+
+  useEffect(() => {
+    const active = Boolean(
+      selectedId &&
+        (sessionHasWork ||
+          streamHasThinking ||
+          streamHasAssistant ||
+          streamToolCallCount > 0),
+    );
+    if (!active) return;
+    const t = window.setInterval(() => setClockNowMs(monotonicNowMs()), 250);
+    return () => window.clearInterval(t);
+  }, [selectedId, sessionHasWork, streamHasThinking, streamHasAssistant, streamToolCallCount]);
 
   if (authError) {
     return (
@@ -1549,14 +1767,34 @@ export default function App() {
             {selectedId ? (
               <div className="mx-auto w-full max-w-4xl space-y-3">
                 {messages.map((m) => (
-                  <MessageRow key={`${m.role}:${m.id}`} msg={m} />
+                  <MessageRow
+                    key={`${m.role}:${m.id}`}
+                    msg={m}
+                    toolDurationsMs={toolDurationsMs}
+                    thinkingDurationsMs={thinkingDurationsMs}
+                    assistantDurationsMs={assistantDurationsMs}
+                  />
                 ))}
 
                 {stream.thinking ? (
                   <div className="flex justify-start">
-                    <details className="w-full max-w-[78%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2">
-                      <summary className="cursor-pointer select-none text-xs text-zinc-600">
+                    <details className="relative w-full max-w-[78%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2">
+                      <button
+                        type="button"
+                        className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                        aria-label="Copy thinking"
+                        title="Copy thinking"
+                        onClick={() => copyToClipboard(stream.thinking)}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                      <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-600">
                         thinking
+                        {liveThinkingElapsedMs != null ? (
+                          <span className="ml-2 text-zinc-500">
+                            ({fmtDurationCompact(liveThinkingElapsedMs)})
+                          </span>
+                        ) : null}
                       </summary>
                       <div className="mt-2 whitespace-pre-wrap text-xs italic text-zinc-700">
                         {stream.thinking}
@@ -1570,12 +1808,30 @@ export default function App() {
                     {stream.toolCalls.map((c) => (
                       <details
                         key={`toolcall:${c.id}:${c.name}`}
-                        className="rounded-xl border border-zinc-200 bg-white px-4 py-2"
+                        className="relative rounded-xl border border-zinc-200 bg-white px-4 py-2"
                       >
-                        <summary className="cursor-pointer select-none text-xs text-zinc-700">
+                        <button
+                          type="button"
+                          className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                          aria-label="Copy tool call"
+                          title="Copy tool call"
+                          onClick={() => copyToClipboard(c.arguments)}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
+                        <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-700">
                           tool_call: <span className="font-mono">{c.name}</span>
+                          {toolDurationsMs[c.id] != null ? (
+                            <span className="ml-2 text-zinc-500">
+                              ({fmtDurationCompact(toolDurationsMs[c.id]!)})
+                            </span>
+                          ) : toolStartsRef.current[c.id]?.startedAt != null ? (
+                            <span className="ml-2 text-zinc-500">
+                              ({fmtDurationCompact(clockNowMs - toolStartsRef.current[c.id]!.startedAt)})
+                            </span>
+                          ) : null}
                         </summary>
-                        <CodeBlock className="mt-2" code={c.arguments} lang="json" />
+                        <CodeBlock className="mt-2" code={c.arguments} lang="json" copyButton={false} />
                       </details>
                     ))}
                   </div>
@@ -1585,6 +1841,32 @@ export default function App() {
                   <div className="flex justify-start">
                     <div className="max-w-[78%] rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900">
                       <Markdown text={stream.assistant} />
+                      <div className="mt-2 border-t border-zinc-200 pt-1">
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                            aria-label="Copy message"
+                            title="Copy message"
+                            onClick={() => copyToClipboard(stream.assistant)}
+                          >
+                            <Copy className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                            aria-label="Menu"
+                            title="Menu"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                          {assistantStartedAtRef.current != null ? (
+                            <span className="ml-auto text-xs text-zinc-500">
+                              {fmtDurationCompact(liveAssistantElapsedMs ?? 0)}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ) : null}
