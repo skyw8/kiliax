@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Trash2 } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
@@ -646,7 +646,7 @@ export default function App() {
   useEffect(() => {
     const el = composerRef.current;
     if (!el) return;
-    const minPx = 52;
+    const minPx = 44;
     const maxPx = 240;
     el.style.height = "auto";
     const next = Math.min(maxPx, Math.max(minPx, el.scrollHeight));
@@ -1018,7 +1018,7 @@ export default function App() {
             className="flex-1 overflow-auto bg-zinc-50 px-4 py-4"
           >
             {selectedId ? (
-              <div className="mx-auto w-full max-w-3xl space-y-3">
+              <div className="mx-auto w-full max-w-4xl space-y-3">
                 {messages.map((m) => (
                   <MessageRow key={`${m.role}:${m.id}`} msg={m} />
                 ))}
@@ -1094,14 +1094,14 @@ export default function App() {
           ) : null}
 
           <div className="border-t border-zinc-200 bg-white px-4 py-3">
-            <div className="mx-auto w-full max-w-3xl">
-              <div className="flex items-end gap-2">
+            <div className="mx-auto w-full max-w-4xl">
+              <div className="flex items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
                 <Textarea
                   ref={composerRef}
                   value={composerText}
                   onChange={(e) => setComposerText(e.target.value)}
-                  placeholder="Ask anything… (Enter to send · Shift+Enter for newline)"
-                  className="min-h-[52px] max-h-[240px] resize-none leading-relaxed"
+                  placeholder="畅所欲问"
+                  className="min-h-[44px] max-h-[240px] resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -1113,7 +1113,7 @@ export default function App() {
                   <Button
                     size="icon"
                     aria-label="Interrupt"
-                    className="h-[52px] w-[52px] bg-red-600 text-zinc-50 hover:bg-red-500"
+                    className="shrink-0 rounded-full"
                     onClick={async () => {
                       if (!cancellableRunId) return;
                       try {
@@ -1124,7 +1124,7 @@ export default function App() {
                       }
                     }}
                   >
-                    <CircleStop className="h-5 w-5" />
+                    <Square className="h-4 w-4" />
                   </Button>
                 ) : (
                   <Button
@@ -1132,9 +1132,9 @@ export default function App() {
                     aria-label="Send"
                     onClick={onSend}
                     disabled={!composerHasText}
-                    className="h-[52px] w-[52px]"
+                    className="shrink-0 rounded-full"
                   >
-                    <ArrowUp className="h-5 w-5" />
+                    <ArrowUp className="h-4 w-4" />
                   </Button>
                 )}
               </div>
