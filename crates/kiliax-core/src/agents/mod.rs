@@ -3,7 +3,7 @@ mod plan;
 
 use serde::{Deserialize, Serialize};
 
-use crate::llm::ToolDefinition;
+use crate::tools::builtin::BuiltinToolId;
 use crate::tools::Permissions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,7 +18,7 @@ pub struct AgentProfile {
     pub kind: AgentKind,
     pub name: &'static str,
     pub developer_prompt: &'static str,
-    pub tools: Vec<ToolDefinition>,
+    pub tool_ids: Vec<BuiltinToolId>,
     pub permissions: Permissions,
 }
 

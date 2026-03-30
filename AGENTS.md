@@ -44,6 +44,7 @@ minimal
 - `crates/kiliax-core/src/session.rs`: session 持久化（目录式：`meta.json` + `snapshot.json` + `events.jsonl`，默认写入 `~/.kiliax/sessions/<session_id>/`）；title 从首条 user 文本派生并做 UTF-8 安全截断（避免中文等多字节字符触发 panic）
 - `crates/kiliax-core/src/tools/`: 工具系统
   - `mod.rs`: 权限/错误类型；导出 `ToolEngine`；定义 `ToolParallelism` 与并行能力判定
+  - `policy.rs`: 基于 model_id 的工具选择/禁用策略（GPT-5 用 `apply_patch`；其他模型用 `write_file`/`edit_file`）
   - `builtin/`: codex 风格内置工具 schema + 执行（按工具拆分）
     - `mod.rs`: tool name 常量 + dispatcher + re-export
     - `common.rs`: args/path 解析（workspace/skills roots；拒绝 `..`，防 symlink escape）
@@ -57,6 +58,7 @@ minimal
     - `view_image.rs`: `view_image`（读取并 attach 本地图片到下一轮上下文）
     - `shell.rs`: `shell_command`/`write_stdin`（argv allowlist + sessions）
     - `apply_patch.rs`: `apply_patch`（Begin/End Patch）
+    - `registry.rs`: 内置工具注册表（`BuiltinToolId` → ToolDefinition）
     - `update_plan.rs`: `update_plan`
   - `engine.rs`: 工具统一执行入口（维护 shell sessions；持有 Config 并支持 `set_config` 热更新；支持 tool 输出多条消息用于 image attach；MCP servers 后台连接/重试（指数 backoff），支持 `enable` 开关（禁用的不连接/不重试/调用时报错）；提供 `mcp_status` 快照给 UI）；**OTEL tool span + args/output 捕获 + metrics（Langfuse tool observation input/output）**
   - `mcp.rs`: MCP stdio hub（QuietStdioTransport：drain stderr 避免污染 TUI + `kill_on_drop` 防止失败连接遗留子进程；connect/list_tools 超时；`mcp__<server>__<tool>` 命名空间、调用工具；shutdown 超时；提供已连接 server 概览）；**OTEL connect/call spans + metrics**

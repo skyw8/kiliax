@@ -10,7 +10,7 @@ use crate::llm::{
     ChatRequest, ChatStreamChunk, LlmClient, LlmError, Message, ToolCall, ToolCallDelta, ToolChoice,
 };
 use crate::telemetry;
-use crate::tools::{tool_parallelism, ToolEngine, ToolError, ToolParallelism};
+use crate::tools::{policy, tool_parallelism, ToolEngine, ToolError, ToolParallelism};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentRuntimeError {
@@ -115,11 +115,13 @@ impl AgentRuntime {
         mut messages: Vec<Message>,
         options: AgentRuntimeOptions,
     ) -> Result<AgentRunOutput, AgentRuntimeError> {
+        let model_id = self.llm.route().model_id();
+        let tool_policy = policy::ToolPolicy::for_model_id(&model_id);
         let perms = std::sync::Arc::new(profile.permissions.clone());
 
         for step in 0..options.max_steps {
             sanitize_tool_call_history(&mut messages);
-            let tool_defs = tool_definitions_for(profile, &self.tools).await;
+            let tool_defs = tool_definitions_for(profile, &self.tools, &model_id).await;
             let mut req = ChatRequest::new(messages.clone());
             req.tools = tool_defs;
             req.tool_choice = options.tool_choice.clone();
@@ -150,6 +152,25 @@ impl AgentRuntime {
             for group in group_tool_calls(&tool_calls) {
                 match group {
                     ToolCallGroup::Exclusive(call) => {
+                        if !tool_policy.allows_tool_name(call.name.as_str()) {
+                            let reason = tool_policy
+                                .denial_message(call.name.as_str())
+                                .unwrap_or("tool not available for this model");
+                            let err = ToolError::PermissionDenied(format!(
+                                "{}: {reason}",
+                                call.name.as_str()
+                            ));
+                            match options.tool_error_mode {
+                                ToolErrorMode::FailFast => return Err(err.into()),
+                                ToolErrorMode::ToolMessage => {
+                                    messages.push(Message::Tool {
+                                        tool_call_id: call.id.clone(),
+                                        content: format!("error: {err}"),
+                                    });
+                                }
+                            }
+                            continue;
+                        }
                         match self.tools.execute_to_messages(perms.as_ref(), call).await {
                             Ok(tool_msgs) => messages.extend(tool_msgs),
                             Err(err) => match options.tool_error_mode {
@@ -166,6 +187,25 @@ impl AgentRuntime {
                     ToolCallGroup::Parallel(calls) => {
                         if calls.len() == 1 {
                             let call = &calls[0];
+                            if !tool_policy.allows_tool_name(call.name.as_str()) {
+                                let reason = tool_policy
+                                    .denial_message(call.name.as_str())
+                                    .unwrap_or("tool not available for this model");
+                                let err = ToolError::PermissionDenied(format!(
+                                    "{}: {reason}",
+                                    call.name.as_str()
+                                ));
+                                match options.tool_error_mode {
+                                    ToolErrorMode::FailFast => return Err(err.into()),
+                                    ToolErrorMode::ToolMessage => {
+                                        messages.push(Message::Tool {
+                                            tool_call_id: call.id.clone(),
+                                            content: format!("error: {err}"),
+                                        });
+                                    }
+                                }
+                                continue;
+                            }
                             match self.tools.execute_to_messages(perms.as_ref(), call).await {
                                 Ok(tool_msgs) => messages.extend(tool_msgs),
                                 Err(err) => match options.tool_error_mode {
@@ -184,7 +224,21 @@ impl AgentRuntime {
                         let mut set = tokio::task::JoinSet::new();
                         let tools = self.tools.clone();
 
+                        let mut results: Vec<Option<Result<Vec<Message>, ToolError>>> = Vec::new();
+                        results.resize_with(calls.len(), || None);
+
                         for (idx, call) in calls.iter().cloned().enumerate() {
+                            if !tool_policy.allows_tool_name(call.name.as_str()) {
+                                let reason = tool_policy
+                                    .denial_message(call.name.as_str())
+                                    .unwrap_or("tool not available for this model");
+                                results[idx] = Some(Err(ToolError::PermissionDenied(format!(
+                                    "{}: {reason}",
+                                    call.name.as_str()
+                                ))));
+                                continue;
+                            }
+
                             let tools = tools.clone();
                             let perms = perms.clone();
                             let parent_span = tracing::Span::current();
@@ -198,8 +252,6 @@ impl AgentRuntime {
                             );
                         }
 
-                        let mut results: Vec<Option<Result<Vec<Message>, ToolError>>> = Vec::new();
-                        results.resize_with(calls.len(), || None);
                         while let Some(joined) = set.join_next().await {
                             let (idx, _call, res) = joined.map_err(|e| {
                                 ToolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -257,6 +309,8 @@ impl AgentRuntime {
         let tools = self.tools.clone();
         let profile = profile.clone();
         let perms = std::sync::Arc::new(profile.permissions.clone());
+        let model_id = llm.route().model_id();
+        let tool_policy = policy::ToolPolicy::for_model_id(&model_id);
 
         let started = std::time::Instant::now();
         let run_span = tracing::info_span!(
@@ -292,7 +346,7 @@ impl AgentRuntime {
                         }
 
                         let mut req = ChatRequest::new(messages.clone());
-                        req.tools = tool_definitions_for(&profile, &tools).await;
+                        req.tools = tool_definitions_for(&profile, &tools, &model_id).await;
                         req.tool_choice = options.tool_choice.clone();
                         req.parallel_tool_calls = options.parallel_tool_calls;
                         req.temperature = options.temperature;
@@ -372,6 +426,35 @@ impl AgentRuntime {
                                                 }))
                                                 .await;
 
+                                            if !tool_policy.allows_tool_name(call.name.as_str()) {
+                                                let reason = tool_policy
+                                                    .denial_message(call.name.as_str())
+                                                    .unwrap_or("tool not available for this model");
+                                                let err = ToolError::PermissionDenied(format!(
+                                                    "{}: {reason}",
+                                                    call.name.as_str()
+                                                ));
+                                                match options.tool_error_mode {
+                                                    ToolErrorMode::FailFast => {
+                                                        let _ = tx.send(Err(err.into())).await;
+                                                        return LoopControl::Return;
+                                                    }
+                                                    ToolErrorMode::ToolMessage => {
+                                                        let tool_msg = Message::Tool {
+                                                            tool_call_id: call.id.clone(),
+                                                            content: format!("error: {err}"),
+                                                        };
+                                                        let _ = tx
+                                                            .send(Ok(AgentEvent::ToolResult {
+                                                                message: tool_msg.clone(),
+                                                            }))
+                                                            .await;
+                                                        messages.push(tool_msg);
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+
                                             match tools
                                                 .execute_to_messages(perms.as_ref(), call)
                                                 .await
@@ -421,6 +504,44 @@ impl AgentRuntime {
 
                                             if calls.len() == 1 {
                                                 let call = &calls[0];
+                                                if !tool_policy
+                                                    .allows_tool_name(call.name.as_str())
+                                                {
+                                                    let reason = tool_policy
+                                                        .denial_message(call.name.as_str())
+                                                        .unwrap_or(
+                                                            "tool not available for this model",
+                                                        );
+                                                    let err = ToolError::PermissionDenied(
+                                                        format!(
+                                                            "{}: {reason}",
+                                                            call.name.as_str()
+                                                        ),
+                                                    );
+                                                    match options.tool_error_mode {
+                                                        ToolErrorMode::FailFast => {
+                                                            let _ = tx
+                                                                .send(Err(err.into()))
+                                                                .await;
+                                                            return LoopControl::Return;
+                                                        }
+                                                        ToolErrorMode::ToolMessage => {
+                                                            let tool_msg = Message::Tool {
+                                                                tool_call_id: call.id.clone(),
+                                                                content: format!("error: {err}"),
+                                                            };
+                                                            let _ = tx
+                                                                .send(Ok(
+                                                                    AgentEvent::ToolResult {
+                                                                        message: tool_msg.clone(),
+                                                                    },
+                                                                ))
+                                                                .await;
+                                                            messages.push(tool_msg);
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
                                                 match tools
                                                     .execute_to_messages(perms.as_ref(), call)
                                                     .await
@@ -465,7 +586,44 @@ impl AgentRuntime {
                                             let mut set = tokio::task::JoinSet::new();
                                             let tools = tools.clone();
 
+                                            let mut results: Vec<Option<Vec<Message>>> =
+                                                vec![None; calls.len()];
+
                                             for (idx, call) in calls.iter().cloned().enumerate() {
+                                                if !tool_policy.allows_tool_name(call.name.as_str())
+                                                {
+                                                    let reason = tool_policy
+                                                        .denial_message(call.name.as_str())
+                                                        .unwrap_or("tool not available for this model");
+                                                    let err = ToolError::PermissionDenied(format!(
+                                                        "{}: {reason}",
+                                                        call.name.as_str()
+                                                    ));
+                                                    match options.tool_error_mode {
+                                                        ToolErrorMode::FailFast => {
+                                                            let _ =
+                                                                tx.send(Err(err.into())).await;
+                                                            return LoopControl::Return;
+                                                        }
+                                                        ToolErrorMode::ToolMessage => {
+                                                            let tool_msg = Message::Tool {
+                                                                tool_call_id: call.id.clone(),
+                                                                content: format!("error: {err}"),
+                                                            };
+                                                            results[idx] =
+                                                                Some(vec![tool_msg.clone()]);
+                                                            let _ = tx
+                                                                .send(Ok(
+                                                                    AgentEvent::ToolResult {
+                                                                        message: tool_msg,
+                                                                    },
+                                                                ))
+                                                                .await;
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
+
                                                 let tools = tools.clone();
                                                 let perms = perms.clone();
                                                 let parent_span = tracing::Span::current();
@@ -483,8 +641,6 @@ impl AgentRuntime {
                                                 );
                                             }
 
-                                            let mut results: Vec<Option<Vec<Message>>> =
-                                                vec![None; calls.len()];
                                             while let Some(joined) = set.join_next().await {
                                                 if tx.is_closed() {
                                                     return LoopControl::Return;
@@ -597,10 +753,9 @@ impl AgentRuntime {
 async fn tool_definitions_for(
     profile: &AgentProfile,
     tools: &ToolEngine,
+    model_id: &str,
 ) -> Vec<crate::llm::ToolDefinition> {
-    let mut tool_defs = profile.tools.clone();
-    tool_defs.extend(tools.extra_tool_definitions().await);
-    tool_defs
+    policy::tool_definitions_for_agent(profile, tools, model_id).await
 }
 
 #[derive(Debug, Clone)]

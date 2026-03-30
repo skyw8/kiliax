@@ -253,13 +253,17 @@ async fn main() -> Result<()> {
             (session, messages)
         }
         None => {
+            let model_id = runtime.llm().route().model_id();
             let mut builder = PromptBuilder::for_agent(&profile)
                 .with_tools({
-                    let mut tools = profile.tools.clone();
-                    tools.extend(runtime.tools().extra_tool_definitions().await);
-                    tools
+                    kiliax_core::tools::policy::tool_definitions_for_agent(
+                        &profile,
+                        runtime.tools(),
+                        &model_id,
+                    )
+                    .await
                 })
-                .with_model_id(runtime.llm().route().model_id())
+                .with_model_id(model_id)
                 .with_workspace_root(&workspace_root);
             if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
                 builder = builder.add_skills(skills);

@@ -1,6 +1,7 @@
 pub mod builtin;
 pub mod engine;
 pub mod mcp;
+pub mod policy;
 pub mod skills;
 
 pub use engine::{McpServerConnectionState, McpServerStatus, ToolEngine};

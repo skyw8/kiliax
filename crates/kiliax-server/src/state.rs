@@ -2375,9 +2375,7 @@ async fn build_preamble(
 ) -> Vec<CoreMessage> {
     let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
         .with_tools({
-            let mut tool_defs = profile.tools.clone();
-            tool_defs.extend(tools.extra_tool_definitions().await);
-            tool_defs
+            kiliax_core::tools::policy::tool_definitions_for_agent(profile, tools, model_id).await
         })
         .with_model_id(model_id.to_string())
         .with_workspace_root(workspace_root);
