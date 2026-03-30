@@ -49,10 +49,11 @@ type DebugError = {
 };
 
 const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
+const PINNED_WORKSPACES_KEY = "kiliax:pinned_workspace_roots";
 const SIDEBAR_OPEN_KEY = "kiliax:sidebar_open";
 const WORKSPACES_OPEN_KEY = "kiliax:sidebar_workspaces_open";
 const SESSIONS_OPEN_KEY = "kiliax:sidebar_sessions_open";
-const SESSIONS_VISIBLE_KEY = "kiliax:sessions_visible";
+const LIST_PAGE_SIZE = 6;
 
 function displayModelId(modelId: string): string {
   const idx = modelId.indexOf("/");
@@ -84,6 +85,26 @@ function loadPinnedSessionIds(): string[] {
 function savePinnedSessionIds(ids: string[]) {
   try {
     localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(ids));
+  } catch {
+    // ignore
+  }
+}
+
+function loadPinnedWorkspaceRoots(): string[] {
+  try {
+    const raw = localStorage.getItem(PINNED_WORKSPACES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v) => typeof v === "string");
+  } catch {
+    return [];
+  }
+}
+
+function savePinnedWorkspaceRoots(roots: string[]) {
+  try {
+    localStorage.setItem(PINNED_WORKSPACES_KEY, JSON.stringify(roots));
   } catch {
     // ignore
   }
@@ -125,28 +146,6 @@ function saveSidebarSectionOpen(key: string, open: boolean) {
   }
 }
 
-function loadSessionsVisible(): number {
-  try {
-    const raw = localStorage.getItem(SESSIONS_VISIBLE_KEY);
-    if (!raw) return 6;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return 6;
-    if (n === 0) return 0;
-    if (n === 6 || n === 12 || n === 24) return n;
-    return 6;
-  } catch {
-    return 6;
-  }
-}
-
-function saveSessionsVisible(n: number) {
-  try {
-    localStorage.setItem(SESSIONS_VISIBLE_KEY, String(n));
-  } catch {
-    // ignore
-  }
-}
-
 function statusBadge(summary: SessionSummary): {
   label: string;
   variant: "idle" | "step" | "done" | "error";
@@ -182,6 +181,15 @@ function sortSessions(items: SessionSummary[], pinnedIds: string[]): SessionSumm
 
 function normalizePathForMatch(p: string): string {
   return (p ?? "").replaceAll("\\", "/");
+}
+
+function workspaceBasename(root: string): string {
+  const normalized = normalizePathForMatch(root).replace(/\/+$/, "");
+  if (!normalized) return root;
+  if (normalized === "/") return "/";
+  const idx = normalized.lastIndexOf("/");
+  const base = idx === -1 ? normalized : normalized.slice(idx + 1);
+  return base || normalized;
 }
 
 function isTmpWorkspaceRoot(root: string): boolean {
@@ -273,6 +281,9 @@ export default function App() {
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() =>
     loadPinnedSessionIds(),
   );
+  const [pinnedWorkspaceRoots, setPinnedWorkspaceRoots] = useState<string[]>(() =>
+    loadPinnedWorkspaceRoots(),
+  );
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => loadSidebarOpen());
   const [workspacesPaneOpen, setWorkspacesPaneOpen] = useState<boolean>(() =>
     loadSidebarSectionOpen(WORKSPACES_OPEN_KEY, true),
@@ -280,9 +291,8 @@ export default function App() {
   const [sessionsPaneOpen, setSessionsPaneOpen] = useState<boolean>(() =>
     loadSidebarSectionOpen(SESSIONS_OPEN_KEY, true),
   );
-  const [sessionsVisible, setSessionsVisible] = useState<number>(() =>
-    loadSessionsVisible(),
-  );
+  const [sessionsVisible, setSessionsVisible] = useState<number>(LIST_PAGE_SIZE);
+  const [workspacesVisible, setWorkspacesVisible] = useState<number>(LIST_PAGE_SIZE);
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, boolean>>({});
   const route = useRoute();
   const selectedId = route.name === "session" ? route.sessionId : null;
@@ -323,6 +333,17 @@ export default function App() {
     workspaceRoot: string;
   } | null>(null);
 
+  const [workspaceMenu, setWorkspaceMenu] = useState<{
+    workspaceRoot: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
+  const [workspaceCreateDraft, setWorkspaceCreateDraft] = useState("");
+  const [workspaceCreateSaving, setWorkspaceCreateSaving] = useState(false);
+
   const [addFolderOpen, setAddFolderOpen] = useState(false);
   const [addFolderDraft, setAddFolderDraft] = useState("");
 
@@ -341,9 +362,16 @@ export default function App() {
     () => sortSessions(sessions, pinnedSessionIds),
     [sessions, pinnedSessionIds],
   );
+  const tmpSessions = useMemo(
+    () =>
+      sortedSessions.filter((s) =>
+        isTmpWorkspaceRoot(s.settings.workspace_root ?? ""),
+      ),
+    [sortedSessions],
+  );
   const visibleSessions = useMemo(
-    () => (sessionsVisible <= 0 ? sortedSessions : sortedSessions.slice(0, sessionsVisible)),
-    [sortedSessions, sessionsVisible],
+    () => tmpSessions.slice(0, sessionsVisible),
+    [tmpSessions, sessionsVisible],
   );
   const workspaceGroups = useMemo(() => {
     const byRoot = new Map<string, SessionSummary[]>();
@@ -359,15 +387,31 @@ export default function App() {
       sessions: items,
       isTmp: isTmpWorkspaceRoot(root),
     }));
-    groups.sort((a, b) => {
-      if (a.isTmp !== b.isTmp) return a.isTmp ? 1 : -1;
+    // Web default sessions use tmp workspaces; keep them out of the Workspaces pane.
+    // They remain accessible via the Sessions pane.
+    const nonTmp = groups.filter((g) => !g.isTmp);
+    const pinnedRank = new Map(pinnedWorkspaceRoots.map((r, idx) => [r, idx]));
+    nonTmp.sort((a, b) => {
+      const aPinned = pinnedRank.has(a.root);
+      const bPinned = pinnedRank.has(b.root);
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+      if (aPinned && bPinned) {
+        return (pinnedRank.get(a.root) ?? 0) - (pinnedRank.get(b.root) ?? 0);
+      }
       return a.root.localeCompare(b.root);
     });
-    return groups;
-  }, [sortedSessions]);
+    return nonTmp;
+  }, [sortedSessions, pinnedWorkspaceRoots]);
+  const visibleWorkspaceGroups = useMemo(
+    () => workspaceGroups.slice(0, workspacesVisible),
+    [workspaceGroups, workspacesVisible],
+  );
   const deleteSessionSummary = deleteConfirm
     ? sortedSessions.find((s) => s.id === deleteConfirm.sessionId) ?? null
     : null;
+  const canLoadMoreSessions = visibleSessions.length < tmpSessions.length;
+  const canLoadMoreWorkspaces =
+    visibleWorkspaceGroups.length < workspaceGroups.length;
 
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
@@ -577,6 +621,7 @@ export default function App() {
       for (const id of ids) {
         await api.deleteSession(id);
       }
+      setPinnedWorkspaceRoots((prev) => prev.filter((r) => r !== workspaceRoot));
       setPinnedSessionIds((prev) => prev.filter((id) => !ids.includes(id)));
       if (selectedIdRef.current && ids.includes(selectedIdRef.current)) {
         navigate("/", { replace: true });
@@ -584,6 +629,23 @@ export default function App() {
       await refreshSessions();
     } catch (err) {
       handleApiError(err);
+    }
+  }
+
+  async function createSessionWithWorkspaceRoot(path: string) {
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    setWorkspaceCreateSaving(true);
+    try {
+      const s = await api.createSession({ settings: { workspace_root: trimmed } });
+      await refreshSessions();
+      setWorkspaceCreateOpen(false);
+      setWorkspaceCreateDraft("");
+      selectSession(s.id);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setWorkspaceCreateSaving(false);
     }
   }
 
@@ -639,6 +701,16 @@ export default function App() {
     setPinnedSessionIds((prev) => {
       const exists = prev.includes(sessionId);
       const next = exists ? prev.filter((id) => id !== sessionId) : [sessionId, ...prev];
+      return next;
+    });
+  }
+
+  function togglePinnedWorkspace(workspaceRoot: string) {
+    setPinnedWorkspaceRoots((prev) => {
+      const exists = prev.includes(workspaceRoot);
+      const next = exists
+        ? prev.filter((r) => r !== workspaceRoot)
+        : [workspaceRoot, ...prev];
       return next;
     });
   }
@@ -741,6 +813,10 @@ export default function App() {
   }, [pinnedSessionIds]);
 
   useEffect(() => {
+    savePinnedWorkspaceRoots(pinnedWorkspaceRoots);
+  }, [pinnedWorkspaceRoots]);
+
+  useEffect(() => {
     saveSidebarOpen(sidebarOpen);
   }, [sidebarOpen]);
 
@@ -751,10 +827,6 @@ export default function App() {
   useEffect(() => {
     saveSidebarSectionOpen(SESSIONS_OPEN_KEY, sessionsPaneOpen);
   }, [sessionsPaneOpen]);
-
-  useEffect(() => {
-    saveSessionsVisible(sessionsVisible);
-  }, [sessionsVisible]);
 
   useEffect(() => {
     composerRef.current?.focus();
@@ -780,6 +852,15 @@ export default function App() {
   }, [sessions]);
 
   useEffect(() => {
+    setPinnedWorkspaceRoots((prev) => {
+      if (!prev.length) return prev;
+      const roots = new Set(workspaceGroups.map((g) => g.root));
+      const next = prev.filter((r) => roots.has(r));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [workspaceGroups]);
+
+  useEffect(() => {
     if (!sessionMenu) return;
     const onPointerDown = (e: PointerEvent) => {
       const el = sessionMenuRef.current;
@@ -803,6 +884,31 @@ export default function App() {
       window.removeEventListener("resize", onScrollOrResize);
     };
   }, [sessionMenu]);
+
+  useEffect(() => {
+    if (!workspaceMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const el = workspaceMenuRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      setWorkspaceMenu(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWorkspaceMenu(null);
+    };
+    const onScrollOrResize = () => setWorkspaceMenu(null);
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [workspaceMenu]);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -966,13 +1072,26 @@ export default function App() {
                     )}
                     Workspaces
                   </button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label="Add workspace folder"
+                    onClick={() => {
+                      setWorkspaceCreateDraft("");
+                      setWorkspaceCreateOpen(true);
+                    }}
+                  >
+                    <FolderPlus className="h-4 w-4 text-violet-600" />
+                  </Button>
                 </div>
 
                 {workspacesPaneOpen ? (
                   <div className="min-h-0 flex-1 overflow-auto px-1">
                     <div className="space-y-1">
-                      {workspaceGroups.map((g) => {
+                      {visibleWorkspaceGroups.map((g) => {
                         const expanded = Boolean(expandedWorkspaces[g.root]);
+                        const pinnedWorkspace = pinnedWorkspaceRoots.includes(g.root);
                         return (
                           <div key={g.root} className="rounded-md">
                             <div className="group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-white/70">
@@ -990,13 +1109,39 @@ export default function App() {
                                 ) : (
                                   <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
                                 )}
-                                <div className="min-w-0 truncate text-xs font-medium text-zinc-800">
-                                  {g.root}
+                                {pinnedWorkspace ? (
+                                  <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
+                                ) : null}
+                                <div
+                                  className="min-w-0 truncate text-xs font-medium text-zinc-800"
+                                  title={g.root}
+                                >
+                                  {workspaceBasename(g.root)}
                                 </div>
                                 <div className="shrink-0 text-[10px] text-zinc-500">
                                   ({g.sessions.length})
                                 </div>
                               </button>
+
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                aria-label="Workspace actions"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const rect = (
+                                    e.currentTarget as HTMLButtonElement
+                                  ).getBoundingClientRect();
+                                  setWorkspaceMenu((prev) => {
+                                    if (prev?.workspaceRoot === g.root) return null;
+                                    return { workspaceRoot: g.root, x: rect.right, y: rect.bottom };
+                                  });
+                                }}
+                              >
+                                <MoreHorizontal className="h-4 w-4 text-zinc-500" />
+                              </Button>
 
                               <Button
                                 variant="ghost"
@@ -1010,20 +1155,6 @@ export default function App() {
                                 }}
                               >
                                 <Plus className="h-4 w-4 text-violet-600" />
-                              </Button>
-
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                aria-label="Delete workspace"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setWorkspaceDeleteConfirm({ workspaceRoot: g.root });
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4 text-red-600" />
                               </Button>
                             </div>
 
@@ -1065,6 +1196,20 @@ export default function App() {
                         );
                       })}
 
+                      {canLoadMoreWorkspaces ? (
+                        <div className="px-2 py-2">
+                          <Button
+                            variant="ghost"
+                            className="w-full justify-center text-xs"
+                            onClick={() =>
+                              setWorkspacesVisible((v) => v + LIST_PAGE_SIZE)
+                            }
+                          >
+                            Load more
+                          </Button>
+                        </div>
+                      ) : null}
+
                       {!workspaceGroups.length ? (
                         <div className="px-2 py-6 text-center text-sm text-zinc-500">
                           No workspaces
@@ -1088,17 +1233,6 @@ export default function App() {
                     )}
                     Sessions
                   </button>
-                  <select
-                    className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-[10px] text-zinc-700"
-                    value={sessionsVisible <= 0 ? "0" : String(sessionsVisible)}
-                    onChange={(e) => setSessionsVisible(Number(e.target.value))}
-                    aria-label="Sessions visible"
-                  >
-                    <option value="6">6</option>
-                    <option value="12">12</option>
-                    <option value="24">24</option>
-                    <option value="0">all</option>
-                  </select>
                 </div>
 
                 {sessionsPaneOpen ? (
@@ -1156,7 +1290,21 @@ export default function App() {
                           </div>
                         );
                       })}
-                      {!sortedSessions.length ? (
+
+                      {canLoadMoreSessions ? (
+                        <div className="px-2 py-2">
+                          <Button
+                            variant="ghost"
+                            className="w-full justify-center text-xs"
+                            onClick={() =>
+                              setSessionsVisible((v) => v + LIST_PAGE_SIZE)
+                            }
+                          >
+                            Load more
+                          </Button>
+                        </div>
+                      ) : null}
+                      {!tmpSessions.length ? (
                         <div className="px-2 py-6 text-center text-sm text-zinc-500">
                           No sessions
                         </div>
@@ -1247,8 +1395,11 @@ export default function App() {
 
                 <div className="flex max-w-[420px] items-center gap-2 rounded-md px-2 py-1">
                   <span className="text-xs text-zinc-600">workspace</span>
-                  <span className="min-w-0 truncate font-mono text-xs text-zinc-800">
-                    {session.settings.workspace_root ?? ""}
+                  <span
+                    className="min-w-0 truncate font-mono text-xs text-zinc-800"
+                    title={session.settings.workspace_root ?? ""}
+                  >
+                    {workspaceBasename(session.settings.workspace_root ?? "")}
                   </span>
                 </div>
 
@@ -1369,7 +1520,7 @@ export default function App() {
                   <Button
                     size="icon"
                     aria-label="Interrupt"
-                    className="shrink-0 rounded-full"
+                    className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
                     onClick={async () => {
                       if (!cancellableRunId) return;
                       try {
@@ -1526,6 +1677,36 @@ export default function App() {
         </div>
       ) : null}
 
+      {workspaceMenu ? (
+        <div
+          ref={workspaceMenuRef}
+          style={{ left: workspaceMenu.x, top: workspaceMenu.y }}
+          className="fixed z-50 mt-1 w-44 -translate-x-full rounded-md border border-zinc-200 bg-white p-1 shadow-lg"
+        >
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
+            onClick={() => {
+              const root = workspaceMenu.workspaceRoot;
+              togglePinnedWorkspace(root);
+              setWorkspaceMenu(null);
+            }}
+          >
+            <Pin className="h-4 w-4 text-violet-600" />
+            {pinnedWorkspaceRoots.includes(workspaceMenu.workspaceRoot) ? "Unpin" : "Pin"}
+          </button>
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+            onClick={() => {
+              setWorkspaceDeleteConfirm({ workspaceRoot: workspaceMenu.workspaceRoot });
+              setWorkspaceMenu(null);
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </button>
+        </div>
+      ) : null}
+
       <Dialog open={Boolean(deleteConfirm)} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <DialogContent>
           <DialogHeader>
@@ -1582,6 +1763,35 @@ export default function App() {
             >
               Delete
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={workspaceCreateOpen} onOpenChange={setWorkspaceCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add workspace folder</DialogTitle>
+            <DialogDescription>
+              Creates a new session in this workspace root (absolute path).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={workspaceCreateDraft}
+              onChange={(e) => setWorkspaceCreateDraft(e.target.value)}
+              placeholder="/path/to/dir"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setWorkspaceCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => createSessionWithWorkspaceRoot(workspaceCreateDraft)}
+                disabled={!workspaceCreateDraft.trim() || workspaceCreateSaving}
+              >
+                {workspaceCreateSaving ? "Creating…" : "Create"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
