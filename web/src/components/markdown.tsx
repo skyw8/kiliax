@@ -2,6 +2,8 @@ import React, { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { CodeBlock } from "@/components/code-block";
 
+export type MermaidErrorInfo = { key?: string; message: string };
+
 type InlineToken =
   | { type: "text"; value: string }
   | { type: "code"; value: string }
@@ -538,14 +540,28 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   return out;
 }
 
-function renderBlock(block: Block, key: string): React.ReactNode {
+type RenderOpts = {
+  messageId?: string;
+  deferMermaid?: boolean;
+  onMermaidError?: (info: MermaidErrorInfo) => void;
+};
+
+function renderBlock(block: Block, key: string, opts: RenderOpts): React.ReactNode {
   if (block.type === "hr") {
     return <div key={key} className="my-2 h-px w-full bg-zinc-200" />;
   }
 
   if (block.type === "code") {
+    const mermaidKey = opts.messageId ? `${opts.messageId}:${key}` : key;
     return (
-      <CodeBlock key={key} code={block.code} lang={block.lang} />
+      <CodeBlock
+        key={key}
+        code={block.code}
+        lang={block.lang}
+        deferMermaid={opts.deferMermaid}
+        mermaidKey={mermaidKey}
+        onMermaidError={opts.onMermaidError}
+      />
     );
   }
 
@@ -626,7 +642,9 @@ function renderBlock(block: Block, key: string): React.ReactNode {
       <ul key={key} className="ml-5 list-disc space-y-1 text-sm">
         {block.items.map((it, idx) => (
           <li key={`${key}:li:${idx}`} className="space-y-1">
-            {parseMarkdown(it).map((b, bIdx) => renderBlock(b, `${key}:li:${idx}:b:${bIdx}`))}
+            {parseMarkdown(it).map((b, bIdx) =>
+              renderBlock(b, `${key}:li:${idx}:b:${bIdx}`, opts),
+            )}
           </li>
         ))}
       </ul>
@@ -638,7 +656,9 @@ function renderBlock(block: Block, key: string): React.ReactNode {
       <ol key={key} className="ml-5 list-decimal space-y-1 text-sm">
         {block.items.map((it, idx) => (
           <li key={`${key}:li:${idx}`} className="space-y-1">
-            {parseMarkdown(it).map((b, bIdx) => renderBlock(b, `${key}:li:${idx}:b:${bIdx}`))}
+            {parseMarkdown(it).map((b, bIdx) =>
+              renderBlock(b, `${key}:li:${idx}:b:${bIdx}`, opts),
+            )}
           </li>
         ))}
       </ol>
@@ -656,11 +676,27 @@ function renderBlock(block: Block, key: string): React.ReactNode {
   return null;
 }
 
-export function Markdown({ text, className }: { text: string; className?: string }) {
+export function Markdown({
+  text,
+  className,
+  messageId,
+  deferMermaid,
+  onMermaidError,
+}: {
+  text: string;
+  className?: string;
+  messageId?: string;
+  deferMermaid?: boolean;
+  onMermaidError?: (info: MermaidErrorInfo) => void;
+}) {
   const blocks = useMemo(() => parseMarkdown(text), [text]);
+  const opts = useMemo<RenderOpts>(
+    () => ({ messageId, deferMermaid, onMermaidError }),
+    [deferMermaid, messageId, onMermaidError],
+  );
   return (
     <div className={cn("space-y-2 leading-relaxed", className)}>
-      {blocks.map((b, idx) => renderBlock(b, `b:${idx}`))}
+      {blocks.map((b, idx) => renderBlock(b, `b:${idx}`, opts))}
     </div>
   );
 }

@@ -96,6 +96,39 @@ function loadMermaid(): Promise<MermaidApi> {
   return mermaidLoadPromise;
 }
 
+function normalizeMermaidSvg(raw: string): string {
+  const svgIdx = raw.indexOf("<svg");
+  if (svgIdx === -1) return raw;
+  const endIdx = raw.indexOf(">", svgIdx);
+  if (endIdx === -1) return raw;
+  const openTag = raw.slice(svgIdx, endIdx + 1);
+
+  // Keep aspect ratio; rely on CSS to size the SVG responsively.
+  if (!/\sviewBox="[^"]+"/i.test(openTag)) return raw;
+
+  let nextTag = openTag;
+  nextTag = nextTag.replace(/\swidth="[^"]*"/gi, "");
+  nextTag = nextTag.replace(/\sheight="[^"]*"/gi, "");
+
+  nextTag = nextTag.replace(/\sstyle="([^"]*)"/i, (_m, styleRaw) => {
+    const decls = String(styleRaw)
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const kept = decls.filter((d) => {
+      const idx = d.indexOf(":");
+      if (idx === -1) return true;
+      const prop = d.slice(0, idx).trim().toLowerCase();
+      return prop !== "width" && prop !== "height";
+    });
+    if (!kept.length) return "";
+    return ` style="${kept.join("; ")};"`;
+  });
+
+  if (nextTag === openTag) return raw;
+  return raw.slice(0, svgIdx) + nextTag + raw.slice(endIdx + 1);
+}
+
 function safeJsonParse(raw: string): any | null {
   const t = raw.trim();
   if (!t) return null;
@@ -481,17 +514,28 @@ export function CodeBlock({
   code,
   lang,
   copyButton = true,
+  deferMermaid = false,
+  mermaidKey,
+  onMermaidError,
   className,
 }: {
   code: string;
   lang?: string | null;
   copyButton?: boolean;
+  deferMermaid?: boolean;
+  mermaidKey?: string;
+  onMermaidError?: (info: { key?: string; message: string }) => void;
   className?: string;
 }) {
   const normalizedLang = normalizeLang(lang);
   const content = useMemo(() => code.replace(/\r\n/g, "\n"), [code]);
   const isMermaid = normalizedLang === "mermaid";
   const [mermaidSvg, setMermaidSvg] = useState<string | null>(null);
+  const lastMermaidErrorKeyRef = React.useRef<string | null>(null);
+  const mermaidKeyRef = React.useRef<string | undefined>(mermaidKey);
+  mermaidKeyRef.current = mermaidKey;
+  const mermaidErrorHandlerRef = React.useRef(onMermaidError);
+  mermaidErrorHandlerRef.current = onMermaidError;
 
   const jsonCopyText = useMemo(() => {
     if (normalizedLang !== "json") return null;
@@ -520,6 +564,11 @@ export function CodeBlock({
 
     let cancelled = false;
     setMermaidSvg(null);
+    if (deferMermaid) {
+      return () => {
+        cancelled = true;
+      };
+    }
     loadMermaid()
       .then(async (mermaid) => {
         if (cancelled) return;
@@ -532,17 +581,23 @@ export function CodeBlock({
         const out = await mermaid.render(id, content);
         const svg = typeof out === "string" ? out : String(out?.svg ?? "");
         if (cancelled) return;
-        setMermaidSvg(svg || null);
+        setMermaidSvg(svg ? normalizeMermaidSvg(svg) : null);
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
         setMermaidSvg(null);
+        const key = `${mermaidKeyRef.current ?? ""}:${content}`;
+        if (lastMermaidErrorKeyRef.current === key) return;
+        lastMermaidErrorKeyRef.current = key;
+        const message =
+          err instanceof Error ? err.message : err != null ? String(err) : "Mermaid render failed";
+        mermaidErrorHandlerRef.current?.({ key: mermaidKeyRef.current, message });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [content, isMermaid]);
+  }, [content, deferMermaid, isMermaid]);
 
   if (isMermaid) {
     return (
@@ -558,7 +613,7 @@ export function CodeBlock({
             <Copy className="h-4 w-4" />
           </button>
         ) : null}
-        <div className="min-w-fit [&>svg]:h-auto [&>svg]:max-w-none [&_a]:pointer-events-none [&_foreignObject]:pointer-events-none">
+        <div className="w-full [&_svg]:block [&_svg]:h-auto [&_svg]:w-full [&_svg]:max-w-full [&_a]:pointer-events-none [&_foreignObject]:pointer-events-none">
           {mermaidSvg ? (
             <div dangerouslySetInnerHTML={{ __html: mermaidSvg }} />
           ) : (

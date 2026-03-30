@@ -109,9 +109,10 @@ Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session
 
 Web UI（React + Vite + Tailwind + shadcn/ui），由 `kiliax-server` 静态托管：
 
-- `web/src/app.tsx`: 单页应用（聊天流式事件 WS；thinking/tool_call/tool_result 块右上角一键复制；assistant 消息尾部 divider + copy + kebab（占位）；基于事件流做 thinking/tool/output 用时统计并在 UI 中展示）
-- `web/src/components/markdown.tsx`: 轻量 Markdown 渲染（安全：不渲染 HTML；支持嵌套列表/有序列表连续编号；支持 GFM 表格/对齐；fenced code block 走 VSCode 风格高亮）
-- `web/src/components/code-block.tsx`: VSCode Dark+ 风格代码渲染（右上角复制；`mermaid` fenced code 渲染为图，失败时回退为文本）
+- `web/src/app.tsx`: 单页应用（聊天流式事件 WS；包含 mermaid 的消息 bubble 自动放宽到 `max-w-[92%]`；run_error / API error 使用 toast 式 alert；auto-close 仅用于 mermaid 渲染错误；未关闭的 session error 不会自动消失）
+- `web/src/components/markdown.tsx`: 轻量 Markdown 渲染（安全：不渲染 HTML；支持列表/表格；向 code block 传递 `messageId/deferMermaid` 并转发 mermaid 渲染错误）
+- `web/src/components/code-block.tsx`: VSCode Dark+ 风格代码渲染（右上角复制；`mermaid` fenced code：流式输出阶段不渲染，turn 完成后再渲染；渲染后移除 svg `width/height` 以便响应式适配容器宽度；失败时回退为文本并上报错误）
+- `web/src/components/ui/alert.tsx`: shadcn `Alert` 组件（toast 式错误提示复用）
 - `web/src/lib/api.ts`: Web API client（API 错误解析：`code/message/details/trace_id`，并在 UI 侧可展示/复制；包含 `DELETE /v1/sessions/{id}`）
 
 ## constraints

@@ -10,10 +10,11 @@ import type {
   SkillSummary,
   ToolCall,
 } from "@/lib/types";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/code-block";
-import { Markdown } from "@/components/markdown";
+import { Markdown, type MermaidErrorInfo } from "@/components/markdown";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +48,7 @@ type AlertItem = {
   message: string;
   traceId?: string;
   details?: unknown;
+  autoCloseMs?: number;
 };
 
 const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
@@ -59,6 +61,10 @@ const LIST_PAGE_SIZE = 6;
 function displayModelId(modelId: string): string {
   const idx = modelId.indexOf("/");
   return idx === -1 ? modelId : modelId.slice(idx + 1);
+}
+
+function hasMermaidFence(text?: string | null): boolean {
+  return /(^|\n)```[ \t]*mermaid\b/i.test(text ?? "");
 }
 
 function stringifyUnknown(v: unknown): string {
@@ -130,10 +136,7 @@ function AlertStack({
   return (
     <div className="fixed bottom-6 right-6 z-50 flex w-[min(560px,calc(100vw-24px))] flex-col gap-3">
       {items.map((a) => (
-        <div
-          key={a.id}
-          className="rounded-lg border border-red-200 bg-white p-4 shadow-lg"
-        >
+        <Alert key={a.id} variant="destructive" className="shadow-lg">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
@@ -178,7 +181,7 @@ function AlertStack({
               </pre>
             </details>
           ) : null}
-        </div>
+        </Alert>
       ))}
     </div>
   );
@@ -350,16 +353,20 @@ function MessageRow({
   toolDurationsMs,
   thinkingDurationsMs,
   assistantDurationsMs,
+  onMermaidError,
 }: {
   msg: Message;
   toolDurationsMs: Record<string, number>;
   thinkingDurationsMs: Record<string, number>;
   assistantDurationsMs: Record<string, number>;
+  onMermaidError?: (info: MermaidErrorInfo) => void;
 }) {
   if (msg.role === "user") {
+    const wide = hasMermaidFence(msg.content);
+    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[78%]";
     return (
       <div className="flex justify-end">
-        <div className="max-w-[78%] rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50">
+        <div className={`${bubbleWidth} rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}>
           {msg.content}
         </div>
       </div>
@@ -367,11 +374,13 @@ function MessageRow({
   }
 
   if (msg.role === "assistant") {
+    const wide = hasMermaidFence(msg.content);
+    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[78%]";
     return (
       <div className="flex justify-start">
-        <div className="max-w-[78%] rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900">
+        <div className={`${bubbleWidth} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}>
           {msg.content ? (
-            <Markdown text={msg.content} />
+            <Markdown text={msg.content} messageId={msg.id} onMermaidError={onMermaidError} />
           ) : (
             <div className="text-zinc-500">…</div>
           )}
@@ -547,6 +556,8 @@ export default function App() {
 
   const [authError, setAuthError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const alertTimersRef = useRef<Record<string, number>>({});
+  const seenMermaidAlertKeysRef = useRef<Set<string>>(new Set());
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -621,33 +632,86 @@ export default function App() {
       const subtitle = err.code ? `HTTP ${err.status} • ${err.code}` : `HTTP ${err.status}`;
       const details =
         err.details != null ? err.details : err.bodyText ? { raw_body: err.bodyText } : undefined;
-      setAlerts((prev) =>
-        [...prev, {
-          id: newAlertId("api"),
-          title: "Request failed",
-          subtitle,
-          message: err.message,
-          traceId: err.traceId,
-          details,
-        }].slice(-3),
-      );
+      pushAlert({
+        id: newAlertId("api"),
+        title: "Request failed",
+        subtitle,
+        message: err.message,
+        traceId: err.traceId,
+        details,
+      });
     } else {
       const message = err instanceof Error ? err.message : String(err);
-      setAlerts((prev) =>
-        [...prev, {
-          id: newAlertId("ui"),
-          title: "Unexpected error",
-          message,
-        }].slice(-3),
-      );
+      pushAlert({
+        id: newAlertId("ui"),
+        title: "Unexpected error",
+        message,
+      });
     }
     // eslint-disable-next-line no-console
     console.error(err);
   }
 
   function closeAlert(id: string) {
+    const timerId = alertTimersRef.current[id];
+    if (timerId != null) {
+      window.clearTimeout(timerId);
+      delete alertTimersRef.current[id];
+    }
     setAlerts((prev) => prev.filter((a) => a.id !== id));
   }
+
+  function pruneAlerts(items: AlertItem[]): AlertItem[] {
+    const autoClose = items.filter((a) => a.autoCloseMs != null);
+    if (autoClose.length <= 3) return items;
+    const keep = new Set(autoClose.slice(-3).map((a) => a.id));
+    return items.filter((a) => a.autoCloseMs == null || keep.has(a.id));
+  }
+
+  function pushAlert(alert: AlertItem) {
+    setAlerts((prev) => pruneAlerts([...prev, alert]));
+  }
+
+  function handleMermaidError(info: MermaidErrorInfo) {
+    const key = (info.key ?? "").trim();
+    if (key && seenMermaidAlertKeysRef.current.has(key)) return;
+    if (key) seenMermaidAlertKeysRef.current.add(key);
+
+    pushAlert({
+      id: newAlertId("mermaid"),
+      title: "Mermaid error",
+      message: "Mermaid diagram failed to render.",
+      details: { key: key || undefined, error: info.message },
+      autoCloseMs: 6000,
+    });
+  }
+
+  useEffect(() => {
+    const activeIds = new Set(alerts.map((a) => a.id));
+    for (const [id, timerId] of Object.entries(alertTimersRef.current)) {
+      if (activeIds.has(id)) continue;
+      window.clearTimeout(timerId);
+      delete alertTimersRef.current[id];
+    }
+
+    for (const a of alerts) {
+      const autoCloseMs = a.autoCloseMs;
+      if (autoCloseMs == null) continue;
+      if (alertTimersRef.current[a.id] != null) continue;
+      alertTimersRef.current[a.id] = window.setTimeout(() => {
+        setAlerts((prev) => prev.filter((item) => item.id !== a.id));
+      }, autoCloseMs);
+    }
+  }, [alerts]);
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of Object.values(alertTimersRef.current)) {
+        window.clearTimeout(timerId);
+      }
+      alertTimersRef.current = {};
+    };
+  }, []);
 
   async function refreshCapabilities() {
     try {
@@ -868,16 +932,14 @@ export default function App() {
         typeof diagnostics?.step === "number" ? String(diagnostics.step) : undefined;
       const subtitleParts = [`code: ${code}`];
       if (step) subtitleParts.push(`step: ${step}`);
-      setAlerts((prev) =>
-        [...prev, {
-          id: newAlertId("run"),
-          title: "Run failed",
-          subtitle: subtitleParts.join(" • "),
-          message,
-          traceId,
-          details: { diagnostics, run },
-        }].slice(-3),
-      );
+      pushAlert({
+        id: newAlertId("run"),
+        title: "Run failed",
+        subtitle: subtitleParts.join(" • "),
+        message,
+        traceId,
+        details: { diagnostics, run },
+      });
     }
 
     if (type === "run_done" || type === "run_error" || type === "run_cancelled") {
@@ -1773,6 +1835,7 @@ export default function App() {
                     toolDurationsMs={toolDurationsMs}
                     thinkingDurationsMs={thinkingDurationsMs}
                     assistantDurationsMs={assistantDurationsMs}
+                    onMermaidError={handleMermaidError}
                   />
                 ))}
 
@@ -1839,8 +1902,10 @@ export default function App() {
 
                 {stream.assistant ? (
                   <div className="flex justify-start">
-                    <div className="max-w-[78%] rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900">
-                      <Markdown text={stream.assistant} />
+                    <div
+                      className={`${hasMermaidFence(stream.assistant) ? "w-full max-w-[92%]" : "max-w-[78%]"} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}
+                    >
+                      <Markdown text={stream.assistant} deferMermaid />
                       <div className="mt-2 border-t border-zinc-200 pt-1">
                         <div className="flex items-center gap-1">
                           <button
