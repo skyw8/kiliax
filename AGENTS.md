@@ -109,7 +109,7 @@ Session 控制面：提供 REST + SSE/WS 事件流接口以创建/恢复 session
 
 Web UI（React + Vite + Tailwind + shadcn/ui），由 `kiliax-server` 静态托管：
 
-- `web/src/app.tsx`: 单页应用（顶部栏 Agent/Model/CWD；session list 懒加载；首页可直接输入，首次发送自动创建 session + 临时 workspace；工具调用 JSON 格式化+高亮；Send/Interrupt icon 按钮；API 错误弹窗展示 `code/message/details/trace_id`）
+- `web/src/app.tsx`: 单页应用（顶部栏 Agent/Model/CWD；侧边栏可折叠；session list 懒加载；首页可直接输入，首次发送自动创建 session + 临时 workspace；聊天滚动仅在底部自动跟随（含回到底部按钮）；输入框自动增高；工具调用 JSON 格式化+高亮；Send/Interrupt icon 按钮；API 错误弹窗展示 `code/message/details/trace_id`）
 - `web/src/components/markdown.tsx`: 轻量 Markdown 渲染（安全：不渲染 HTML；支持 GFM 表格/对齐；fenced code block 走 VSCode 风格高亮）
 - `web/src/components/code-block.tsx`: VSCode Dark+ 风格代码渲染（JSON pretty-print + 轻量 token 高亮）
 - `web/src/lib/api.ts`: Web API client（API 错误解析：`code/message/details/trace_id`，并在 UI 侧可展示/复制；包含 `DELETE /v1/sessions/{id}`）

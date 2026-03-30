@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, CircleStop, MoreHorizontal, Pin, Plus, Plug, Settings, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
@@ -49,6 +49,7 @@ type DebugError = {
 };
 
 const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
+const SIDEBAR_OPEN_KEY = "kiliax:sidebar_open";
 
 function displayModelId(modelId: string): string {
   const idx = modelId.indexOf("/");
@@ -80,6 +81,24 @@ function loadPinnedSessionIds(): string[] {
 function savePinnedSessionIds(ids: string[]) {
   try {
     localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(ids));
+  } catch {
+    // ignore
+  }
+}
+
+function loadSidebarOpen(): boolean {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_OPEN_KEY);
+    if (!raw) return true;
+    return raw !== "0" && raw !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function saveSidebarOpen(open: boolean) {
+  try {
+    localStorage.setItem(SIDEBAR_OPEN_KEY, open ? "1" : "0");
   } catch {
     // ignore
   }
@@ -219,6 +238,7 @@ export default function App() {
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() =>
     loadPinnedSessionIds(),
   );
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => loadSidebarOpen());
   const [sessionsVisible, setSessionsVisible] = useState(6);
   const route = useRoute();
   const selectedId = route.name === "session" ? route.sessionId : null;
@@ -231,6 +251,7 @@ export default function App() {
     assistantStarted: false,
     toolCalls: [],
   });
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   const [composerText, setComposerText] = useState("");
   const [savingConfig, setSavingConfig] = useState(false);
@@ -261,9 +282,12 @@ export default function App() {
   const [debugError, setDebugError] = useState<DebugError | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
   const skipNextFetchRef = useRef<string | null>(null);
+  const isAtBottomRef = useRef(true);
 
   const sortedSessions = useMemo(
     () => sortSessions(sessions, pinnedSessionIds),
@@ -322,6 +346,21 @@ export default function App() {
 
   function selectSession(sessionId: string) {
     navigate(hrefToSession(sessionId));
+  }
+
+  function updateIsAtBottom() {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const thresholdPx = 96;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const next = distance <= thresholdPx;
+    if (next === isAtBottomRef.current) return;
+    isAtBottomRef.current = next;
+    setIsAtBottom(next);
+  }
+
+  function scrollToBottom(behavior: ScrollBehavior = "auto") {
+    chatEndRef.current?.scrollIntoView({ behavior });
   }
 
   async function fetchSession(sessionId: string) {
@@ -597,6 +636,24 @@ export default function App() {
   }, [pinnedSessionIds]);
 
   useEffect(() => {
+    saveSidebarOpen(sidebarOpen);
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    composerRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    const minPx = 52;
+    const maxPx = 240;
+    el.style.height = "auto";
+    const next = Math.min(maxPx, Math.max(minPx, el.scrollHeight));
+    el.style.height = `${next}px`;
+  }, [composerText]);
+
+  useEffect(() => {
     setPinnedSessionIds((prev) => {
       if (!prev.length) return prev;
       const ids = new Set(sessions.map((s) => s.id));
@@ -640,6 +697,8 @@ export default function App() {
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
     if (!selectedId) {
       setSession(null);
       setMessages([]);
@@ -669,7 +728,8 @@ export default function App() {
   );
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!isAtBottomRef.current) return;
+    scrollToBottom("auto");
   }, [messages, pendingForSelected.length, stream.assistant, stream.thinking, stream.toolCalls.length]);
 
   const selectedSummary = sortedSessions.find((s) => s.id === selectedId) ?? null;
@@ -687,7 +747,7 @@ export default function App() {
 
   if (authError) {
     return (
-      <div className="h-dvh w-full bg-white text-zinc-900">
+      <div className="h-dvh w-full bg-zinc-50 text-zinc-900">
         <div className="flex h-full items-center justify-center p-6">
           <div className="w-full max-w-md rounded-lg border border-zinc-200 bg-white p-6">
             <div className="text-base font-semibold">Unauthorized</div>
@@ -704,7 +764,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-dvh w-full bg-white text-zinc-900">
+    <div className="h-dvh w-full bg-zinc-50 text-zinc-900">
       <Dialog
         open={Boolean(debugError)}
         onOpenChange={(open) => {
@@ -756,136 +816,153 @@ export default function App() {
         </DialogContent>
       </Dialog>
       <div className="flex h-full">
-        <aside className="flex w-[280px] flex-col border-r border-zinc-200 bg-zinc-50">
-          <div className="space-y-1 p-3">
-            <Button variant="ghost" className="w-full justify-start gap-2" onClick={onNewSession}>
-              <Plus className="h-4 w-4 text-violet-600" />
-              New Session
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-2"
-              onClick={openSkills}
-            >
-              <Sparkles className="h-4 w-4 text-amber-600" />
-              Skills
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-2"
-              onClick={openMcp}
-            >
-              <Plug className="h-4 w-4 text-emerald-600" />
-              MCP
-            </Button>
-          </div>
-
-          <Separator />
-
-          <div className="flex-1 overflow-auto p-2">
-            <div className="px-2 pb-2 text-xs font-medium text-zinc-500">
-              Sessions
+        {sidebarOpen ? (
+          <aside className="flex w-[280px] flex-col border-r border-zinc-200 bg-zinc-50">
+            <div className="space-y-1 p-3">
+              <Button variant="ghost" className="w-full justify-start gap-2" onClick={onNewSession}>
+                <Plus className="h-4 w-4 text-violet-600" />
+                New Session
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-2"
+                onClick={openSkills}
+              >
+                <Sparkles className="h-4 w-4 text-amber-600" />
+                Skills
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-2"
+                onClick={openMcp}
+              >
+                <Plug className="h-4 w-4 text-emerald-600" />
+                MCP
+              </Button>
             </div>
-            <div className="space-y-1">
-              {visibleSessions.map((s) => {
-                const badge = statusBadge(s);
-                const active = s.id === selectedId;
-                const pinned = pinnedSessionIds.includes(s.id);
-                return (
-                  <div
-                    key={s.id}
-                    className={[
-                      "group flex items-start gap-1 rounded-md px-2 py-2",
-                      active ? "bg-white shadow-sm" : "hover:bg-white/70",
-                    ].join(" ")}
-                  >
-                    <button
-                      onClick={() => selectSession(s.id)}
-                      className="min-w-0 flex-1 text-left"
+
+            <Separator />
+
+            <div className="flex-1 overflow-auto p-2">
+              <div className="px-2 pb-2 text-xs font-medium text-zinc-500">
+                Sessions
+              </div>
+              <div className="space-y-1">
+                {visibleSessions.map((s) => {
+                  const badge = statusBadge(s);
+                  const active = s.id === selectedId;
+                  const pinned = pinnedSessionIds.includes(s.id);
+                  return (
+                    <div
+                      key={s.id}
+                      className={[
+                        "group flex items-start gap-1 rounded-md px-2 py-2",
+                        active ? "bg-white shadow-sm" : "hover:bg-white/70",
+                      ].join(" ")}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex items-center gap-1 text-sm text-zinc-900">
-                          {pinned ? (
-                            <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
-                          ) : null}
-                          <div className="truncate">{s.title || s.id}</div>
+                      <button
+                        onClick={() => selectSession(s.id)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex items-center gap-1 text-sm text-zinc-900">
+                            {pinned ? (
+                              <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
+                            ) : null}
+                            <div className="truncate">{s.title || s.id}</div>
+                          </div>
+                          <Badge variant={badge.variant}>{badge.label}</Badge>
                         </div>
-                        <Badge variant={badge.variant}>{badge.label}</Badge>
-                      </div>
-                      <div className="mt-1 truncate text-xs text-zinc-500">
-                        {displayModelId(s.settings.model_id)}
-                      </div>
-                    </button>
+                        <div className="mt-1 truncate text-xs text-zinc-500">
+                          {displayModelId(s.settings.model_id)}
+                        </div>
+                      </button>
 
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      aria-label="Session actions"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-                        setSessionMenu((prev) => {
-                          if (prev?.sessionId === s.id) return null;
-                          return { sessionId: s.id, x: rect.right, y: rect.bottom };
-                        });
-                      }}
-                    >
-                      <MoreHorizontal className="h-4 w-4 text-zinc-500" />
-                    </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        aria-label="Session actions"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                          setSessionMenu((prev) => {
+                            if (prev?.sessionId === s.id) return null;
+                            return { sessionId: s.id, x: rect.right, y: rect.bottom };
+                          });
+                        }}
+                      >
+                        <MoreHorizontal className="h-4 w-4 text-zinc-500" />
+                      </Button>
+                    </div>
+                  );
+                })}
+                {!sortedSessions.length ? (
+                  <div className="px-2 py-6 text-center text-sm text-zinc-500">
+                    No sessions
                   </div>
-                );
-              })}
-              {!sortedSessions.length ? (
-                <div className="px-2 py-6 text-center text-sm text-zinc-500">
-                  No sessions
-                </div>
-              ) : null}
-              {sortedSessions.length > sessionsVisible ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start text-xs text-zinc-600"
-                  onClick={() => setSessionsVisible((v) => v + 6)}
-                >
-                  Load more
-                </Button>
-              ) : null}
+                ) : null}
+                {sortedSessions.length > sessionsVisible ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start text-xs text-zinc-600"
+                    onClick={() => setSessionsVisible((v) => v + 6)}
+                  >
+                    Load more
+                  </Button>
+                ) : null}
+              </div>
             </div>
-          </div>
 
-          <Separator />
+            <Separator />
 
-          <div className="p-3">
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-2"
-              onClick={openSettings}
-            >
-              <Settings className="h-4 w-4 text-blue-600" />
-              Settings
-            </Button>
-          </div>
-        </aside>
+            <div className="p-3">
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-2"
+                onClick={openSettings}
+              >
+                <Settings className="h-4 w-4 text-blue-600" />
+                Settings
+              </Button>
+            </div>
+          </aside>
+        ) : null}
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-start justify-between gap-4 border-b border-zinc-200 px-4 py-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">
-                {selectedSummary?.title ?? "New thread"}
-              </div>
-              <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-600">
-                {selectedBadge ? (
-                  <Badge variant={selectedBadge.variant}>{selectedBadge.label}</Badge>
+          <div className="flex items-start justify-between gap-4 border-b border-zinc-200 bg-white px-4 py-3">
+            <div className="min-w-0 flex items-start gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+                onClick={() => setSidebarOpen((v) => !v)}
+              >
+                {sidebarOpen ? (
+                  <PanelLeftClose className="h-4 w-4 text-zinc-600" />
                 ) : (
-                  <Badge variant="idle">idle</Badge>
+                  <PanelLeftOpen className="h-4 w-4 text-zinc-600" />
                 )}
-                {session ? (
-                  <span className="truncate">
-                    {session.settings.agent} · {displayModelId(session.settings.model_id)}
-                  </span>
-                ) : null}
+              </Button>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">
+                  {selectedSummary?.title ?? "New thread"}
+                </div>
+                <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-600">
+                  {selectedBadge ? (
+                    <Badge variant={selectedBadge.variant}>{selectedBadge.label}</Badge>
+                  ) : (
+                    <Badge variant="idle">idle</Badge>
+                  )}
+                  {session ? (
+                    <span className="truncate">
+                      {session.settings.agent} · {displayModelId(session.settings.model_id)}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
 
@@ -935,7 +1012,11 @@ export default function App() {
             ) : null}
           </div>
 
-          <div className="flex-1 overflow-auto px-4 py-4">
+          <div
+            ref={chatScrollRef}
+            onScroll={updateIsAtBottom}
+            className="flex-1 overflow-auto bg-zinc-50 px-4 py-4"
+          >
             {selectedId ? (
               <div className="mx-auto w-full max-w-3xl space-y-3">
                 {messages.map((m) => (
@@ -994,14 +1075,33 @@ export default function App() {
             )}
           </div>
 
+          {selectedId && !isAtBottom ? (
+            <div className="fixed bottom-24 right-6 z-40">
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label="Scroll to bottom"
+                className="h-9 w-9 rounded-full shadow-sm"
+                onClick={() => {
+                  isAtBottomRef.current = true;
+                  setIsAtBottom(true);
+                  scrollToBottom("smooth");
+                }}
+              >
+                <ArrowDown className="h-4 w-4 text-zinc-700" />
+              </Button>
+            </div>
+          ) : null}
+
           <div className="border-t border-zinc-200 bg-white px-4 py-3">
             <div className="mx-auto w-full max-w-3xl">
               <div className="flex items-end gap-2">
                 <Textarea
+                  ref={composerRef}
                   value={composerText}
                   onChange={(e) => setComposerText(e.target.value)}
-                  placeholder="Ask anything…"
-                  className="min-h-[52px] resize-none"
+                  placeholder="Ask anything… (Enter to send · Shift+Enter for newline)"
+                  className="min-h-[52px] max-h-[240px] resize-none leading-relaxed"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
