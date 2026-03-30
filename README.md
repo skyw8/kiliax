@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/master/install.sh | ba
 iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/master/install.ps1 | iex
 ```
 
-The install script will detect if you already have kiliax-tui installed and update it to the latest version automatically. If already up to date, it will skip the installation.
+The install script will detect if you already have kiliax installed and update it to the latest version automatically. If already up to date, it will skip the installation.
 
 To force reinstall (even if same version):
 ```bash

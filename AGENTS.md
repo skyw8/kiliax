@@ -65,28 +65,28 @@ OpenTelemetry 初始化与导出（OTLP HTTP/gRPC）：按 `kiliax.yaml` 的 `ot
 - `crates/kiliax-otel/src/lib.rs`: exporters + providers（logs/traces/metrics）构建与 shutdown；`tracing-opentelemetry` / `OpenTelemetryTracingBridge` layers；`set_parent_from_http_headers`；本地日志支持 `Stdout`/`File`/`None`（`File` 失败不致命，best-effort）
 - `crates/kiliax-otel/src/otlp.rs`: headers/TLS/reqwest client 构建（blocking/async）与 timeout 解析
 
-### crates/kiliax-tui
+### crates/kiliax-cli
 
 TUI 交互式对话界面（ratatui + crossterm）：inline viewport（参考 codex）+ 终端 scrollback 历史；启动先插入 header（版本/模型/cwd），输入框从 header 之后开始并随输出自动下推；输入框支持自动换行与动态高度。
 
-- `crates/kiliax-tui/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect`/`reqwest` 等）
-- `crates/kiliax-tui/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`、`serve start|stop|restart`）；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）；不再自动拉起 `kiliax-server`；**OTEL 初始化 + 默认落盘 `~/.kiliax/tui.log`（避免污染终端）**
-- `crates/kiliax-tui/src/daemon.rs`: 后台 `kiliax-server` 管理（`kiliax serve start|stop|restart`；健康检查；启动时校验 web root 可用性，不可用则尝试 stop 并重启；开发态优先通过 `cargo run -p kiliax-server` 确保与源码同步）；状态写入 `~/.kiliax/server.json`，日志写入 `~/.kiliax/server.log`
-- `crates/kiliax-tui/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示（`shell_command` 仅展示关键命令/参数，省略 bash -lc/cd/env 等包装与冗长参数）；`update_plan` 以 `[]` 待办/完成删除线展示（不显示 pending 等状态字样）；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable`（YAML 行编辑，正确处理 `#` 注释/引号）并 checkpoint session（刷新 system preamble）；错误展示支持 error-chain（多行）并写入 tracing 日志
-- `crates/kiliax-tui/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；/model、/mcp 等 picker（题头紫色、选中蓝色、未选中白色；MCP 未开启灰色/开启白色）；底部 footer 仅显示 status + agent + model_id（去 provider）
-- `crates/kiliax-tui/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
-- `crates/kiliax-tui/src/clipboard_paste.rs`: 剪切板图片读取→临时 PNG 路径（arboard + WSL PowerShell fallback）；粘贴路径规范化（file://、Windows/UNC、WSL 映射）
-- `crates/kiliax-tui/src/slash_command.rs`: slash command 定义 + popup 状态（/new、/agent、/model、/mcp；↑/↓ 选择、Tab 补全、/a alias；popup 高度按 item 数，UI 无边框）
-- `crates/kiliax-tui/src/mcp_picker.rs`: MCP servers 开关选择器（↑/↓ 选择、Space/Enter 切换、Esc 关闭）
-- `crates/kiliax-tui/src/model_picker.rs`: model picker 状态（provider/model 列表、模糊搜索、键盘导航；返回值总是 provider-qualified model id，兼容带 `/` 的模型名）
-- `crates/kiliax-tui/src/style.rs`: composer 无背景样式、prompt 双彩箭头配色（按终端主题 hint），以及 picker 统一配色（题头紫色、选中蓝色、未选中白色；MCP disabled 灰色）与 diff 行背景
-- `crates/kiliax-tui/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`；不启用 GFM tables，表格按原文 `|` 展示以保证终端稳定性）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
-- `crates/kiliax-tui/src/highlight.rs`: 代码语法高亮（syntect + VS Code Dark+ 配色；用 LinesWithEndings 保证注释/多行状态不串行，并剥离 CR/LF 避免渲染异常）
-- `crates/kiliax-tui/src/wrap.rs`: styled 文本按终端宽度换行（含宽字符/样式保持单元测试）
-- `crates/kiliax-tui/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；`[img#N]` token 原子移动/删除；支持整行替换（历史回填）；包含 Unicode/快捷键单元测试
-- `crates/kiliax-tui/src/custom_terminal.rs`: TUI 用到的自定义终端命令（scroll region、wraparound 开关、RI 等 ANSI 序列封装）
-- `crates/kiliax-tui/src/terminal.rs`: inline viewport backend（viewport 可下推/可伸缩；raw mode + bracketed paste）；仅重绘 viewport；跳过绘制终端右下角单元格以规避部分终端的滚屏/空行问题；每帧用 Synchronized Update 包裹所有写入（同一 backend writer）以减少 tearing
-- `crates/kiliax-tui/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致样式（无背景 + 上下 padding + 双彩箭头前缀）；支持 fg/bg/italic/underline/strikethrough 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\r\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\r/\n`；必要时清理 continuation rows 以避免残留/空行；相关 ANSI 命令封装在 `custom_terminal`）；包含 marker 解析/user bubble/divider 展开单元测试
+- `crates/kiliax-cli/Cargo.toml`: TUI 依赖（`ratatui`/`crossterm`/`pulldown-cmark`/`syntect`/`reqwest` 等）
+- `crates/kiliax-cli/src/main.rs`: CLI 启动参数（`--help/--version`、profile override、`--resume`、`serve start|stop|restart`）；入口与事件循环（键盘输入 + AgentRuntime 流 + message queue 自动串行发送；过滤 `KeyEventKind::Release` 避免 Windows 按键重复）；slash command 分发（/new、/agent、/model、/mcp）与模型切换落盘；退出时若未发送 user 消息则删除 session（不输出 resume 提示）；不再自动拉起 `kiliax-server`；**OTEL 初始化 + 默认落盘 `~/.kiliax/tui.log`（避免污染终端）**
+- `crates/kiliax-cli/src/daemon.rs`: 后台 `kiliax-server` 管理（`kiliax serve start|stop|restart`；健康检查；启动时校验 web root 可用性，不可用则尝试 stop 并重启；开发态优先通过 `cargo run -p kiliax-server` 确保与源码同步）；状态写入 `~/.kiliax/server.json`，日志写入 `~/.kiliax/server.log`
+- `crates/kiliax-cli/src/app.rs`: `App` 状态（stream collector/不交织 thinking；turn/step/tool 计时；工具调用折叠展示（`shell_command` 仅展示关键命令/参数，省略 bash -lc/cd/env 等包装与冗长参数）；`update_plan` 以 `[]` 待办/完成删除线展示（不显示 pending 等状态字样）；图片附件以输入框内联 token `[img#N]` 形式挂载/删除；提交时自动剥离 token 仅发送图片；message queue：运行中提交入队、Ctrl+C 撤回、↑ 回溯编辑；提供队列预览数据给 UI）；slash command（/new、/agent、/model、/mcp）与 UI mode（chat/model picker/mcp picker）状态机；/model 切换会更新 `kiliax.yaml` 的 `default_model` 并热切换 runtime（reload Config + `ToolEngine::set_config`）；/mcp 通过 TUI 开关写回 `mcp.servers[].enable`（YAML 行编辑，正确处理 `#` 注释/引号）并 checkpoint session（刷新 system preamble）；错误展示支持 error-chain（多行）并写入 tracing 日志
+- `crates/kiliax-cli/src/ui.rs`: codex 风格 composer（无背景；蓝+紫 `››` 前缀；自动换行、动态高度；`[img#N]` token 蓝色高亮；输入框上方 queue 预览）；/model、/mcp 等 picker（题头紫色、选中蓝色、未选中白色；MCP 未开启灰色/开启白色）；底部 footer 仅显示 status + agent + model_id（去 provider）
+- `crates/kiliax-cli/src/header.rs`: 启动信息栏（版本/模型/cwd）渲染为 history lines
+- `crates/kiliax-cli/src/clipboard_paste.rs`: 剪切板图片读取→临时 PNG 路径（arboard + WSL PowerShell fallback）；粘贴路径规范化（file://、Windows/UNC、WSL 映射）
+- `crates/kiliax-cli/src/slash_command.rs`: slash command 定义 + popup 状态（/new、/agent、/model、/mcp；↑/↓ 选择、Tab 补全、/a alias；popup 高度按 item 数，UI 无边框）
+- `crates/kiliax-cli/src/mcp_picker.rs`: MCP servers 开关选择器（↑/↓ 选择、Space/Enter 切换、Esc 关闭）
+- `crates/kiliax-cli/src/model_picker.rs`: model picker 状态（provider/model 列表、模糊搜索、键盘导航；返回值总是 provider-qualified model id，兼容带 `/` 的模型名）
+- `crates/kiliax-cli/src/style.rs`: composer 无背景样式、prompt 双彩箭头配色（按终端主题 hint），以及 picker 统一配色（题头紫色、选中蓝色、未选中白色；MCP disabled 灰色）与 diff 行背景
+- `crates/kiliax-cli/src/markdown.rs`: Markdown 渲染（紧凑输出：不额外插入空行；pulldown-cmark → ratatui `Line`；不启用 GFM tables，表格按原文 `|` 展示以保证终端稳定性）；fenced code block 调用语法高亮；包含渲染紧凑性相关单元测试
+- `crates/kiliax-cli/src/highlight.rs`: 代码语法高亮（syntect + VS Code Dark+ 配色；用 LinesWithEndings 保证注释/多行状态不串行，并剥离 CR/LF 避免渲染异常）
+- `crates/kiliax-cli/src/wrap.rs`: styled 文本按终端宽度换行（含宽字符/样式保持单元测试）
+- `crates/kiliax-cli/src/input.rs`: 单行输入编辑（cursor/backspace/delete 等）；`[img#N]` token 原子移动/删除；支持整行替换（历史回填）；包含 Unicode/快捷键单元测试
+- `crates/kiliax-cli/src/custom_terminal.rs`: TUI 用到的自定义终端命令（scroll region、wraparound 开关、RI 等 ANSI 序列封装）
+- `crates/kiliax-cli/src/terminal.rs`: inline viewport backend（viewport 可下推/可伸缩；raw mode + bracketed paste）；仅重绘 viewport；跳过绘制终端右下角单元格以规避部分终端的滚屏/空行问题；每帧用 Synchronized Update 包裹所有写入（同一 backend writer）以减少 tearing
+- `crates/kiliax-cli/src/history.rs`: 向 viewport 之上插入历史行（展开渲染 user bubble 与 turn divider marker；user bubble 使用与输入框一致样式（无背景 + 上下 padding + 双彩箭头前缀）；支持 fg/bg/italic/underline/strikethrough 等 Style；渲染宽度预留 1 列避免 xterm.js 末列自动换行；codex 风格：用 DECSTBM 设置 scroll region，先用 RI(`ESC M`) 下推 viewport，再在上方 scroll region 底部用 CRLF(`\r\n`) 逐行插入；插入时临时关闭 wraparound + 过滤 `\r/\n`；必要时清理 continuation rows 以避免残留/空行；相关 ANSI 命令封装在 `custom_terminal`）；包含 marker 解析/user bubble/divider 展开单元测试
 
 ### crates/kiliax-server
 

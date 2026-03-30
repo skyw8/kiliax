@@ -212,7 +212,7 @@ async fn main() -> Result<()> {
 
     let _otel = kiliax_otel::init(
         &loaded.config,
-        "kiliax-tui",
+        "kiliax-cli",
         env!("CARGO_PKG_VERSION"),
         tui_local_logs(),
     )?;

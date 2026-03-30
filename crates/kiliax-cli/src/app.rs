@@ -3217,13 +3217,13 @@ mod tests {
         let argv = vec![
             "bash".to_string(),
             "-lc".to_string(),
-            "cd /home/skywo/github/kiliax && rg -n shell_command crates/kiliax-tui/src | head -n 5"
+            "cd /home/skywo/github/kiliax && rg -n shell_command crates/kiliax-cli/src | head -n 5"
                 .to_string(),
         ];
         let out = summarize_shell_command_argv(&argv);
         assert_eq!(
             out,
-            "rg -n shell_command crates/kiliax-tui/src | head -n 5"
+            "rg -n shell_command crates/kiliax-cli/src | head -n 5"
         );
     }
 
@@ -3232,10 +3232,10 @@ mod tests {
         let argv = vec![
             "bash".to_string(),
             "-lc".to_string(),
-            "FOO=bar BAR=baz rg -n shell_command crates/kiliax-tui/src".to_string(),
+            "FOO=bar BAR=baz rg -n shell_command crates/kiliax-cli/src".to_string(),
         ];
         let out = summarize_shell_command_argv(&argv);
-        assert_eq!(out, "rg -n shell_command crates/kiliax-tui/src");
+        assert_eq!(out, "rg -n shell_command crates/kiliax-cli/src");
     }
 
     #[test]

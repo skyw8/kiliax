@@ -2,7 +2,7 @@
 members = [
   "crates/kiliax-core",
   "crates/kiliax-otel",
-  "crates/kiliax-tui",
+  "crates/kiliax-cli",
   "crates/kiliax-server",
 ]
 resolver = "2"
