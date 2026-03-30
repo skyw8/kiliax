@@ -44,6 +44,7 @@ impl ConnectedMcpServer {
 #[derive(Clone)]
 pub struct ToolEngine {
     workspace_root: PathBuf,
+    extra_workspace_roots: Arc<RwLock<Arc<Vec<PathBuf>>>>,
     shell_sessions: Arc<builtin::ShellSessions>,
     file_tracker: Arc<builtin::FileAccessTracker>,
     config: Arc<RwLock<Arc<crate::config::Config>>>,
@@ -56,6 +57,7 @@ impl ToolEngine {
         telemetry::set_capture_config(config.otel.enabled.then_some(config.otel.capture.clone()));
         Self {
             workspace_root: workspace_root.into(),
+            extra_workspace_roots: Arc::new(RwLock::new(Arc::new(Vec::new()))),
             shell_sessions: Arc::new(builtin::ShellSessions::new()),
             file_tracker: Arc::new(builtin::FileAccessTracker::new()),
             config: Arc::new(RwLock::new(Arc::new(config))),
@@ -66,6 +68,24 @@ impl ToolEngine {
 
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    pub fn extra_workspace_roots(&self) -> Arc<Vec<PathBuf>> {
+        self.extra_workspace_roots
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| Arc::new(Vec::new()))
+    }
+
+    pub fn set_extra_workspace_roots(&self, roots: Vec<PathBuf>) -> Result<(), ToolError> {
+        let mut guard = self.extra_workspace_roots.write().map_err(|_| {
+            ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "tool extra workspace roots lock poisoned",
+            ))
+        })?;
+        *guard = Arc::new(roots);
+        Ok(())
     }
 
     pub fn set_config(&self, config: crate::config::Config) -> Result<(), ToolError> {
@@ -254,8 +274,10 @@ impl ToolEngine {
                 return res;
             }
 
+            let extra = self.extra_workspace_roots();
             builtin::execute(
                 &self.workspace_root,
+                extra.as_slice(),
                 perms,
                 self.shell_sessions.as_ref(),
                 self.file_tracker.as_ref(),
@@ -377,7 +399,8 @@ impl ToolEngine {
             }
 
             let res: Result<(String, Message), ToolError> = async {
-                builtin::execute_view_image_with_attachment(&self.workspace_root, perms, call).await
+                let extra = self.extra_workspace_roots();
+                builtin::execute_view_image_with_attachment(&self.workspace_root, extra.as_slice(), perms, call).await
             }
             .instrument(span.clone())
             .await;

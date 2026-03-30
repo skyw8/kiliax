@@ -541,9 +541,16 @@ async fn resume_session(
 async fn patch_settings(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
-    Json(patch): Json<api::SessionSettingsPatch>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    if body.get("workspace_root").is_some() {
+        return Err(ApiError::invalid_argument(
+            "workspace_root is immutable (set it when creating the session)",
+        ));
+    }
+    let patch: api::SessionSettingsPatch =
+        serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.patch_session_settings(&id, patch).await?;
     Ok(Json(out))
 }
@@ -587,9 +594,11 @@ async fn create_run(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
     Path(session_id): Path<String>,
-    Json(req): Json<api::RunCreateRequest>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let req: api::RunCreateRequest =
+        serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.create_run(&id, idem_key(&headers), req).await?;
     Ok((StatusCode::CREATED, Json(out)))
 }

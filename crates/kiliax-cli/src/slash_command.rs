@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
     New,
+    Dir,
     Model,
     Agent,
     Mcp,
@@ -10,6 +11,7 @@ impl SlashCommand {
     pub fn command(self) -> &'static str {
         match self {
             SlashCommand::New => "new",
+            SlashCommand::Dir => "dir",
             SlashCommand::Model => "model",
             SlashCommand::Agent => "agent",
             SlashCommand::Mcp => "mcp",
@@ -19,6 +21,7 @@ impl SlashCommand {
     pub fn aliases(self) -> &'static [&'static str] {
         match self {
             SlashCommand::New => &[],
+            SlashCommand::Dir => &[],
             SlashCommand::Model => &[],
             SlashCommand::Agent => &["a"],
             SlashCommand::Mcp => &[],
@@ -28,6 +31,7 @@ impl SlashCommand {
     pub fn description(self) -> &'static str {
         match self {
             SlashCommand::New => "start a new session",
+            SlashCommand::Dir => "add/list extra workspace dirs",
             SlashCommand::Model => "choose provider/model",
             SlashCommand::Agent => "switch agent (plan/general)",
             SlashCommand::Mcp => "toggle MCP servers",
@@ -35,7 +39,7 @@ impl SlashCommand {
     }
 
     pub fn takes_args(self) -> bool {
-        matches!(self, SlashCommand::Agent)
+        matches!(self, SlashCommand::Agent | SlashCommand::Dir)
     }
 }
 
@@ -43,6 +47,7 @@ pub fn all_commands() -> &'static [SlashCommand] {
     // Order is presentation order in the popup.
     &[
         SlashCommand::New,
+        SlashCommand::Dir,
         SlashCommand::Model,
         SlashCommand::Agent,
         SlashCommand::Mcp,
@@ -215,6 +220,7 @@ mod tests {
     #[test]
     fn find_command_matches_alias() {
         assert_eq!(find_command("new"), Some(SlashCommand::New));
+        assert_eq!(find_command("dir"), Some(SlashCommand::Dir));
         assert_eq!(find_command("agent"), Some(SlashCommand::Agent));
         assert_eq!(find_command("a"), Some(SlashCommand::Agent));
         assert_eq!(find_command("model"), Some(SlashCommand::Model));

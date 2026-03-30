@@ -77,8 +77,11 @@ export const api = {
   listSessions(): Promise<SessionListResponse> {
     return apiFetch<SessionListResponse>("/v1/sessions");
   },
-  createSession(): Promise<Session> {
-    return apiFetch<Session>("/v1/sessions", { method: "POST", body: "{}" });
+  createSession(req?: { title?: string; settings?: { workspace_root?: string } }): Promise<Session> {
+    return apiFetch<Session>("/v1/sessions", {
+      method: "POST",
+      body: JSON.stringify(req ?? {}),
+    });
   },
   getSession(sessionId: string): Promise<Session> {
     return apiFetch<Session>(`/v1/sessions/${sessionId}`);

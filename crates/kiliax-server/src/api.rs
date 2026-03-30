@@ -81,11 +81,12 @@ pub struct SessionCreateRequest {
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
-    pub settings: Option<SessionSettingsPatch>,
+    pub settings: Option<SessionCreateSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionSettingsPatch {
+#[serde(deny_unknown_fields)]
+pub struct SessionCreateSettings {
     #[serde(default)]
     pub agent: Option<String>,
     #[serde(default)]
@@ -94,6 +95,21 @@ pub struct SessionSettingsPatch {
     pub mcp: Option<McpServersPatch>,
     #[serde(default)]
     pub workspace_root: Option<String>,
+    #[serde(default)]
+    pub extra_workspace_roots: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSettingsPatch {
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub mcp: Option<McpServersPatch>,
+    #[serde(default)]
+    pub extra_workspace_roots: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +130,8 @@ pub struct SessionSettings {
     pub model_id: String,
     pub mcp: McpServers,
     pub workspace_root: String,
+    #[serde(default)]
+    pub extra_workspace_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +160,7 @@ pub enum McpConnectionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunCreateRequest {
     pub input: RunInput,
     #[serde(default)]
@@ -161,6 +180,7 @@ pub enum RunInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RunOverrides {
     #[serde(default)]
     pub agent: Option<String>,
@@ -168,8 +188,6 @@ pub struct RunOverrides {
     pub model_id: Option<String>,
     #[serde(default)]
     pub mcp: Option<McpServersPatch>,
-    #[serde(default)]
-    pub workspace_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

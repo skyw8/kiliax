@@ -270,11 +270,20 @@ impl ServerState {
         let config = self.config_snapshot()?;
 
         let mut settings = default_settings(config.as_ref(), None)?;
-        if let Some(patch) = req.settings {
-            if let Some(root) = patch.workspace_root.as_deref() {
+        let mut extra_workspace_roots: Option<Vec<String>> = None;
+        if let Some(create) = req.settings {
+            if let Some(root) = create.workspace_root.as_deref() {
                 let root = validate_client_workspace_root(root)?;
                 settings.workspace_root = root.display().to_string();
             }
+            extra_workspace_roots = create.extra_workspace_roots;
+
+            let patch = api::SessionSettingsPatch {
+                agent: create.agent,
+                model_id: create.model_id,
+                mcp: create.mcp,
+                extra_workspace_roots: None,
+            };
             apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
         }
 
@@ -303,11 +312,24 @@ impl ServerState {
             .await
             .map_err(ApiError::internal_error)?;
 
+        if let Some(extra) = extra_workspace_roots.as_ref() {
+            settings.extra_workspace_roots = validate_client_extra_workspace_roots(extra, &workspace_root)?;
+        }
+
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
+        tools
+            .set_extra_workspace_roots(
+                settings
+                    .extra_workspace_roots
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect(),
+            )
+            .map_err(ApiError::internal_error)?;
 
         let messages =
-            build_preamble(&profile, &settings.model_id, &workspace_root, &tools).await;
+            build_preamble(&profile, &settings.model_id, &workspace_root, &settings.extra_workspace_roots, &tools).await;
 
         let mut session = self
             .store
@@ -316,6 +338,7 @@ impl ServerState {
                 Some(settings.model_id.clone()),
                 Some(self.config_path.display().to_string()),
                 Some(settings.workspace_root.clone()),
+                settings.extra_workspace_roots.clone(),
                 messages.clone(),
             )
             .await
@@ -761,6 +784,8 @@ struct SettingsFile {
     mcp: api::McpServers,
     #[serde(default)]
     workspace_root: String,
+    #[serde(default)]
+    extra_workspace_roots: Option<Vec<String>>,
 }
 
 async fn read_settings_file(path: &Path) -> Result<Option<SettingsFile>, ApiError> {
@@ -780,6 +805,7 @@ async fn write_settings_file(path: &Path, settings: &api::SessionSettings) -> Re
         model_id: settings.model_id.clone(),
         mcp: settings.mcp.clone(),
         workspace_root: settings.workspace_root.clone(),
+        extra_workspace_roots: Some(settings.extra_workspace_roots.clone()),
     };
     let text =
         serde_json::to_string_pretty(&file).map_err(ApiError::internal_error)?;
@@ -802,6 +828,7 @@ async fn load_settings_for_meta(
             model_id: file.model_id,
             mcp: file.mcp,
             workspace_root: file.workspace_root,
+            extra_workspace_roots: file.extra_workspace_roots.unwrap_or_default(),
         };
         normalize_settings(&mut settings, meta, config)?;
         return Ok(settings);
@@ -851,6 +878,41 @@ fn normalize_settings(
         meta.workspace_root.clone().unwrap_or_default()
     };
 
+    let main_root = PathBuf::from(settings.workspace_root.trim());
+    let main_root =
+        std::fs::canonicalize(&main_root).unwrap_or_else(|_| main_root.to_path_buf());
+    let mut extras: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for raw in settings.extra_workspace_roots.iter() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let candidate = match validate_client_workspace_root(trimmed) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let meta = match std::fs::metadata(&candidate) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let canonical = match std::fs::canonicalize(&candidate) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if canonical == main_root {
+            continue;
+        }
+        let display = canonical.display().to_string();
+        if seen.insert(display.clone()) {
+            extras.push(display);
+        }
+    }
+    settings.extra_workspace_roots = extras;
+
     settings.mcp.servers = config
         .mcp
         .servers
@@ -893,15 +955,51 @@ fn validate_client_workspace_root(input: &str) -> Result<PathBuf, ApiError> {
         }
     }
 
-    let allowed_root = home_kiliax_dir()?;
-    if !candidate.starts_with(&allowed_root) {
-        return Err(ApiError::invalid_argument(format!(
-            "workspace_root must be within {}",
-            allowed_root.display()
-        )));
+    Ok(candidate)
+}
+
+fn validate_client_extra_workspace_roots(
+    inputs: &[String],
+    workspace_root: &Path,
+) -> Result<Vec<String>, ApiError> {
+    let workspace_root = std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for raw in inputs {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let candidate = validate_client_workspace_root(trimmed)?;
+        let meta = std::fs::metadata(&candidate).map_err(|_| {
+            ApiError::invalid_argument(format!(
+                "extra workspace root not found: {}",
+                candidate.display()
+            ))
+        })?;
+        if !meta.is_dir() {
+            return Err(ApiError::invalid_argument(format!(
+                "extra workspace root must be a directory: {}",
+                candidate.display()
+            )));
+        }
+        let canonical = std::fs::canonicalize(&candidate).map_err(|_| {
+            ApiError::invalid_argument(format!(
+                "extra workspace root not accessible: {}",
+                candidate.display()
+            ))
+        })?;
+        if canonical == workspace_root {
+            continue;
+        }
+        let display = canonical.display().to_string();
+        if seen.insert(display.clone()) {
+            out.push(display);
+        }
     }
 
-    Ok(candidate)
+    Ok(out)
 }
 
 fn default_tmp_workspace_root() -> Result<PathBuf, ApiError> {
@@ -925,6 +1023,10 @@ fn default_settings(config: &Config, meta: Option<&SessionMeta>) -> Result<api::
         .and_then(|m| m.workspace_root.clone())
         .unwrap_or_default();
 
+    let extra_workspace_roots = meta
+        .map(|m| m.extra_workspace_roots.clone())
+        .unwrap_or_default();
+
     let servers = config
         .mcp
         .servers
@@ -940,6 +1042,7 @@ fn default_settings(config: &Config, meta: Option<&SessionMeta>) -> Result<api::
         model_id,
         mcp: api::McpServers { servers },
         workspace_root,
+        extra_workspace_roots,
     })
 }
 
@@ -974,8 +1077,12 @@ fn apply_settings_patch(
     if let Some(patch_servers) = patch.mcp.as_ref().and_then(|m| m.servers.as_ref()) {
         merge_mcp_settings(&mut settings.mcp.servers, patch_servers, config, allow_enable)?;
     }
-    if let Some(root) = patch.workspace_root.as_deref() {
-        settings.workspace_root = root.trim().to_string();
+    if let Some(roots) = patch.extra_workspace_roots.as_ref() {
+        settings.extra_workspace_roots = roots
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
     Ok(())
 }
@@ -1565,6 +1672,7 @@ impl LiveSession {
             session.meta.agent = settings.agent.clone();
             session.meta.model_id = Some(settings.model_id.clone());
             session.meta.workspace_root = Some(settings.workspace_root.clone());
+            session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
             live.store
                 .checkpoint(&mut session)
                 .await
@@ -1657,9 +1765,10 @@ impl LiveSession {
         let meta = { self.session.lock().await.meta.clone() };
         let mut settings = self.settings.lock().await.clone();
         let mut patch = patch.clone();
-        if let Some(root) = patch.workspace_root.take() {
-            let root = validate_client_workspace_root(&root)?;
-            patch.workspace_root = Some(root.display().to_string());
+        if let Some(roots) = patch.extra_workspace_roots.take() {
+            let workspace_root = PathBuf::from(settings.workspace_root.trim());
+            patch.extra_workspace_roots =
+                Some(validate_client_extra_workspace_roots(&roots, &workspace_root)?);
         }
 
         apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
@@ -1672,9 +1781,10 @@ impl LiveSession {
         let meta = { self.session.lock().await.meta.clone() };
         let mut settings = self.settings.lock().await.clone();
         let mut patch = patch;
-        if let Some(root) = patch.workspace_root.take() {
-            let root = validate_client_workspace_root(&root)?;
-            patch.workspace_root = Some(root.display().to_string());
+        if let Some(roots) = patch.extra_workspace_roots.take() {
+            let workspace_root = PathBuf::from(settings.workspace_root.trim());
+            patch.extra_workspace_roots =
+                Some(validate_client_extra_workspace_roots(&roots, &workspace_root)?);
         }
 
         apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
@@ -1855,13 +1965,7 @@ impl LiveSession {
             .await?;
 
             let base_settings = self.settings.lock().await.clone();
-            let mut overrides = run.overrides.take();
-            if let Some(o) = overrides.as_mut() {
-                if let Some(root) = o.workspace_root.take() {
-                    let root = validate_client_workspace_root(&root)?;
-                    o.workspace_root = Some(root.display().to_string());
-                }
-            }
+            let overrides = run.overrides.take();
             let effective =
                 apply_run_overrides(&base_settings, overrides.as_ref(), config.as_ref())?;
             run.overrides = overrides;
@@ -1924,9 +2028,7 @@ impl LiveSession {
                 .await
                 .map_err(ApiError::internal_error)?;
 
-            let tools_for_run = if effective.workspace_root != base_settings.workspace_root {
-                ToolEngine::new(&workspace_root, cfg_for_run)
-            } else {
+            let tools_for_run = {
                 let tools = self.tools.lock().await;
                 tools
                     .set_config(cfg_for_run)
@@ -1960,12 +2062,12 @@ impl LiveSession {
             if effective.agent != base_settings.agent
                 || effective.model_id != base_settings.model_id
                 || effective.mcp.servers != base_settings.mcp.servers
-                || effective.workspace_root != base_settings.workspace_root
             {
                 let preamble = build_preamble(
                     &profile,
                     &effective.model_id,
                     &workspace_root,
+                    &effective.extra_workspace_roots,
                     &tools_for_run,
                 )
                 .await;
@@ -2121,14 +2223,26 @@ impl LiveSession {
             .await
             .map_err(ApiError::internal_error)?;
 
+        let extra_workspace_roots: Vec<PathBuf> = settings
+            .extra_workspace_roots
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = {
             let mut tools = self.tools.lock().await;
             if tools.workspace_root() != workspace_root.as_path() {
-                *tools = ToolEngine::new(&workspace_root, cfg_for_tools);
+                let next = ToolEngine::new(&workspace_root, cfg_for_tools);
+                next.set_extra_workspace_roots(extra_workspace_roots)
+                    .map_err(ApiError::internal_error)?;
+                *tools = next;
             } else {
                 tools
                     .set_config(cfg_for_tools)
+                    .map_err(ApiError::internal_error)?;
+                tools
+                    .set_extra_workspace_roots(extra_workspace_roots)
                     .map_err(ApiError::internal_error)?;
             }
             tools.clone()
@@ -2142,14 +2256,21 @@ impl LiveSession {
             )
         })?;
 
-        let preamble =
-            build_preamble(&profile, &settings.model_id, &workspace_root, &tools).await;
+        let preamble = build_preamble(
+            &profile,
+            &settings.model_id,
+            &workspace_root,
+            &settings.extra_workspace_roots,
+            &tools,
+        )
+        .await;
 
         let mut session = self.session.lock().await;
         replace_preamble(&mut session.messages, preamble);
         session.meta.agent = profile.name.to_string();
         session.meta.model_id = Some(settings.model_id.clone());
         session.meta.workspace_root = Some(settings.workspace_root.clone());
+        session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
         self.store
             .checkpoint(&mut session)
             .await
@@ -2346,12 +2467,6 @@ fn apply_run_overrides(
         if let Some(mcp) = o.mcp.as_ref().and_then(|m| m.servers.as_ref()) {
             merge_mcp_settings(&mut out.mcp.servers, mcp, config, false)?;
         }
-        if let Some(root) = o.workspace_root.as_deref() {
-            out.workspace_root = root.trim().to_string();
-        }
-    }
-    if out.workspace_root.trim().is_empty() {
-        out.workspace_root = base.workspace_root.clone();
     }
     Ok(out)
 }
@@ -2371,14 +2486,20 @@ async fn build_preamble(
     profile: &AgentProfile,
     model_id: &str,
     workspace_root: &PathBuf,
+    extra_workspace_roots: &[String],
     tools: &ToolEngine,
 ) -> Vec<CoreMessage> {
+    let extra_workspace_roots: Vec<PathBuf> = extra_workspace_roots
+        .iter()
+        .map(PathBuf::from)
+        .collect();
     let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
         .with_tools({
             kiliax_core::tools::policy::tool_definitions_for_agent(profile, tools, model_id).await
         })
         .with_model_id(model_id.to_string())
-        .with_workspace_root(workspace_root);
+        .with_workspace_root(workspace_root)
+        .with_extra_workspace_roots(extra_workspace_roots);
     if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
         builder = builder.add_skills(skills);
     }

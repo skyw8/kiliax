@@ -19,6 +19,7 @@ const SUBAGENTS_LINE: &str = "Subagents: not supported.";
 #[derive(Debug, Clone)]
 pub struct PromptBuilder {
     workspace_root: Option<PathBuf>,
+    extra_workspace_roots: Vec<PathBuf>,
     model_id: Option<String>,
     include_model_prompt: bool,
     agent_prompt: Option<String>,
@@ -34,6 +35,7 @@ impl PromptBuilder {
     pub fn new() -> Self {
         Self {
             workspace_root: None,
+            extra_workspace_roots: Vec::new(),
             model_id: None,
             include_model_prompt: true,
             agent_prompt: None,
@@ -52,6 +54,14 @@ impl PromptBuilder {
 
     pub fn with_workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.workspace_root = Some(root.into());
+        self
+    }
+
+    pub fn with_extra_workspace_roots<I>(mut self, roots: I) -> Self
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        self.extra_workspace_roots = roots.into_iter().collect();
         self
     }
 
@@ -146,6 +156,7 @@ impl PromptBuilder {
             out.push(Message::System {
                 content: render_environment_prompt(
                     self.workspace_root.as_deref(),
+                    &self.extra_workspace_roots,
                     self.model_id.as_deref(),
                 ),
             });
@@ -190,11 +201,25 @@ fn model_prompt_for(model_id: Option<&str>) -> Option<&'static str> {
     None
 }
 
-fn render_environment_prompt(workspace_root: Option<&Path>, model_id: Option<&str>) -> String {
+fn render_environment_prompt(
+    workspace_root: Option<&Path>,
+    extra_workspace_roots: &[PathBuf],
+    model_id: Option<&str>,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if let Some(root) = workspace_root {
         lines.push(format!("PWD: {}", root.display()));
+    }
+    if !extra_workspace_roots.is_empty() {
+        let formatted = extra_workspace_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !formatted.trim().is_empty() {
+            lines.push(format!("EXTRA_DIRS: {formatted}"));
+        }
     }
 
     lines.push(format!(

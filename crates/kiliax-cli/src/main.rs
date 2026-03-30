@@ -275,12 +275,24 @@ async fn main() -> Result<()> {
                     Some(runtime.llm().route().model_id()),
                     Some(loaded.path.display().to_string()),
                     Some(workspace_root.display().to_string()),
+                    Vec::new(),
                     messages.clone(),
                 )
                 .await?;
             (session, messages)
         }
     };
+
+    let extra_workspace_roots: Vec<std::path::PathBuf> = session
+        .meta
+        .extra_workspace_roots
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    runtime
+        .tools()
+        .set_extra_workspace_roots(extra_workspace_roots.clone())
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     let options = AgentRuntimeOptions::from_config(&profile, &loaded.config);
 
@@ -295,6 +307,7 @@ async fn main() -> Result<()> {
         session,
         messages,
         workspace_root.clone(),
+        extra_workspace_roots,
         loaded.path.clone(),
         loaded.config.clone(),
     );

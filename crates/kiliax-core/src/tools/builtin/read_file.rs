@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
@@ -43,6 +43,7 @@ struct ReadFileArgs {
 
 pub(super) async fn execute(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     file_tracker: &super::FileAccessTracker,
     call: &ToolCall,
@@ -51,7 +52,7 @@ pub(super) async fn execute(
         return Err(ToolError::PermissionDenied(TOOL_READ_FILE.to_string()));
     }
     let args: ReadFileArgs = parse_args(call, TOOL_READ_FILE)?;
-    let path = resolve_read_path(workspace_root, &args.path)?;
+    let path = resolve_read_path(workspace_root, extra_workspace_roots, &args.path)?;
 
     let mut text = if let Some(max) = args.max_bytes {
         read_to_string_capped(&path, max).await?

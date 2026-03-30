@@ -1,5 +1,5 @@
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -38,6 +38,7 @@ struct WriteFileArgs {
 
 pub(super) async fn execute(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     file_tracker: &FileAccessTracker,
     call: &ToolCall,
@@ -46,7 +47,7 @@ pub(super) async fn execute(
         return Err(ToolError::PermissionDenied(TOOL_WRITE_FILE.to_string()));
     }
     let args: WriteFileArgs = parse_args(call, TOOL_WRITE_FILE)?;
-    let abs = resolve_workspace_path(workspace_root, &args.file_path)?;
+    let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &args.file_path)?;
 
     let exists = match tokio::fs::metadata(&abs).await {
         Ok(meta) => {

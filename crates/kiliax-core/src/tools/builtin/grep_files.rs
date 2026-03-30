@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -53,6 +53,7 @@ fn default_true() -> bool {
 
 pub(super) async fn execute(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
@@ -68,7 +69,7 @@ pub(super) async fn execute(
     let dir = args.path.as_deref().unwrap_or(".");
     let max_results = args.max_results.unwrap_or(100).max(1);
     let max_bytes_per_file = args.max_bytes_per_file.unwrap_or(2_000_000).max(1);
-    let base_abs = resolve_workspace_path(workspace_root, dir)?;
+    let base_abs = resolve_workspace_path(workspace_root, extra_workspace_roots, dir)?;
     let workspace_root = workspace_root.to_path_buf();
     let pattern = args.pattern.clone();
     let case_sensitive = args.case_sensitive;

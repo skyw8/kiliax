@@ -110,6 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(runtime.llm().route().model_id()),
                     Some(loaded.path.display().to_string()),
                     Some(workspace_root.display().to_string()),
+                    Vec::new(),
                     msgs.clone(),
                 )
                 .await?;

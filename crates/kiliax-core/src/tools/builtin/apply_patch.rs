@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +57,7 @@ struct PatchedFile {
 
 pub(super) async fn execute(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
@@ -73,7 +74,7 @@ pub(super) async fn execute(
     for op in ops {
         match op {
             PatchOp::AddFile { path, content } => {
-                let abs = resolve_workspace_path(workspace_root, &path)?;
+                let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &path)?;
                 if abs.exists() {
                     return Err(ToolError::InvalidCommand(format!(
                         "add file failed: {path} already exists"
@@ -94,7 +95,7 @@ pub(super) async fn execute(
                 });
             }
             PatchOp::DeleteFile { path } => {
-                let abs = resolve_workspace_path(workspace_root, &path)?;
+                let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &path)?;
                 let old = tokio::fs::read_to_string(&abs).await.unwrap_or_default();
                 tokio::fs::remove_file(&abs).await?;
                 let diff = small_unified_diff(&old, "", &path);
@@ -112,7 +113,7 @@ pub(super) async fn execute(
                 move_to,
                 hunks,
             } => {
-                let abs = resolve_workspace_path(workspace_root, &path)?;
+                let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &path)?;
                 let old = tokio::fs::read_to_string(&abs).await?;
                 let new = apply_update_hunks(&old, &hunks)
                     .map_err(|e| ToolError::InvalidCommand(format!("patch failed: {e}")))?;
@@ -121,7 +122,7 @@ pub(super) async fn execute(
                 let mut final_path = path.clone();
 
                 if let Some(dest) = move_to.clone() {
-                    let dest_abs = resolve_workspace_path(workspace_root, &dest)?;
+                    let dest_abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &dest)?;
                     if let Some(parent) = dest_abs.parent() {
                         tokio::fs::create_dir_all(parent).await?;
                     }

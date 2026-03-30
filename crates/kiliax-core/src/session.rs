@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::llm::Message;
 
-const SESSION_SCHEMA_VERSION: u32 = 1;
+const SESSION_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_CHECKPOINT_EVERY: u64 = 32;
 
 const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
@@ -88,6 +88,10 @@ pub struct SessionMeta {
     /// Absolute path of workspace root (if known).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<String>,
+
+    /// Absolute paths of extra allowed workspace roots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_workspace_roots: Vec<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -217,6 +221,7 @@ impl FileSessionStore {
         model_id: Option<String>,
         config_path: Option<String>,
         workspace_root: Option<String>,
+        extra_workspace_roots: Vec<String>,
         initial_messages: Vec<Message>,
     ) -> Result<SessionState, SessionError> {
         tokio::fs::create_dir_all(&self.root_dir).await?;
@@ -259,6 +264,7 @@ impl FileSessionStore {
             model_id,
             config_path,
             workspace_root,
+            extra_workspace_roots,
             title: derive_title(&initial_messages),
             last_finish_reason: None,
             last_error: None,
@@ -630,6 +636,7 @@ mod tests {
                 Some("p/m".to_string()),
                 None,
                 None,
+                Vec::new(),
                 vec![Message::User {
                     content: crate::llm::UserMessageContent::Text("hello".to_string()),
                 }],

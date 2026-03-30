@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -44,6 +44,7 @@ struct EditFileArgs {
 
 pub(super) async fn execute(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     file_tracker: &FileAccessTracker,
     call: &ToolCall,
@@ -63,7 +64,7 @@ pub(super) async fn execute(
         ));
     }
 
-    let abs = resolve_workspace_path(workspace_root, &args.file_path)?;
+    let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &args.file_path)?;
     let meta = tokio::fs::metadata(&abs).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             ToolError::InvalidCommand(format!("file not found: {}", abs.display()))

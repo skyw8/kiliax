@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -47,16 +47,18 @@ fn is_supported_image_extension(path: &Path) -> bool {
 
 pub(super) async fn execute(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
-    Ok(execute_with_attachment(workspace_root, perms, call)
+    Ok(execute_with_attachment(workspace_root, extra_workspace_roots, perms, call)
         .await?
         .0)
 }
 
 pub(crate) async fn execute_with_attachment(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     call: &ToolCall,
 ) -> Result<(String, Message), ToolError> {
@@ -65,7 +67,7 @@ pub(crate) async fn execute_with_attachment(
     }
 
     let args: ViewImageArgs = parse_args(call, TOOL_VIEW_IMAGE)?;
-    let path = resolve_read_path(workspace_root, &args.path)?;
+    let path = resolve_read_path(workspace_root, extra_workspace_roots, &args.path)?;
 
     let meta = tokio::fs::metadata(&path).await?;
     if !meta.is_file() {

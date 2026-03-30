@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -132,6 +132,7 @@ struct ShellCommandOutput {
 
 pub(super) async fn execute_shell_command(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     shell_sessions: &ShellSessions,
     call: &ToolCall,
@@ -154,7 +155,7 @@ pub(super) async fn execute_shell_command(
 
     let cwd = match args.cwd.as_deref() {
         None => workspace_root.to_path_buf(),
-        Some(p) => resolve_workspace_path(workspace_root, p)?,
+        Some(p) => resolve_workspace_path(workspace_root, extra_workspace_roots, p)?,
     };
 
     let yield_time_ms = args.yield_time_ms.unwrap_or(0);

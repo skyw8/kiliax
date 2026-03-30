@@ -21,6 +21,7 @@ export interface SessionSettings {
   agent: string;
   model_id: string;
   workspace_root: string;
+  extra_workspace_roots: string[];
   mcp: McpServers;
 }
 
@@ -130,7 +131,6 @@ export interface RunOverrides {
   agent?: string;
   model_id?: string;
   mcp?: { servers?: McpServerSetting[] };
-  workspace_root?: string;
 }
 
 export interface RunCreateRequest {

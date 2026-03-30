@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -43,6 +43,7 @@ struct ListDirArgs {
 
 pub(super) async fn execute(
     workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
@@ -50,7 +51,7 @@ pub(super) async fn execute(
         return Err(ToolError::PermissionDenied(TOOL_LIST_DIR.to_string()));
     }
     let args: ListDirArgs = parse_args(call, TOOL_LIST_DIR)?;
-    let path = resolve_workspace_path(workspace_root, &args.path)?;
+    let path = resolve_workspace_path(workspace_root, extra_workspace_roots, &args.path)?;
 
     let max_entries = args.max_entries.unwrap_or(2_000).max(1);
     let max_depth = args.max_depth.unwrap_or(32).max(1);

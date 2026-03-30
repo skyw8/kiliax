@@ -430,6 +430,7 @@ pub struct App {
     slash_popup: SlashPopupState,
 
     workspace_root: PathBuf,
+    extra_workspace_roots: Vec<PathBuf>,
     config_path: PathBuf,
     config: kiliax_core::config::Config,
 
@@ -471,6 +472,7 @@ impl App {
         session: SessionState,
         messages: Vec<Message>,
         workspace_root: PathBuf,
+        extra_workspace_roots: Vec<PathBuf>,
         config_path: PathBuf,
         config: kiliax_core::config::Config,
     ) -> Self {
@@ -492,6 +494,7 @@ impl App {
             ui_mode: UiMode::Chat,
             slash_popup: SlashPopupState::default(),
             workspace_root,
+            extra_workspace_roots,
             config_path,
             config,
             profile,
@@ -1022,6 +1025,23 @@ impl App {
             crate::slash_command::SlashCommand::Model => {
                 self.open_model_picker(args);
             }
+            crate::slash_command::SlashCommand::Dir => {
+                if args.trim().is_empty() {
+                    self.pending_history_lines
+                        .extend(render_dir_list_lines(&self.workspace_root, &self.extra_workspace_roots));
+                    return Ok(());
+                }
+                if let Err(err) = self.add_extra_workspace_root(args.trim()).await {
+                    let text = format_error_chain_text(err.as_ref());
+                    tracing::error!(
+                        event = "tui.dir.add_error",
+                        session_id = %self.session.id(),
+                        error = %text,
+                    );
+                    self.pending_history_lines
+                        .extend(render_error_lines(&text));
+                }
+            }
             crate::slash_command::SlashCommand::Agent => {
                 let agent = args.split_whitespace().next().unwrap_or("");
                 if agent.is_empty() {
@@ -1059,10 +1079,87 @@ impl App {
         self.ui_mode = UiMode::McpPicker(McpPicker::new(statuses));
     }
 
+    async fn add_extra_workspace_root(&mut self, input: &str) -> Result<()> {
+        if self.running {
+            anyhow::bail!("cannot modify dirs while a run is in progress");
+        }
+
+        let candidate = validate_extra_workspace_root(input)?;
+
+        let main = std::fs::canonicalize(&self.workspace_root).unwrap_or_else(|_| self.workspace_root.clone());
+        if candidate == main {
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("dir").bold(),
+                Span::from(": ").dim(),
+                Span::from(candidate.display().to_string()).dim(),
+            ]));
+            return Ok(());
+        }
+        if self.extra_workspace_roots.contains(&candidate) {
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("dir").bold(),
+                Span::from(": ").dim(),
+                Span::from(candidate.display().to_string()).dim(),
+            ]));
+            return Ok(());
+        }
+
+        self.extra_workspace_roots.push(candidate.clone());
+        self.runtime
+            .tools()
+            .set_extra_workspace_roots(self.extra_workspace_roots.clone())
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        self.session.meta.extra_workspace_roots = self
+            .extra_workspace_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        self.session.meta.updated_at_ms = now_ms();
+
+        let new_preamble = build_preamble(
+            &self.profile,
+            &self.model_id,
+            &self.workspace_root,
+            &self.extra_workspace_roots,
+            self.runtime.tools(),
+        )
+        .await;
+        replace_preamble(&mut self.session.messages, new_preamble);
+        self.session.meta.message_count = self.session.messages.len();
+        self.messages = self.session.messages.clone();
+
+        self.store.checkpoint(&mut self.session).await?;
+
+        self.pending_history_lines.push(Line::from(vec![
+            Span::from("• ").dim(),
+            Span::from("dir").bold(),
+            Span::from(": ").dim(),
+            Span::from("+ ").dim(),
+            Span::from(candidate.display().to_string()).dim(),
+        ]));
+
+        tracing::info!(
+            event = "tui.dir.added",
+            session_id = %self.session.id(),
+            dir = %candidate.display(),
+        );
+
+        Ok(())
+    }
+
     async fn start_new_session(&mut self) -> Result<()> {
         if self.running {
             anyhow::bail!("cannot start a new session while a run is in progress");
         }
+
+        self.extra_workspace_roots.clear();
+        self.runtime
+            .tools()
+            .set_extra_workspace_roots(Vec::new())
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         let prev_id = self.session.meta.id.clone();
         let prev_empty = !self.has_user_messages();
@@ -1071,6 +1168,7 @@ impl App {
             &self.profile,
             &self.model_id,
             &self.workspace_root,
+            &self.extra_workspace_roots,
             self.runtime.tools(),
         )
         .await;
@@ -1081,6 +1179,10 @@ impl App {
                 Some(self.model_id.clone()),
                 Some(self.config_path.display().to_string()),
                 Some(self.workspace_root.display().to_string()),
+                self.extra_workspace_roots
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect(),
                 preamble,
             )
             .await
@@ -1263,6 +1365,7 @@ impl App {
             &self.profile,
             &self.model_id,
             &self.workspace_root,
+            &self.extra_workspace_roots,
             self.runtime.tools(),
         )
         .await;
@@ -1380,6 +1483,7 @@ impl App {
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
+                &self.extra_workspace_roots,
                 self.runtime.tools(),
             )
             .await;
@@ -1471,6 +1575,7 @@ impl App {
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
+                &self.extra_workspace_roots,
                 self.runtime.tools(),
             )
             .await;
@@ -1840,6 +1945,7 @@ async fn build_preamble(
     profile: &AgentProfile,
     model_id: &str,
     workspace_root: &PathBuf,
+    extra_workspace_roots: &[PathBuf],
     tools: &kiliax_core::tools::ToolEngine,
 ) -> Vec<Message> {
     let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
@@ -1847,7 +1953,8 @@ async fn build_preamble(
             kiliax_core::tools::policy::tool_definitions_for_agent(profile, tools, model_id).await
         })
         .with_model_id(model_id.to_string())
-        .with_workspace_root(workspace_root);
+        .with_workspace_root(workspace_root)
+        .with_extra_workspace_roots(extra_workspace_roots.iter().cloned());
     if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
         builder = builder.add_skills(skills);
     }
@@ -2748,6 +2855,65 @@ fn format_error_chain_text(err: &dyn std::error::Error) -> String {
     out
 }
 
+fn render_dir_list_lines(workspace_root: &PathBuf, extra_roots: &[PathBuf]) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    out.push(Line::from(vec![
+        Span::from("• ").dim(),
+        Span::from("workspace").bold(),
+        Span::from(": ").dim(),
+        Span::from(workspace_root.display().to_string()).dim(),
+    ]));
+    if extra_roots.is_empty() {
+        out.push(Line::from(vec![
+            Span::from("• ").dim(),
+            Span::from("dir").bold(),
+            Span::from(": ").dim(),
+            Span::from("(none)").dim(),
+        ]));
+        return out;
+    }
+    for dir in extra_roots {
+        out.push(Line::from(vec![
+            Span::from("• ").dim(),
+            Span::from("dir").bold(),
+            Span::from(": ").dim(),
+            Span::from(dir.display().to_string()).dim(),
+        ]));
+    }
+    out
+}
+
+fn expand_tilde_path(path: &str) -> Result<PathBuf> {
+    let trimmed = path.trim();
+    if trimmed == "~" {
+        return dirs::home_dir().ok_or_else(|| anyhow::anyhow!("failed to resolve home dir"));
+    }
+    let Some(rest) = trimmed.strip_prefix("~/") else {
+        return Ok(PathBuf::from(trimmed));
+    };
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("failed to resolve home dir"))?;
+    Ok(home.join(rest))
+}
+
+fn validate_extra_workspace_root(input: &str) -> Result<PathBuf> {
+    let candidate = expand_tilde_path(input)?;
+    if !candidate.is_absolute() {
+        anyhow::bail!("dir must be an absolute path");
+    }
+    if candidate
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        anyhow::bail!("dir must not contain `..`");
+    }
+    let meta = std::fs::metadata(&candidate)
+        .map_err(|_| anyhow::anyhow!("dir not found: {}", candidate.display()))?;
+    if !meta.is_dir() {
+        anyhow::bail!("dir must be a directory: {}", candidate.display());
+    }
+    Ok(std::fs::canonicalize(&candidate).unwrap_or(candidate))
+}
+
 fn render_error_lines(text: &str) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let mut lines = text.lines();
@@ -3264,6 +3430,7 @@ mod tests {
                 Some("p/m".to_string()),
                 None,
                 None,
+                Vec::new(),
                 messages.clone(),
             )
             .await
@@ -3302,6 +3469,7 @@ mod tests {
             session,
             messages,
             tmp.path().to_path_buf(),
+            Vec::new(),
             tmp.path().join("kiliax.yaml"),
             config,
         );
