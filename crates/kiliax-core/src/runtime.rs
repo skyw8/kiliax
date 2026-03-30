@@ -48,7 +48,7 @@ pub struct AgentRuntimeOptions {
 impl Default for AgentRuntimeOptions {
     fn default() -> Self {
         Self {
-            max_steps: 8,
+            max_steps: 1024,
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             tool_error_mode: ToolErrorMode::ToolMessage,

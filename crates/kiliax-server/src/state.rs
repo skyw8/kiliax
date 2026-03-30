@@ -1514,6 +1514,41 @@ fn format_error_chain_text(err: &dyn std::error::Error) -> String {
     out
 }
 
+fn error_chain_vec(err: &dyn std::error::Error) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(err.to_string());
+    let mut cur = err.source();
+    while let Some(src) = cur {
+        out.push(src.to_string());
+        cur = src.source();
+    }
+    out
+}
+
+fn runtime_error_code(err: &AgentRuntimeError) -> &'static str {
+    match err {
+        AgentRuntimeError::MaxSteps { .. } => "max_steps_exceeded",
+        AgentRuntimeError::Llm(_) => "llm_error",
+        AgentRuntimeError::Tool(_) => "tool_error",
+        AgentRuntimeError::Cancelled => "cancelled",
+    }
+}
+
+fn runtime_error_hint(code: &str, agent: &str) -> Option<String> {
+    match code {
+        "max_steps_exceeded" => Some(format!(
+            "Increase `runtime.max_steps` or `agents.{agent}.max_steps` in `kiliax.yaml`, or split the task / ask for earlier output."
+        )),
+        "llm_error" => Some(
+            "Check provider/base_url/api_key, and use `trace_id` to locate server logs.".to_string(),
+        ),
+        "tool_error" => Some(
+            "Tool execution failed: check workspace/permissions/tool args, and use `trace_id` to locate server logs.".to_string(),
+        ),
+        _ => None,
+    }
+}
+
 pub struct LiveSession {
     session_id: SessionId,
     store: FileSessionStore,
@@ -2044,6 +2079,7 @@ impl LiveSession {
                 )
             })?;
             let options = AgentRuntimeOptions::from_config(&profile, config.as_ref());
+            let max_steps = options.max_steps;
 
             let llm = kiliax_core::llm::LlmClient::from_config(
                 config.as_ref(),
@@ -2082,7 +2118,8 @@ impl LiveSession {
 
             let mut finish_reason: Option<String> = None;
             let mut cancelled = false;
-            let mut runtime_error: Option<String> = None;
+            let mut runtime_error: Option<AgentRuntimeError> = None;
+            let mut runtime_diagnostics: Option<serde_json::Value> = None;
 
             loop {
                 tokio::select! {
@@ -2103,7 +2140,7 @@ impl LiveSession {
                             Err(err) => {
                                 match err {
                                     AgentRuntimeError::Cancelled => cancelled = true,
-                                    other => runtime_error = Some(format_error_chain_text(&other)),
+                                    other => runtime_error = Some(other),
                                 }
                                 break;
                             }
@@ -2111,6 +2148,12 @@ impl LiveSession {
                     }
                 }
             }
+
+            let (step, active_tool) = {
+                let st = self.status.lock().await;
+                (st.step, st.active_tool.clone())
+            };
+            let trace_id = kiliax_core::telemetry::spans::current_trace_id();
 
             // Restore tool config to current session defaults (may have changed).
             let current_settings = self.settings.lock().await.clone();
@@ -2137,12 +2180,39 @@ impl LiveSession {
                 run.state = api::RunState::Cancelled;
             } else if let Some(err) = runtime_error {
                 run.state = api::RunState::Error;
+                let code = runtime_error_code(&err).to_string();
+                let hint = runtime_error_hint(&code, effective.agent.as_str());
+                let mut meta_error = format_error_chain_text(&err);
+                if let Some(tid) = trace_id.as_deref() {
+                    meta_error.push_str("\ntrace_id: ");
+                    meta_error.push_str(tid);
+                }
+                if let Some(hint) = hint.as_deref() {
+                    meta_error.push_str("\nhint: ");
+                    meta_error.push_str(hint);
+                }
+
                 run.error = Some(api::RunError {
-                    code: "internal".to_string(),
-                    message: err.clone(),
+                    code: code.clone(),
+                    message: meta_error.clone(),
                 });
-                let mut session = self.session.lock().await;
-                let _ = self.store.record_error(&mut session, err).await;
+                {
+                    let mut session = self.session.lock().await;
+                    let _ = self.store.record_error(&mut session, meta_error).await;
+                }
+                runtime_diagnostics = Some(serde_json::json!({
+                    "code": code,
+                    "session_id": self.session_id.to_string(),
+                    "run_id": run.id.clone(),
+                    "agent": effective.agent,
+                    "model_id": effective.model_id,
+                    "step": step,
+                    "active_tool": active_tool,
+                    "max_steps": max_steps,
+                    "trace_id": trace_id,
+                    "hint": hint,
+                    "error_chain": error_chain_vec(&err),
+                }));
             } else {
                 run.state = api::RunState::Done;
                 let persisted_finish_reason = finish_reason
@@ -2169,11 +2239,12 @@ impl LiveSession {
 
             match run.state {
                 api::RunState::Done => {
+                    let run_id = run.id.clone();
                     self.emit_event(api::Event {
                         event_id: self.alloc_event_id(),
                         ts: now_rfc3339(),
                         session_id: self.session_id.to_string(),
-                        run_id: Some(run.id.clone()),
+                        run_id: Some(run_id),
                         event_type: "run_done".to_string(),
                         data: serde_json::json!({ "run": run }),
                     })
@@ -2191,14 +2262,14 @@ impl LiveSession {
                     .await?;
                 }
                 api::RunState::Error => {
-                    let err = run.error.clone().map(|e| serde_json::json!({"code": e.code, "message": e.message})).unwrap_or(serde_json::json!({"code":"internal","message":"error"}));
+                    let run_id = run.id.clone();
                     self.emit_event(api::Event {
                         event_id: self.alloc_event_id(),
                         ts: now_rfc3339(),
                         session_id: self.session_id.to_string(),
-                        run_id: Some(run.id.clone()),
+                        run_id: Some(run_id),
                         event_type: "run_error".to_string(),
-                        data: serde_json::json!({ "error": err }),
+                        data: serde_json::json!({ "run": run, "diagnostics": runtime_diagnostics }),
                     })
                     .await?;
                 }

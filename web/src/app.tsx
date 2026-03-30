@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, FolderPlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, FolderPlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Trash2, X } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
@@ -40,13 +40,13 @@ type StreamState = {
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
 };
 
-type DebugError = {
+type AlertItem = {
+  id: string;
+  title: string;
+  subtitle?: string;
   message: string;
-  status?: number;
-  code?: string;
   traceId?: string;
   details?: unknown;
-  bodyText?: string;
 };
 
 const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
@@ -69,6 +69,76 @@ function stringifyUnknown(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function newAlertId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`;
+}
+
+function AlertStack({
+  items,
+  onClose,
+}: {
+  items: AlertItem[];
+  onClose: (id: string) => void;
+}) {
+  if (!items.length) return null;
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex w-[min(560px,calc(100vw-24px))] flex-col gap-3">
+      {items.map((a) => (
+        <div
+          key={a.id}
+          className="rounded-lg border border-red-200 bg-white p-4 shadow-lg"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-zinc-900">
+                  {a.title}
+                </div>
+                {a.subtitle ? (
+                  <div className="mt-0.5 truncate text-xs text-zinc-600">
+                    {a.subtitle}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+              aria-label="Close"
+              onClick={() => onClose(a.id)}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <pre className="mt-3 max-h-[32vh] overflow-auto whitespace-pre-wrap rounded-md bg-zinc-50 p-3 text-xs text-zinc-800">
+            {a.message}
+          </pre>
+
+          {a.traceId ? (
+            <div className="mt-2 text-xs text-zinc-600">
+              trace_id: <span className="font-mono">{a.traceId}</span>
+            </div>
+          ) : null}
+
+          {a.details != null ? (
+            <details className="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-2">
+              <summary className="cursor-pointer select-none text-xs text-zinc-700">
+                details
+              </summary>
+              <pre className="mt-2 max-h-[32vh] overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
+                {stringifyUnknown(a.details)}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function loadPinnedSessionIds(): string[] {
@@ -349,7 +419,7 @@ export default function App() {
   const [addFolderDraft, setAddFolderDraft] = useState("");
 
   const [authError, setAuthError] = useState<string | null>(null);
-  const [debugError, setDebugError] = useState<DebugError | null>(null);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -417,24 +487,39 @@ export default function App() {
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
       setAuthError("Unauthorized. Re-open the URL printed by `kiliax serve start`.");
-      setDebugError(null);
+      setAlerts([]);
       return;
     }
     if (err instanceof ApiError) {
-      setDebugError({
-        message: err.message,
-        status: err.status,
-        code: err.code,
-        traceId: err.traceId,
-        details: err.details,
-        bodyText: err.bodyText,
-      });
+      const subtitle = err.code ? `HTTP ${err.status} • ${err.code}` : `HTTP ${err.status}`;
+      const details =
+        err.details != null ? err.details : err.bodyText ? { raw_body: err.bodyText } : undefined;
+      setAlerts((prev) =>
+        [...prev, {
+          id: newAlertId("api"),
+          title: "Request failed",
+          subtitle,
+          message: err.message,
+          traceId: err.traceId,
+          details,
+        }].slice(-3),
+      );
     } else {
       const message = err instanceof Error ? err.message : String(err);
-      setDebugError({ message });
+      setAlerts((prev) =>
+        [...prev, {
+          id: newAlertId("ui"),
+          title: "Unexpected error",
+          message,
+        }].slice(-3),
+      );
     }
     // eslint-disable-next-line no-console
     console.error(err);
+  }
+
+  function closeAlert(id: string) {
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
   }
 
   async function refreshCapabilities() {
@@ -584,6 +669,28 @@ export default function App() {
         await fetchSession(selectedId);
       }
       return;
+    }
+
+    if (type === "run_error") {
+      const run = ev?.data?.run ?? null;
+      const diagnostics = ev?.data?.diagnostics ?? null;
+      const code = run?.error?.code ?? diagnostics?.code ?? "error";
+      const message = run?.error?.message ?? "Run failed";
+      const traceId = diagnostics?.trace_id ?? undefined;
+      const step =
+        typeof diagnostics?.step === "number" ? String(diagnostics.step) : undefined;
+      const subtitleParts = [`code: ${code}`];
+      if (step) subtitleParts.push(`step: ${step}`);
+      setAlerts((prev) =>
+        [...prev, {
+          id: newAlertId("run"),
+          title: "Run failed",
+          subtitle: subtitleParts.join(" • "),
+          message,
+          traceId,
+          details: { diagnostics, run },
+        }].slice(-3),
+      );
     }
 
     if (type === "run_done" || type === "run_error" || type === "run_cancelled") {
@@ -1044,56 +1151,7 @@ export default function App() {
 
   return (
     <div className="h-dvh w-full bg-zinc-50 text-zinc-900">
-      <Dialog
-        open={Boolean(debugError)}
-        onOpenChange={(open) => {
-          if (!open) setDebugError(null);
-        }}
-      >
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Request failed</DialogTitle>
-            <DialogDescription>
-              {debugError?.status ? (
-                <span>
-                  HTTP {debugError.status}
-                  {debugError.code ? ` • ${debugError.code}` : ""}
-                </span>
-              ) : (
-                <span>Unexpected error</span>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <pre className="max-h-[30vh] overflow-auto rounded-md bg-zinc-50 p-3 text-xs text-zinc-800">
-            {debugError?.message ?? ""}
-          </pre>
-          {debugError?.traceId ? (
-            <div className="text-xs text-zinc-600">
-              trace_id: <span className="font-mono">{debugError.traceId}</span>
-            </div>
-          ) : null}
-          {debugError?.details != null ? (
-            <details className="rounded-md border border-zinc-200 bg-white px-3 py-2">
-              <summary className="cursor-pointer select-none text-xs text-zinc-700">
-                details
-              </summary>
-              <pre className="mt-2 max-h-[30vh] overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
-                {stringifyUnknown(debugError.details)}
-              </pre>
-            </details>
-          ) : null}
-          {debugError?.bodyText && !debugError?.details ? (
-            <details className="rounded-md border border-zinc-200 bg-white px-3 py-2">
-              <summary className="cursor-pointer select-none text-xs text-zinc-700">
-                raw body
-              </summary>
-              <pre className="mt-2 max-h-[30vh] overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
-                {debugError.bodyText}
-              </pre>
-            </details>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      <AlertStack items={alerts} onClose={closeAlert} />
       <div className="flex h-full">
         {sidebarOpen ? (
           <aside className="flex w-[280px] flex-col border-r border-zinc-200 bg-zinc-50">
@@ -1563,7 +1621,7 @@ export default function App() {
                   ref={composerRef}
                   value={composerText}
                   onChange={(e) => setComposerText(e.target.value)}
-                  placeholder="畅所欲问"
+                  placeholder="Ask anything…"
                   className="min-h-[44px] max-h-[240px] resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
