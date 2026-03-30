@@ -28,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 type PendingMessage = {
   sessionId: string;
   runId: string;
+  baseEventId: number;
   createdAt: string;
   content: string;
 };
@@ -653,6 +654,15 @@ export default function App() {
     const text = composerText.trim();
     if (!text) return;
 
+    const baseEventId = selectedSummary?.status.last_event_id ?? 0;
+    const localMessageId = `local_${Date.now().toString(16)}_${Math.random()
+      .toString(16)
+      .slice(2)}`;
+    const localCreatedAt = new Date().toISOString();
+    setComposerText("");
+
+    let didAppendLocalMessage = false;
+    let createdRunId: string | null = null;
     try {
       let sessionId = selectedId;
 
@@ -665,21 +675,40 @@ export default function App() {
         await fetchSession(sessionId);
       }
 
+      // Optimistic user message to keep ordering stable before tool output arrives.
+      setMessages((m) => [
+        ...m,
+        {
+          role: "user",
+          id: localMessageId,
+          created_at: localCreatedAt,
+          content: text,
+        },
+      ]);
+      didAppendLocalMessage = true;
+
       const run: any = await api.createRun(sessionId, {
         input: { type: "text", text },
       });
+      createdRunId = String(run?.id ?? "").trim() || null;
       setPending((p) => [
         ...p,
         {
           sessionId,
-          runId: String(run?.id ?? ""),
+          runId: createdRunId ?? "",
+          baseEventId,
           createdAt: new Date().toISOString(),
           content: text,
         },
       ]);
-      setComposerText("");
       await refreshSessions();
     } catch (err) {
+      if (createdRunId == null) {
+        setComposerText(text);
+        if (didAppendLocalMessage) {
+          setMessages((m) => m.filter((msg) => msg.id !== localMessageId));
+        }
+      }
       handleApiError(err);
     }
   }
@@ -852,6 +881,26 @@ export default function App() {
   }, [sessions]);
 
   useEffect(() => {
+    setPending((prev) => {
+      if (!prev.length) return prev;
+      return prev.filter((p) => {
+        const summary = sessions.find((s) => s.id === p.sessionId);
+        if (!summary) return false;
+
+        const hasWork =
+          summary.status.active_run_id != null ||
+          summary.status.queue_len > 0 ||
+          summary.status.run_state === "running" ||
+          summary.status.run_state === "tooling";
+        if (hasWork) return true;
+
+        // Keep the pending entry only while the sessions list hasn't reflected it yet.
+        return summary.status.last_event_id <= p.baseEventId;
+      });
+    });
+  }, [sessions]);
+
+  useEffect(() => {
     setPinnedWorkspaceRoots((prev) => {
       if (!prev.length) return prev;
       const roots = new Set(workspaceGroups.map((g) => g.root));
@@ -951,11 +1000,26 @@ export default function App() {
   const selectedBadge = selectedSummary ? statusBadge(selectedSummary) : null;
 
   const composerHasText = composerText.trim().length > 0;
+  const lastPendingRun = pendingForSelected[pendingForSelected.length - 1] ?? null;
+  const sessionHasWork = Boolean(
+    selectedSummary &&
+      (selectedSummary.status.active_run_id != null ||
+        selectedSummary.status.queue_len > 0 ||
+        selectedSummary.status.run_state === "running" ||
+        selectedSummary.status.run_state === "tooling"),
+  );
+  const pendingCanCancel =
+    Boolean(lastPendingRun?.runId) &&
+    (selectedSummary == null ||
+      selectedSummary.status.last_event_id <= lastPendingRun.baseEventId);
+
   const cancellableRunId =
-    selectedSummary?.status.active_run_id ??
-    pendingForSelected[pendingForSelected.length - 1]?.runId ??
-    null;
-  const showInterrupt = Boolean(selectedId) && Boolean(cancellableRunId) && !composerHasText;
+    selectedSummary?.status.active_run_id ?? lastPendingRun?.runId ?? null;
+  const showInterrupt =
+    Boolean(selectedId) &&
+    !composerHasText &&
+    Boolean(cancellableRunId) &&
+    (sessionHasWork || pendingCanCancel);
 
   const agentOptions = capabilities?.agents ?? [];
   const modelOptions = capabilities?.models ?? [];
@@ -1428,14 +1492,6 @@ export default function App() {
               <div className="mx-auto w-full max-w-4xl space-y-3">
                 {messages.map((m) => (
                   <MessageRow key={`${m.role}:${m.id}`} msg={m} />
-                ))}
-
-                {pendingForSelected.map((p) => (
-                  <div key={`pending:${p.runId}`} className="flex justify-end">
-                    <div className="max-w-[78%] rounded-2xl bg-zinc-900/90 px-4 py-2 text-sm text-zinc-50">
-                      {p.content}
-                    </div>
-                  </div>
                 ))}
 
                 {stream.thinking ? (

@@ -22,6 +22,15 @@ type Block =
   | { type: "code"; lang: string | null; code: string }
   | { type: "table"; header: string[]; align: TableAlign[]; rows: string[][] };
 
+type ListKind = "ul" | "ol";
+
+type ListMarker = {
+  kind: ListKind;
+  indent: number;
+  contentIndent: number;
+  content: string;
+};
+
 function safeHref(raw: string): string | null {
   const href = raw.trim();
   if (!href) return null;
@@ -225,6 +234,145 @@ function parseTableBlock(
   return { block: { type: "table", header, align, rows }, nextIndex: i };
 }
 
+function leadingSpaces(line: string): number {
+  let n = 0;
+  while (n < line.length && line[n] === " ") n += 1;
+  return n;
+}
+
+function trimIndent(line: string, maxSpaces: number): string {
+  let n = 0;
+  while (n < line.length && n < maxSpaces && line[n] === " ") n += 1;
+  return line.slice(n);
+}
+
+function matchUlMarker(line: string): ListMarker | null {
+  const m = line.match(/^(\s*)([-*+])\s+(.*)$/);
+  if (!m) return null;
+  const indent = (m[1] ?? "").length;
+  const content = m[3] ?? "";
+  const contentIndent = (m[0] ?? "").length - content.length;
+  return { kind: "ul", indent, contentIndent, content };
+}
+
+function matchOlMarker(line: string): ListMarker | null {
+  const m = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
+  if (!m) return null;
+  const indent = (m[1] ?? "").length;
+  const content = m[3] ?? "";
+  const contentIndent = (m[0] ?? "").length - content.length;
+  return { kind: "ol", indent, contentIndent, content };
+}
+
+function matchMarkerOfKind(line: string, kind: ListKind): ListMarker | null {
+  return kind === "ul" ? matchUlMarker(line) : matchOlMarker(line);
+}
+
+function matchOtherKindMarker(line: string, kind: ListKind): ListMarker | null {
+  return kind === "ul" ? matchOlMarker(line) : matchUlMarker(line);
+}
+
+function hasFutureSameKindMarker(
+  lines: string[],
+  fromIndex: number,
+  kind: ListKind,
+  baseIndent: number,
+): boolean {
+  for (let i = fromIndex; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (!line.trim()) continue;
+    const indent = leadingSpaces(line);
+    if (indent < baseIndent) return false;
+    const m = matchMarkerOfKind(line, kind);
+    if (m && m.indent === baseIndent) return true;
+  }
+  return false;
+}
+
+function parseListBlock(
+  lines: string[],
+  startIndex: number,
+): { block: Extract<Block, { type: "ul" | "ol" }>; nextIndex: number } | null {
+  const firstLine = lines[startIndex] ?? "";
+  const first = matchUlMarker(firstLine) ?? matchOlMarker(firstLine);
+  if (!first) return null;
+
+  const kind = first.kind;
+  const baseIndent = first.indent;
+
+  const items: string[] = [];
+  let currentLines: string[] = [first.content];
+  let currentContentIndent = first.contentIndent;
+
+  const pushItem = () => {
+    while (currentLines.length && !currentLines[currentLines.length - 1]?.trim()) {
+      currentLines.pop();
+    }
+    if (!currentLines.length) return;
+    items.push(currentLines.join("\n"));
+  };
+
+  let i = startIndex + 1;
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+
+    const same = matchMarkerOfKind(line, kind);
+    if (same && same.indent === baseIndent) {
+      pushItem();
+      currentLines = [same.content];
+      currentContentIndent = same.contentIndent;
+      i += 1;
+      continue;
+    }
+
+    if (!line.trim()) {
+      let j = i + 1;
+      while (j < lines.length && !(lines[j] ?? "").trim()) j += 1;
+      if (j >= lines.length) {
+        i = j;
+        break;
+      }
+      const next = lines[j] ?? "";
+      const nextSame = matchMarkerOfKind(next, kind);
+      if (nextSame && nextSame.indent === baseIndent) {
+        i = j;
+        continue;
+      }
+      const nextIndent = leadingSpaces(next);
+      if (nextIndent > baseIndent) {
+        currentLines.push("");
+        i += 1;
+        continue;
+      }
+      i = j;
+      break;
+    }
+
+    const indent = leadingSpaces(line);
+    if (indent > baseIndent) {
+      currentLines.push(trimIndent(line, currentContentIndent));
+      i += 1;
+      continue;
+    }
+
+    const other = matchOtherKindMarker(line, kind);
+    if (
+      other
+      && other.indent === baseIndent
+      && hasFutureSameKindMarker(lines, i + 1, kind, baseIndent)
+    ) {
+      currentLines.push(trimIndent(line, currentContentIndent));
+      i += 1;
+      continue;
+    }
+
+    break;
+  }
+
+  pushItem();
+  return { block: { type: kind, items }, nextIndex: i };
+}
+
 function parseMarkdown(input: string): Block[] {
   const lines = input.replace(/\r\n/g, "\n").split("\n");
   const blocks: Block[] = [];
@@ -236,8 +384,6 @@ function parseMarkdown(input: string): Block[] {
     return t === "---" || t === "***" || t === "___";
   };
   const isBlockquote = (line: string) => line.startsWith(">");
-  const ulMatch = (line: string) => line.match(/^\s*[-*+]\s+(.*)$/);
-  const olMatch = (line: string) => line.match(/^\s*\d+\.\s+(.*)$/);
 
   let i = 0;
   while (i < lines.length) {
@@ -293,29 +439,10 @@ function parseMarkdown(input: string): Block[] {
       continue;
     }
 
-    const ul = ulMatch(line);
-    if (ul) {
-      const items: string[] = [];
-      while (i < lines.length) {
-        const m = ulMatch(lines[i] ?? "");
-        if (!m) break;
-        items.push(m[1] ?? "");
-        i += 1;
-      }
-      blocks.push({ type: "ul", items });
-      continue;
-    }
-
-    const ol = olMatch(line);
-    if (ol) {
-      const items: string[] = [];
-      while (i < lines.length) {
-        const m = olMatch(lines[i] ?? "");
-        if (!m) break;
-        items.push(m[1] ?? "");
-        i += 1;
-      }
-      blocks.push({ type: "ol", items });
+    const list = parseListBlock(lines, i);
+    if (list) {
+      blocks.push(list.block);
+      i = list.nextIndex;
       continue;
     }
 
@@ -329,7 +456,7 @@ function parseMarkdown(input: string): Block[] {
       if (isHeading(next)) break;
       if (isBlockquote(next)) break;
       if (parseTableBlock(lines, i)) break;
-      if (ulMatch(next) || olMatch(next)) break;
+      if (matchUlMarker(next) || matchOlMarker(next)) break;
       paraLines.push(next);
       i += 1;
     }
@@ -498,7 +625,9 @@ function renderBlock(block: Block, key: string): React.ReactNode {
     return (
       <ul key={key} className="ml-5 list-disc space-y-1 text-sm">
         {block.items.map((it, idx) => (
-          <li key={`${key}:li:${idx}`}>{renderInline(it, `${key}:li:${idx}`)}</li>
+          <li key={`${key}:li:${idx}`} className="space-y-1">
+            {parseMarkdown(it).map((b, bIdx) => renderBlock(b, `${key}:li:${idx}:b:${bIdx}`))}
+          </li>
         ))}
       </ul>
     );
@@ -508,7 +637,9 @@ function renderBlock(block: Block, key: string): React.ReactNode {
     return (
       <ol key={key} className="ml-5 list-decimal space-y-1 text-sm">
         {block.items.map((it, idx) => (
-          <li key={`${key}:li:${idx}`}>{renderInline(it, `${key}:li:${idx}`)}</li>
+          <li key={`${key}:li:${idx}`} className="space-y-1">
+            {parseMarkdown(it).map((b, bIdx) => renderBlock(b, `${key}:li:${idx}:b:${bIdx}`))}
+          </li>
         ))}
       </ol>
     );
