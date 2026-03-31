@@ -67,7 +67,7 @@ Manage the optional background `kiliax-server` (REST + SSE/WS) with:
 
 ```bash
 cd web
-npm install && npm run build
+bun install && bun run build
 kiliax serve start
 kiliax serve stop
 kiliax serve restart

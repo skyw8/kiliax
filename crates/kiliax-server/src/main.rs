@@ -276,8 +276,8 @@ async fn serve_web(
     <h2>kiliax-web is not built</h2>
     <p>Build the frontend first:</p>
     <pre>cd web
-npm install
-npm run build</pre>
+bun install
+bun run build</pre>
     <p>Then refresh this page.</p>
   </body>
 </html>
@@ -297,7 +297,7 @@ fn print_help() {
     println!("  --host <ip>             (default: 127.0.0.1)");
     println!("  --port <port>           (default: 8123)");
     println!("  --workspace-root <dir>  (default: cwd)");
-    println!("  --config <path>         (default: auto खोज kiliax.yaml)");
+    println!("  --config <path>         (default: auto-detect kiliax.yaml)");
     println!("  --token <token>         (required bearer/web auth)");
 }
 
