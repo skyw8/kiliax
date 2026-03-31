@@ -50,7 +50,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI + WS streaming + folder picker + message fork + workspace open buttons + skills toggle: `web/src/app.tsx`
+- Main UI + WS streaming + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + message fork + workspace open buttons + skills toggle: `web/src/app.tsx`
 - API client: `web/src/lib/api.ts`
 - Types: `web/src/lib/types.ts`
 

@@ -358,7 +358,7 @@ function FolderPicker({
 }) {
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [parent, setParent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadSeq, setReloadSeq] = useState(0);
   const skipNextFetchPathRef = useRef<string | null>(null);
@@ -422,12 +422,14 @@ function FolderPicker({
         >
           <ArrowLeft className="h-4 w-4 text-zinc-600" />
         </Button>
-        <div
-          className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-800"
+        <Input
+          value={path}
+          onChange={(e) => onPathChange(e.target.value)}
+          placeholder="/path/to/folder"
+          aria-label="Path"
           title={path}
-        >
-          {path || "…"}
-        </div>
+          className="h-8 min-w-0 flex-1 px-2 py-1 font-mono text-xs"
+        />
         <Button
           variant="ghost"
           size="icon"
@@ -447,9 +449,9 @@ function FolderPicker({
         </div>
       ) : null}
 
-      <div className="max-h-[320px] overflow-auto rounded-md border border-zinc-200 bg-white">
+      <div className="h-[min(320px,50vh)] overflow-auto rounded-md border border-zinc-200 bg-white">
         {loading ? (
-          <div className="px-3 py-6 text-center text-xs text-zinc-500">
+          <div className="flex h-full items-center justify-center px-3 text-center text-xs text-zinc-500">
             Loading…
           </div>
         ) : entries.length ? (
@@ -469,12 +471,63 @@ function FolderPicker({
             ))}
           </div>
         ) : (
-          <div className="px-3 py-6 text-center text-xs text-zinc-500">
+          <div className="flex h-full items-center justify-center px-3 text-center text-xs text-zinc-500">
             No folders
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+function FolderPickerDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  path,
+  onPathChange,
+  confirmLabel,
+  confirmDisabled,
+  confirmPending,
+  confirmPendingLabel,
+  onConfirm,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description?: string;
+  path: string;
+  onPathChange: (next: string) => void;
+  confirmLabel: string;
+  confirmDisabled?: boolean;
+  confirmPending?: boolean;
+  confirmPendingLabel?: string;
+  onConfirm: () => void | Promise<void>;
+  children?: React.ReactNode;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description ? <DialogDescription>{description}</DialogDescription> : null}
+        </DialogHeader>
+        <div className="space-y-3">
+          {children}
+          <FolderPicker path={path} onPathChange={onPathChange} />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button onClick={onConfirm} disabled={confirmDisabled}>
+              {confirmPending ? (confirmPendingLabel ?? confirmLabel) : confirmLabel}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -701,6 +754,7 @@ export default function App() {
 
   const [addFolderOpen, setAddFolderOpen] = useState(false);
   const [extraFolderPickerPath, setExtraFolderPickerPath] = useState("");
+  const [extraFolderSaving, setExtraFolderSaving] = useState(false);
 
   const [authError, setAuthError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -2501,93 +2555,68 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={workspaceCreateOpen} onOpenChange={setWorkspaceCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add workspace folder</DialogTitle>
-            <DialogDescription>
-              Creates a new session in this workspace root.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-zinc-600">Path</div>
-              <Input
-                value={workspacePickerPath}
-                onChange={(e) => setWorkspacePickerPath(e.target.value)}
-                placeholder="/path/to/workspace"
-                className="font-mono text-xs"
-              />
-            </div>
-            <FolderPicker path={workspacePickerPath} onPathChange={setWorkspacePickerPath} />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setWorkspaceCreateOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => createSessionWithWorkspaceRoot(workspacePickerPath)}
-                disabled={!workspacePickerPath.trim() || workspaceCreateSaving}
-              >
-                {workspaceCreateSaving ? "Creating…" : "Create"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <FolderPickerDialog
+        open={workspaceCreateOpen}
+        onOpenChange={setWorkspaceCreateOpen}
+        title="Add workspace folder"
+        description="Creates a new session in this workspace root."
+        path={workspacePickerPath}
+        onPathChange={setWorkspacePickerPath}
+        confirmLabel="Create"
+        confirmPending={workspaceCreateSaving}
+        confirmPendingLabel="Creating…"
+        confirmDisabled={!workspacePickerPath.trim() || workspaceCreateSaving}
+        onConfirm={() => createSessionWithWorkspaceRoot(workspacePickerPath)}
+      />
 
-      <Dialog open={addFolderOpen} onOpenChange={setAddFolderOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add work folder</DialogTitle>
-            <DialogDescription>
-              Adds an extra directory this session can read/write.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            {session?.settings.extra_workspace_roots?.length ? (
-              <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
-                <div className="font-medium text-zinc-600">Existing</div>
-                <div className="mt-1 space-y-1">
-                  {session.settings.extra_workspace_roots.map((p) => (
-                    <div key={p} className="flex items-center justify-between gap-2">
-                      <div className="min-w-0 truncate font-mono text-xs" title={p}>
-                        {p}
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        aria-label="Remove folder"
-                        title="Remove folder"
-                        onClick={() => removeExtraFolder(p)}
-                      >
-                        <Trash2 className="h-4 w-4 text-zinc-500" />
-                      </Button>
-                    </div>
-                  ))}
+      <FolderPickerDialog
+        open={addFolderOpen}
+        onOpenChange={setAddFolderOpen}
+        title="Add folder"
+        description="Adds an extra directory this session can read/write."
+        path={extraFolderPickerPath}
+        onPathChange={setExtraFolderPickerPath}
+        confirmLabel="Add"
+        confirmPending={extraFolderSaving}
+        confirmPendingLabel="Adding…"
+        confirmDisabled={!extraFolderPickerPath.trim() || !session || extraFolderSaving}
+        onConfirm={async () => {
+          const path = extraFolderPickerPath.trim();
+          if (!path) return;
+          setExtraFolderSaving(true);
+          try {
+            await addExtraFolder(path);
+            setAddFolderOpen(false);
+          } finally {
+            setExtraFolderSaving(false);
+          }
+        }}
+      >
+        {session?.settings.extra_workspace_roots?.length ? (
+          <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
+            <div className="font-medium text-zinc-600">Existing</div>
+            <div className="mt-1 space-y-1">
+              {session.settings.extra_workspace_roots.map((p) => (
+                <div key={p} className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 truncate font-mono text-xs" title={p}>
+                    {p}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label="Remove folder"
+                    title="Remove folder"
+                    onClick={() => removeExtraFolder(p)}
+                  >
+                    <Trash2 className="h-4 w-4 text-zinc-500" />
+                  </Button>
                 </div>
-              </div>
-            ) : null}
-            <FolderPicker path={extraFolderPickerPath} onPathChange={setExtraFolderPickerPath} />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setAddFolderOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={async () => {
-                  const path = extraFolderPickerPath.trim();
-                  if (!path) return;
-                  await addExtraFolder(path);
-                  setAddFolderOpen(false);
-                }}
-                disabled={!extraFolderPickerPath.trim() || !session}
-              >
-                Add
-              </Button>
+              ))}
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        ) : null}
+      </FolderPickerDialog>
     </div>
   );
 }
