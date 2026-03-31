@@ -173,6 +173,7 @@ pub mod metrics {
     static LLM_REQUESTS_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
     static LLM_LATENCY_MS: OnceLock<Histogram<f64>> = OnceLock::new();
     static LLM_TOKENS_PROMPT_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
+    static LLM_TOKENS_PROMPT_CACHED_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
     static LLM_TOKENS_COMPLETION_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
 
     static TOOL_CALLS_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
@@ -216,6 +217,15 @@ pub mod metrics {
         })
     }
 
+    fn llm_tokens_prompt_cached_total() -> &'static Counter<u64> {
+        LLM_TOKENS_PROMPT_CACHED_TOTAL.get_or_init(|| {
+            meter()
+                .u64_counter("kiliax_llm_tokens_prompt_cached_total")
+                .with_description("Total cached prompt tokens consumed by LLM requests")
+                .build()
+        })
+    }
+
     fn llm_tokens_completion_total() -> &'static Counter<u64> {
         LLM_TOKENS_COMPLETION_TOTAL.get_or_init(|| {
             meter()
@@ -232,6 +242,7 @@ pub mod metrics {
         outcome: &str,
         latency: Duration,
         prompt_tokens: Option<u64>,
+        cached_prompt_tokens: Option<u64>,
         completion_tokens: Option<u64>,
     ) {
         let tags = &[
@@ -246,6 +257,9 @@ pub mod metrics {
 
         if let Some(tokens) = prompt_tokens {
             llm_tokens_prompt_total().add(tokens, tags);
+        }
+        if let Some(tokens) = cached_prompt_tokens {
+            llm_tokens_prompt_cached_total().add(tokens, tags);
         }
         if let Some(tokens) = completion_tokens {
             llm_tokens_completion_total().add(tokens, tags);

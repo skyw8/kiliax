@@ -1127,7 +1127,7 @@ impl App {
             self.runtime.tools(),
         )
         .await;
-        replace_preamble(&mut self.session.messages, new_preamble);
+        append_preamble_updates(&mut self.session.messages, new_preamble);
         self.session.meta.message_count = self.session.messages.len();
         self.messages = self.session.messages.clone();
 
@@ -1190,6 +1190,13 @@ impl App {
 
         let next = session.meta.id.to_string();
         self.session = session;
+        self.runtime = AgentRuntime::new(
+            self.runtime
+                .llm()
+                .clone()
+                .with_prompt_cache_key(self.session.meta.prompt_cache_key.clone()),
+            self.runtime.tools().clone(),
+        );
         self.messages = self.session.messages.clone();
         self.prompt_history = self
             .messages
@@ -1369,7 +1376,7 @@ impl App {
             self.runtime.tools(),
         )
         .await;
-        replace_preamble(&mut self.session.messages, new_preamble);
+        append_preamble_updates(&mut self.session.messages, new_preamble);
         self.session.meta.message_count = self.session.messages.len();
         self.messages = self.session.messages.clone();
 
@@ -1467,7 +1474,8 @@ impl App {
                 .map_err(|e| anyhow::anyhow!(e))?;
             self.config = loaded.config;
 
-            let llm = kiliax_core::llm::LlmClient::from_config(&self.config, Some(&model_id))?;
+            let llm = kiliax_core::llm::LlmClient::from_config(&self.config, Some(&model_id))?
+                .with_prompt_cache_key(self.session.meta.prompt_cache_key.clone());
             let tools = self.runtime.tools().clone();
             tools
                 .set_config(self.config.clone())
@@ -1487,7 +1495,7 @@ impl App {
                 self.runtime.tools(),
             )
             .await;
-            replace_preamble(&mut self.session.messages, new_preamble);
+            append_preamble_updates(&mut self.session.messages, new_preamble);
             self.session.meta.message_count = self.session.messages.len();
             self.messages = self.session.messages.clone();
 
@@ -1579,7 +1587,7 @@ impl App {
                 self.runtime.tools(),
             )
             .await;
-            replace_preamble(&mut self.session.messages, new_preamble);
+            append_preamble_updates(&mut self.session.messages, new_preamble);
             self.session.meta.message_count = self.session.messages.len();
             self.messages = self.session.messages.clone();
             self.store.checkpoint(&mut self.session).await?;
@@ -1929,16 +1937,39 @@ fn parse_known_slash_command(text: &str) -> Option<(crate::slash_command::SlashC
     Some((cmd, args.to_string()))
 }
 
-fn replace_preamble(messages: &mut Vec<Message>, new_preamble: Vec<Message>) {
-    let offset = messages
-        .iter()
-        .take_while(|m| matches!(m, Message::System { .. }))
-        .count();
+fn append_preamble_updates(messages: &mut Vec<Message>, new_preamble: Vec<Message>) {
+    const HEADER: &str =
+        "Session update: the following system messages override earlier system context.";
 
-    let rest = messages.get(offset..).unwrap_or(&[]).to_vec();
-    let mut out = new_preamble;
-    out.extend(rest);
-    *messages = out;
+    let mut seen: std::collections::HashSet<String> = messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::System { content } => Some(content.clone()),
+            _ => None,
+        })
+        .collect();
+    let header_seen = seen.contains(HEADER);
+
+    let mut updates: Vec<Message> = Vec::new();
+    for msg in new_preamble {
+        let Message::System { content } = &msg else {
+            continue;
+        };
+        if seen.insert(content.clone()) {
+            updates.push(msg);
+        }
+    }
+
+    if updates.is_empty() {
+        return;
+    }
+
+    if !header_seen {
+        messages.push(Message::System {
+            content: HEADER.to_string(),
+        });
+    }
+    messages.extend(updates);
 }
 
 async fn build_preamble(

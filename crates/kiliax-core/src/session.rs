@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
+use uuid::Uuid;
 
 use crate::llm::Message;
 
@@ -101,6 +102,10 @@ pub struct SessionMeta {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+
+    /// Stable cache key for provider-side prompt caching (if enabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 
     /// Last appended event sequence number.
     pub last_seq: u64,
@@ -268,6 +273,7 @@ impl FileSessionStore {
             title: derive_title(&initial_messages),
             last_finish_reason: None,
             last_error: None,
+            prompt_cache_key: Some(new_prompt_cache_key()),
             last_seq,
             last_snapshot_seq: last_seq,
             message_count: initial_messages.len(),
@@ -294,6 +300,10 @@ impl FileSessionStore {
         };
 
         self.replay_events_after_snapshot(&mut state).await?;
+        if state.meta.prompt_cache_key.is_none() {
+            state.meta.prompt_cache_key = Some(new_prompt_cache_key());
+            let _ = self.write_meta(&state.meta).await;
+        }
         Ok(state)
     }
 
@@ -612,6 +622,10 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn new_prompt_cache_key() -> String {
+    Uuid::now_v7().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,6 +657,11 @@ mod tests {
             )
             .await
             .unwrap();
+        assert!(state
+            .meta
+            .prompt_cache_key
+            .as_ref()
+            .is_some_and(|k| !k.trim().is_empty()));
 
         store
             .record_message(
@@ -660,6 +679,7 @@ mod tests {
         let loaded = store.load(state.id()).await.unwrap();
         assert_eq!(loaded.messages.len(), 2);
         assert_eq!(loaded.meta.message_count, 2);
+        assert_eq!(loaded.meta.prompt_cache_key, state.meta.prompt_cache_key);
 
         let list = store.list().await.unwrap();
         assert_eq!(list.len(), 1);

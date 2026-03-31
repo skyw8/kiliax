@@ -2531,6 +2531,7 @@ impl LiveSession {
                     e.to_string(),
                 )
             })?;
+            let llm = llm.with_prompt_cache_key(Some(self.session_id.to_string()));
             let runtime = AgentRuntime::new(llm, tools_for_run.clone());
 
             let mut messages = { self.session.lock().await.messages.clone() };
@@ -2547,7 +2548,7 @@ impl LiveSession {
                     &config.skills,
                 )
                 .await;
-                replace_preamble(&mut messages, preamble);
+                insert_preamble_updates_before_last_user(&mut messages, preamble);
             }
 
             let stream = runtime
@@ -2778,7 +2779,7 @@ impl LiveSession {
         .await;
 
         let mut session = self.session.lock().await;
-        replace_preamble(&mut session.messages, preamble);
+        append_preamble_updates(&mut session.messages, preamble);
         session.meta.agent = profile.name.to_string();
         session.meta.model_id = Some(settings.model_id.clone());
         session.meta.workspace_root = Some(settings.workspace_root.clone());
@@ -2983,15 +2984,60 @@ fn apply_run_overrides(
     Ok(out)
 }
 
-fn replace_preamble(messages: &mut Vec<CoreMessage>, new_preamble: Vec<CoreMessage>) {
-    let offset = messages
+fn preamble_updates(messages: &[CoreMessage], new_preamble: Vec<CoreMessage>) -> Vec<CoreMessage> {
+    const HEADER: &str =
+        "Session update: the following system messages override earlier system context.";
+
+    let mut seen: HashSet<String> = messages
         .iter()
-        .take_while(|m| matches!(m, CoreMessage::System { .. }))
-        .count();
-    let rest = messages.get(offset..).unwrap_or(&[]).to_vec();
-    let mut out = new_preamble;
-    out.extend(rest);
-    *messages = out;
+        .filter_map(|m| match m {
+            CoreMessage::System { content } => Some(content.clone()),
+            _ => None,
+        })
+        .collect();
+    let header_seen = seen.contains(HEADER);
+
+    let mut updates: Vec<CoreMessage> = Vec::new();
+    for msg in new_preamble {
+        let CoreMessage::System { content } = &msg else {
+            continue;
+        };
+        if seen.insert(content.clone()) {
+            updates.push(msg);
+        }
+    }
+
+    if updates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(updates.len().saturating_add(1));
+    if !header_seen {
+        out.push(CoreMessage::System {
+            content: HEADER.to_string(),
+        });
+    }
+    out.extend(updates);
+    out
+}
+
+fn append_preamble_updates(messages: &mut Vec<CoreMessage>, new_preamble: Vec<CoreMessage>) {
+    messages.extend(preamble_updates(messages.as_slice(), new_preamble));
+}
+
+fn insert_preamble_updates_before_last_user(
+    messages: &mut Vec<CoreMessage>,
+    new_preamble: Vec<CoreMessage>,
+) {
+    let updates = preamble_updates(messages.as_slice(), new_preamble);
+    if updates.is_empty() {
+        return;
+    }
+    let idx = messages
+        .iter()
+        .rposition(|m| matches!(m, CoreMessage::User { .. }))
+        .unwrap_or(messages.len());
+    messages.splice(idx..idx, updates);
 }
 
 async fn build_preamble(

@@ -22,11 +22,11 @@ minimal
 ### crates/kiliax-core (core library)
 
 - Config + model routing: `crates/kiliax-core/src/config.rs`
-- OpenAI-compatible client + streaming/tool-calls + thinking: `crates/kiliax-core/src/llm.rs`
+- OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` injection: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly (env/tools/skills/project `AGENTS.md`): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime (tool loop, parallel tool calls, streaming events): `crates/kiliax-core/src/runtime.rs`
-- Session store (`meta.json`/`snapshot.json`/`events.jsonl`): `crates/kiliax-core/src/session.rs`
-- Tool engine + builtin tools + MCP + skills discovery: `crates/kiliax-core/src/tools/`
+- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + `prompt_cache_key`: `crates/kiliax-core/src/session.rs`
+- Tool engine + builtin tools + MCP + skills discovery (stable ordering): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-otel (OpenTelemetry)
 

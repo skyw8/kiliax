@@ -231,12 +231,7 @@ async fn main() -> Result<()> {
         resumed = Some(store.load(id).await?);
     }
 
-    let model_override = resumed.as_ref().and_then(|s| s.meta.model_id.as_deref());
-    let llm = LlmClient::from_config(&loaded.config, model_override)?;
-    let runtime = kiliax_core::runtime::AgentRuntime::new(
-        llm,
-        ToolEngine::new(&workspace_root, loaded.config.clone()),
-    );
+    let tool_engine = ToolEngine::new(&workspace_root, loaded.config.clone());
 
     let profile = profile_override
         .and_then(AgentProfile::from_name)
@@ -247,23 +242,26 @@ async fn main() -> Result<()> {
         })
         .unwrap_or_else(AgentProfile::general);
 
-    let (session, messages) = match resumed {
+    let (session, messages, llm) = match resumed {
         Some(session) => {
             let messages = session.messages.clone();
-            (session, messages)
+            let llm = LlmClient::from_config(&loaded.config, session.meta.model_id.as_deref())?
+                .with_prompt_cache_key(session.meta.prompt_cache_key.clone());
+            (session, messages, llm)
         }
         None => {
-            let model_id = runtime.llm().route().model_id();
+            let llm = LlmClient::from_config(&loaded.config, None)?;
+            let model_id = llm.route().model_id();
             let mut builder = PromptBuilder::for_agent(&profile)
                 .with_tools({
                     kiliax_core::tools::policy::tool_definitions_for_agent(
                         &profile,
-                        runtime.tools(),
+                        &tool_engine,
                         &model_id,
                     )
                     .await
                 })
-                .with_model_id(model_id)
+                .with_model_id(model_id.clone())
                 .with_workspace_root(&workspace_root);
             if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
                 builder = builder.add_skills(skills);
@@ -272,16 +270,19 @@ async fn main() -> Result<()> {
             let session = store
                 .create(
                     profile.name.to_string(),
-                    Some(runtime.llm().route().model_id()),
+                    Some(model_id.clone()),
                     Some(loaded.path.display().to_string()),
                     Some(workspace_root.display().to_string()),
                     Vec::new(),
                     messages.clone(),
                 )
                 .await?;
-            (session, messages)
+            let llm = llm.with_prompt_cache_key(session.meta.prompt_cache_key.clone());
+            (session, messages, llm)
         }
     };
+
+    let runtime = kiliax_core::runtime::AgentRuntime::new(llm, tool_engine);
 
     let extra_workspace_roots: Vec<std::path::PathBuf> = session
         .meta

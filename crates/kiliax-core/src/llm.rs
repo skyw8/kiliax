@@ -55,13 +55,18 @@ pub enum LlmError {
 pub struct LlmClient {
     client: Client<KiliaxOpenAIConfig>,
     route: ResolvedModel,
+    prompt_cache_key: Option<String>,
 }
 
 impl LlmClient {
     pub fn new(route: ResolvedModel) -> Self {
         let cfg = KiliaxOpenAIConfig::new(&route.base_url, route.api_key.as_deref());
         let client = Client::with_config(cfg);
-        Self { client, route }
+        Self {
+            client,
+            route,
+            prompt_cache_key: None,
+        }
     }
 
     pub fn from_config(config: &Config, model_id: Option<&str>) -> Result<Self, LlmError> {
@@ -74,6 +79,13 @@ impl LlmClient {
         };
         let route = config.resolve_model(model_id)?;
         Ok(Self::new(route))
+    }
+
+    pub fn with_prompt_cache_key(mut self, prompt_cache_key: Option<String>) -> Self {
+        self.prompt_cache_key = prompt_cache_key
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        self
     }
 
     pub fn route(&self) -> &ResolvedModel {
@@ -174,6 +186,7 @@ impl LlmClient {
             if should_inject_reasoning_content(&self.route) {
                 inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
             }
+            inject_prompt_cache_fields(&mut body, self.prompt_cache_key.as_deref());
 
             let cfg = self.client.config();
             let http = reqwest::Client::new();
@@ -206,10 +219,16 @@ impl LlmClient {
             Ok(ok) => {
                 let usage = ok.usage.as_ref();
                 if let Some(usage) = usage {
+                    let cached = usage
+                        .prompt_tokens_details
+                        .as_ref()
+                        .and_then(|d| d.cached_tokens)
+                        .unwrap_or(0) as i64;
                     telemetry::spans::set_attributes(
                         &span,
                         [
                             KeyValue::new("gen_ai.usage.input_tokens", usage.prompt_tokens as i64),
+                            KeyValue::new("gen_ai.usage.cached_input_tokens", cached),
                             KeyValue::new(
                                 "gen_ai.usage.output_tokens",
                                 usage.completion_tokens as i64,
@@ -229,6 +248,12 @@ impl LlmClient {
                     "ok",
                     latency,
                     usage.map(|u| u.prompt_tokens as u64),
+                    usage.and_then(|u| {
+                        u.prompt_tokens_details
+                            .as_ref()
+                            .and_then(|d| d.cached_tokens)
+                            .map(|v| v as u64)
+                    }),
                     usage.map(|u| u.completion_tokens as u64),
                 );
 
@@ -263,6 +288,7 @@ impl LlmClient {
                     false,
                     "error",
                     latency,
+                    None,
                     None,
                     None,
                 );
@@ -380,6 +406,7 @@ impl LlmClient {
             if should_inject_reasoning_content(&self.route) {
                 inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
             }
+            inject_prompt_cache_fields(&mut body, self.prompt_cache_key.as_deref());
 
             let cfg = self.client.config();
             let http = reqwest::Client::new();
@@ -495,6 +522,12 @@ impl LlmClient {
                         outcome,
                         latency,
                         last_usage.as_ref().map(|u| u.prompt_tokens as u64),
+                        last_usage.as_ref().and_then(|u| {
+                            u.prompt_tokens_details
+                                .as_ref()
+                                .and_then(|d| d.cached_tokens)
+                                .map(|v| v as u64)
+                        }),
                         last_usage.as_ref().map(|u| u.completion_tokens as u64),
                     );
 
@@ -521,6 +554,11 @@ impl LlmClient {
                         );
                     }
                     if let Some(usage) = last_usage.as_ref() {
+                        let cached = usage
+                            .prompt_tokens_details
+                            .as_ref()
+                            .and_then(|d| d.cached_tokens)
+                            .unwrap_or(0) as i64;
                         telemetry::spans::set_attributes(
                             &current_span,
                             [
@@ -528,6 +566,7 @@ impl LlmClient {
                                     "gen_ai.usage.input_tokens",
                                     usage.prompt_tokens as i64,
                                 ),
+                                KeyValue::new("gen_ai.usage.cached_input_tokens", cached),
                                 KeyValue::new(
                                     "gen_ai.usage.output_tokens",
                                     usage.completion_tokens as i64,
@@ -580,6 +619,7 @@ impl LlmClient {
                 true,
                 "error",
                 started.elapsed(),
+                None,
                 None,
                 None,
             );
@@ -668,6 +708,21 @@ fn should_inject_reasoning_content(route: &ResolvedModel) -> bool {
     let provider = route.provider.to_ascii_lowercase();
     let base_url = route.base_url.to_ascii_lowercase();
     provider.contains("moonshot") || base_url.contains("moonshot")
+}
+
+fn inject_prompt_cache_fields(body: &mut serde_json::Value, prompt_cache_key: Option<&str>) {
+    let Some(prompt_cache_key) = prompt_cache_key.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+
+    obj.insert(
+        "prompt_cache_key".to_string(),
+        serde_json::Value::String(prompt_cache_key.to_string()),
+    );
 }
 
 fn inject_reasoning_content_for_tool_calls(body: &mut serde_json::Value, messages: &[Message]) {
@@ -1486,5 +1541,19 @@ mod tests {
         };
         let openai = to_openai_tool(tool);
         assert!(openai.function.strict.is_none());
+    }
+
+    #[test]
+    fn inject_prompt_cache_fields_noop_when_missing_key() {
+        let mut body = serde_json::json!({"model":"m"});
+        inject_prompt_cache_fields(&mut body, None);
+        assert!(body.get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn inject_prompt_cache_fields_sets_key() {
+        let mut body = serde_json::json!({"model":"m"});
+        inject_prompt_cache_fields(&mut body, Some("k"));
+        assert_eq!(body["prompt_cache_key"], serde_json::json!("k"));
     }
 }
