@@ -115,6 +115,43 @@ export interface ConfigUpdateRequest {
   yaml: string;
 }
 
+export interface ConfigProviderSummary {
+  id: string;
+  base_url: string;
+  api_key_set: boolean;
+  models: string[];
+}
+
+export interface ConfigProvidersResponse {
+  default_model?: string;
+  providers: ConfigProviderSummary[];
+}
+
+export interface ConfigProviderUpsert {
+  id: string;
+  base_url?: string;
+  api_key?: string | null;
+  models?: string[];
+}
+
+export interface ConfigProvidersPatchRequest {
+  default_model?: string | null;
+  upsert?: ConfigProviderUpsert[];
+  delete?: string[];
+}
+
+export interface ConfigRuntimeResponse {
+  runtime_max_steps: number | null;
+  agents_plan_max_steps: number | null;
+  agents_general_max_steps: number | null;
+}
+
+export interface ConfigRuntimePatchRequest {
+  runtime_max_steps?: number | null;
+  agents_plan_max_steps?: number | null;
+  agents_general_max_steps?: number | null;
+}
+
 export interface SkillEnableSetting {
   id: string;
   enable: boolean;

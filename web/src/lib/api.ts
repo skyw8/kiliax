@@ -1,6 +1,10 @@
 import type {
   Capabilities,
   ConfigResponse,
+  ConfigProvidersPatchRequest,
+  ConfigProvidersResponse,
+  ConfigRuntimePatchRequest,
+  ConfigRuntimeResponse,
   ConfigSkillsResponse,
   ConfigUpdateRequest,
   FsListResponse,
@@ -119,6 +123,24 @@ export const api = {
   putConfig(req: ConfigUpdateRequest): Promise<ConfigResponse> {
     return apiFetch<ConfigResponse>("/v1/config", {
       method: "PUT",
+      body: JSON.stringify(req),
+    });
+  },
+  getConfigProviders(): Promise<ConfigProvidersResponse> {
+    return apiFetch<ConfigProvidersResponse>("/v1/config/providers");
+  },
+  patchConfigProviders(req: ConfigProvidersPatchRequest): Promise<void> {
+    return apiFetch<void>("/v1/config/providers", {
+      method: "PATCH",
+      body: JSON.stringify(req),
+    });
+  },
+  getConfigRuntime(): Promise<ConfigRuntimeResponse> {
+    return apiFetch<ConfigRuntimeResponse>("/v1/config/runtime");
+  },
+  patchConfigRuntime(req: ConfigRuntimePatchRequest): Promise<void> {
+    return apiFetch<void>("/v1/config/runtime", {
+      method: "PATCH",
       body: JSON.stringify(req),
     });
   },

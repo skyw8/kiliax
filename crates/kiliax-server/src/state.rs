@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
-use kiliax_core::config::Config;
+use kiliax_core::config::{Config, ProviderConfig};
 use kiliax_core::llm::{Message as CoreMessage, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
 use kiliax_core::session::{
@@ -173,6 +173,224 @@ impl ServerState {
                     server.enable = p.enable;
                 }
             }
+        }
+
+        let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
+        let _ = self
+            .update_config(api::ConfigUpdateRequest { yaml })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_config_providers(&self) -> Result<api::ConfigProvidersResponse, ApiError> {
+        let config = self.config_snapshot()?;
+        Ok(api::ConfigProvidersResponse {
+            default_model: config.default_model.clone(),
+            providers: config
+                .providers
+                .iter()
+                .map(|(id, p)| api::ConfigProviderSummary {
+                    id: id.clone(),
+                    base_url: p.base_url.clone(),
+                    api_key_set: p.api_key.is_some(),
+                    models: p.models.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    pub async fn patch_config_providers(
+        &self,
+        req: api::ConfigProvidersPatchRequest,
+    ) -> Result<(), ApiError> {
+        let current = self.config_snapshot()?;
+        let mut next = current.as_ref().clone();
+
+        if let Some(v) = req.default_model {
+            next.default_model = v.and_then(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+        }
+
+        for id in req.delete {
+            let trimmed = id.trim();
+            if trimmed.is_empty() {
+                return Err(ApiError::invalid_argument("provider id must not be empty"));
+            }
+            if next.providers.remove(trimmed).is_none() {
+                return Err(ApiError::not_found(format!(
+                    "provider not found: {}",
+                    trimmed
+                )));
+            }
+        }
+
+        for upsert in req.upsert {
+            let id = upsert.id.trim();
+            if id.is_empty() {
+                return Err(ApiError::invalid_argument("provider id must not be empty"));
+            }
+
+            if let Some(existing) = next.providers.get_mut(id) {
+                if let Some(base_url) = upsert.base_url {
+                    let base_url = base_url.trim();
+                    if base_url.is_empty() {
+                        return Err(ApiError::invalid_argument(
+                            "provider base_url must not be empty",
+                        ));
+                    }
+                    existing.base_url = base_url.to_string();
+                }
+
+                if let Some(api_key) = upsert.api_key {
+                    existing.api_key = api_key
+                        .map(|k| {
+                            let trimmed = k.trim();
+                            if trimmed.is_empty() {
+                                return Err(ApiError::invalid_argument(
+                                    "provider api_key must not be empty (use null to clear)",
+                                ));
+                            }
+                            Ok(trimmed.to_string())
+                        })
+                        .transpose()?;
+                }
+
+                if let Some(models) = upsert.models {
+                    let mut seen: HashSet<String> = HashSet::new();
+                    let mut out = Vec::new();
+                    for m in models {
+                        let trimmed = m.trim();
+                        if trimmed.is_empty() {
+                            return Err(ApiError::invalid_argument(
+                                "provider models must not contain empty strings",
+                            ));
+                        }
+                        if seen.insert(trimmed.to_string()) {
+                            out.push(trimmed.to_string());
+                        }
+                    }
+                    existing.models = out;
+                }
+            } else {
+                let Some(base_url) = upsert.base_url else {
+                    return Err(ApiError::invalid_argument(
+                        "provider base_url is required for new providers",
+                    ));
+                };
+                let base_url = base_url.trim();
+                if base_url.is_empty() {
+                    return Err(ApiError::invalid_argument(
+                        "provider base_url must not be empty",
+                    ));
+                }
+
+                let api_key = match upsert.api_key {
+                    None | Some(None) => None,
+                    Some(Some(k)) => {
+                        let trimmed = k.trim();
+                        if trimmed.is_empty() {
+                            return Err(ApiError::invalid_argument(
+                                "provider api_key must not be empty (use null to clear)",
+                            ));
+                        }
+                        Some(trimmed.to_string())
+                    }
+                };
+
+                let models = match upsert.models {
+                    None => Vec::new(),
+                    Some(models) => {
+                        let mut seen: HashSet<String> = HashSet::new();
+                        let mut out = Vec::new();
+                        for m in models {
+                            let trimmed = m.trim();
+                            if trimmed.is_empty() {
+                                return Err(ApiError::invalid_argument(
+                                    "provider models must not contain empty strings",
+                                ));
+                            }
+                            if seen.insert(trimmed.to_string()) {
+                                out.push(trimmed.to_string());
+                            }
+                        }
+                        out
+                    }
+                };
+
+                next.providers.insert(
+                    id.to_string(),
+                    ProviderConfig {
+                        base_url: base_url.to_string(),
+                        api_key,
+                        models,
+                    },
+                );
+            }
+        }
+
+        let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
+        let _ = self
+            .update_config(api::ConfigUpdateRequest { yaml })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_config_runtime(&self) -> Result<api::ConfigRuntimeResponse, ApiError> {
+        let config = self.config_snapshot()?;
+        Ok(api::ConfigRuntimeResponse {
+            runtime_max_steps: config.runtime.max_steps,
+            agents_plan_max_steps: config.agents.plan.max_steps,
+            agents_general_max_steps: config.agents.general.max_steps,
+        })
+    }
+
+    pub async fn patch_config_runtime(
+        &self,
+        req: api::ConfigRuntimePatchRequest,
+    ) -> Result<(), ApiError> {
+        let current = self.config_snapshot()?;
+        let mut next = current.as_ref().clone();
+
+        if let Some(v) = req.runtime_max_steps {
+            next.runtime.max_steps = match v {
+                None => None,
+                Some(0) => {
+                    return Err(ApiError::invalid_argument(
+                        "runtime_max_steps must be > 0 or null",
+                    ))
+                }
+                Some(n) => Some(n),
+            };
+        }
+
+        if let Some(v) = req.agents_plan_max_steps {
+            next.agents.plan.max_steps = match v {
+                None => None,
+                Some(0) => {
+                    return Err(ApiError::invalid_argument(
+                        "agents_plan_max_steps must be > 0 or null",
+                    ))
+                }
+                Some(n) => Some(n),
+            };
+        }
+
+        if let Some(v) = req.agents_general_max_steps {
+            next.agents.general.max_steps = match v {
+                None => None,
+                Some(0) => {
+                    return Err(ApiError::invalid_argument(
+                        "agents_general_max_steps must be > 0 or null",
+                    ))
+                }
+                Some(n) => Some(n),
+            };
         }
 
         let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;

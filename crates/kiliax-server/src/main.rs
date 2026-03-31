@@ -80,6 +80,14 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .route("/sessions", post(create_session).get(list_sessions))
         .route("/config", get(get_config).put(put_config))
         .route("/config/mcp", patch(patch_config_mcp))
+        .route(
+            "/config/providers",
+            get(get_config_providers).patch(patch_config_providers),
+        )
+        .route(
+            "/config/runtime",
+            get(get_config_runtime).patch(patch_config_runtime),
+        )
         .route("/config/skills", get(get_config_skills).patch(patch_config_skills))
         .route("/fs/list", get(fs_list))
         .route("/skills", get(list_global_skills))
@@ -502,6 +510,34 @@ async fn patch_config_mcp(
     Json(req): Json<api::ConfigMcpPatchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.patch_config_mcp(req).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_config_providers(
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.get_config_providers().await?))
+}
+
+async fn patch_config_providers(
+    State(state): State<Arc<ServerState>>,
+    Json(req): Json<api::ConfigProvidersPatchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.patch_config_providers(req).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_config_runtime(
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.get_config_runtime().await?))
+}
+
+async fn patch_config_runtime(
+    State(state): State<Arc<ServerState>>,
+    Json(req): Json<api::ConfigRuntimePatchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.patch_config_runtime(req).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

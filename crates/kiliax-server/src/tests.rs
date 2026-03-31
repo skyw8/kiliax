@@ -981,6 +981,107 @@ mcp:
 }
 
 #[tokio::test]
+async fn patch_config_providers_sets_api_key_without_echo() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            "/v1/config/providers",
+            serde_json::json!({
+                "upsert": [{ "id": "test", "api_key": "sk-test" }]
+            }),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config/providers"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let providers = body
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .expect("providers array");
+    let test_provider = providers
+        .iter()
+        .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("test"))
+        .expect("missing provider test");
+    assert_eq!(
+        test_provider
+            .get("api_key_set")
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "expected api_key_set: true, got: {body}"
+    );
+    assert!(
+        test_provider.get("api_key").is_none(),
+        "api_key must not be returned: {body}"
+    );
+}
+
+#[tokio::test]
+async fn patch_config_runtime_updates_max_steps() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            "/v1/config/runtime",
+            serde_json::json!({
+                "runtime_max_steps": 8,
+                "agents_plan_max_steps": 16,
+                "agents_general_max_steps": null
+            }),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config/runtime"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("runtime_max_steps").and_then(|v| v.as_u64()),
+        Some(8)
+    );
+    assert_eq!(
+        body.get("agents_plan_max_steps").and_then(|v| v.as_u64()),
+        Some(16)
+    );
+    assert_eq!(
+        body.get("agents_general_max_steps").and_then(|v| v.as_u64()),
+        None
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            "/v1/config/runtime",
+            serde_json::json!({ "runtime_max_steps": 0 }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_code(&body, "invalid_argument");
+}
+
+#[tokio::test]
 async fn list_sessions_last_outcome_reflects_meta_finish_or_error() {
     let dir = TempDir::new().expect("tempdir");
     let app1 = build_test_app(&dir, None).await;

@@ -250,6 +250,69 @@ pub struct ConfigMcpPatchRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ConfigProvidersResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    pub providers: Vec<ConfigProviderSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigProviderSummary {
+    pub id: String,
+    pub base_url: String,
+    pub api_key_set: bool,
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigProvidersPatchRequest {
+    #[serde(default)]
+    pub default_model: Option<Option<String>>,
+
+    #[serde(default)]
+    pub upsert: Vec<ConfigProviderUpsert>,
+
+    #[serde(default)]
+    pub delete: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigProviderUpsert {
+    pub id: String,
+
+    #[serde(default)]
+    pub base_url: Option<String>,
+
+    #[serde(default)]
+    pub api_key: Option<Option<String>>,
+
+    #[serde(default)]
+    pub models: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigRuntimeResponse {
+    pub runtime_max_steps: Option<usize>,
+    pub agents_plan_max_steps: Option<usize>,
+    pub agents_general_max_steps: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigRuntimePatchRequest {
+    #[serde(default)]
+    pub runtime_max_steps: Option<Option<usize>>,
+
+    #[serde(default)]
+    pub agents_plan_max_steps: Option<Option<usize>>,
+
+    #[serde(default)]
+    pub agents_general_max_steps: Option<Option<usize>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ConfigSkillsResponse {
     pub default_enable: bool,
     pub skills: Vec<SkillEnableSetting>,
