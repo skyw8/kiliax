@@ -6,11 +6,11 @@ mod state;
 mod tests;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, MatchedPath, Path, Query, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::Html;
 use axum::middleware;
 use axum::response::sse::Event as SseEvent;
@@ -102,6 +102,7 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .route("/runs/{run_id}", get(get_run))
         .route("/runs/{run_id}/cancel", post(cancel_run))
         .route("/capabilities", get(get_capabilities))
+        .route("/admin/info", get(get_admin_info))
         .route("/admin/stop", post(stop_server))
         .route("/sessions/{session_id}/events", get(list_events))
         .route("/sessions/{session_id}/events/stream", get(stream_events_sse))
@@ -257,9 +258,7 @@ async fn serve_web(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let dist_dir = state.workspace_root.join("web").join("dist");
-    let index = dist_dir.join("index.html");
-    if !index.is_file() {
+    let Some(dist_dir) = find_web_dist_dir(&state.workspace_root) else {
         let hint = r#"<!doctype html>
 <html>
   <head>
@@ -282,14 +281,72 @@ bun run build</pre>
   </body>
 </html>
 "#;
-        return Html(hint).into_response();
-    }
+        let mut resp = Html(hint).into_response();
+        resp.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        return resp;
+    };
 
+    let index = dist_dir.join("index.html");
+
+    let path = req.uri().path().to_string();
     let svc = ServeDir::new(dist_dir).fallback(ServeFile::new(index));
     match svc.oneshot(req).await {
-        Ok(resp) => resp.map(axum::body::Body::new).into_response(),
+        Ok(resp) => {
+            let mut resp = resp.map(axum::body::Body::new).into_response();
+
+            if path.starts_with("/assets/") {
+                resp.headers_mut().insert(
+                    axum::http::header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=31536000, immutable"),
+                );
+            } else if resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("text/html"))
+            {
+                resp.headers_mut().insert(
+                    axum::http::header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                );
+            }
+
+            resp
+        }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn find_web_dist_dir(workspace_root: &FsPath) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    candidates.push(workspace_root.join("web").join("dist"));
+
+    for ancestor in workspace_root.ancestors().take(5).skip(1) {
+        candidates.push(ancestor.join("web").join("dist"));
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("web").join("dist"));
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for ancestor in dir.ancestors().take(8) {
+                candidates.push(ancestor.join("web").join("dist"));
+            }
+        }
+    }
+
+    for dir in candidates {
+        if dir.join("index.html").is_file() {
+            return Some(dir);
+        }
+    }
+
+    None
 }
 
 fn print_help() {
@@ -711,6 +768,14 @@ async fn get_capabilities(
 ) -> Result<impl IntoResponse, ApiError> {
     let out = state.get_capabilities().await?;
     Ok(Json(out))
+}
+
+async fn get_admin_info(State(state): State<Arc<ServerState>>) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(api::AdminInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        workspace_root: state.workspace_root.display().to_string(),
+        config_path: state.config_path.display().to_string(),
+    }))
 }
 
 async fn stop_server(

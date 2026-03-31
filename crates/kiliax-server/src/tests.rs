@@ -157,7 +157,7 @@ async fn web_requires_auth_and_sets_cookie() {
     let resp = app.clone().oneshot(req).await.expect("oneshot");
     let (status, body) = read_text(resp).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("kiliax-web is not built"), "body: {body}");
+    assert!(body.contains("kiliax-web"), "body: {body}");
 }
 
 #[tokio::test]

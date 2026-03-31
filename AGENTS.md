@@ -36,6 +36,7 @@ minimal
 
 - Ratatui UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
 - App state + render pipeline: `crates/kiliax-cli/src/app.rs`
+- Server daemon control (start/stop/restart): `crates/kiliax-cli/src/daemon.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
@@ -49,6 +50,7 @@ minimal
   - `GET /v1/config/skills` + `PATCH /v1/config/skills` (global per-skill enable settings)
   - `GET /v1/fs/list` (server-side folder browser for the web picker)
   - `POST /v1/sessions/{id}/open` (open workspace in `vscode` / `file_manager` / `terminal`)
+  - `GET /v1/admin/info` (workspace_root/config_path/version)
 
 ### web (React UI)
 

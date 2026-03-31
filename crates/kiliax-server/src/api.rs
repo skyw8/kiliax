@@ -233,6 +233,13 @@ pub struct Capabilities {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AdminInfo {
+    pub version: String,
+    pub workspace_root: String,
+    pub config_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ConfigResponse {
     pub path: String,
     pub yaml: String,

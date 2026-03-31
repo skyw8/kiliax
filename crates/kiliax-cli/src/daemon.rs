@@ -156,6 +156,26 @@ async fn token_is_required(state: &DaemonState) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct AdminInfo {
+    workspace_root: String,
+    config_path: String,
+}
+
+async fn fetch_admin_info(state: &DaemonState) -> Option<AdminInfo> {
+    let url = format!("{}/v1/admin/info", state.url_base());
+    let client = reqwest::Client::new();
+    let mut req = client.get(url).timeout(PING_TIMEOUT_FAST);
+    if !state.token.trim().is_empty() {
+        req = req.bearer_auth(state.token.trim());
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<AdminInfo>().await.ok()
+}
+
 async fn wait_for_port_to_free(host: &str, port: u16) -> bool {
     let deadline = std::time::Instant::now() + PORT_RELEASE_GRACE;
     while std::time::Instant::now() < deadline {
@@ -217,14 +237,26 @@ pub async fn ensure_running(
             token: token.clone(),
             ..parsed.clone()
         };
+        let mut should_start_new = false;
+
         if ping(&parsed).await {
             let api_ok = ping(&check).await;
             let web_ok = ping_web(&check).await;
             let token_required = token_is_required(&check).await;
 
+            let mut identity_ok = true;
+            if api_ok && web_ok && token_required {
+                if let Some(info) = fetch_admin_info(&check).await {
+                    let desired_root = workspace_root.display().to_string();
+                    let desired_config_path = config_path.display().to_string();
+                    identity_ok = info.workspace_root == desired_root && info.config_path == desired_config_path;
+                }
+            }
+
             if api_ok
                 && web_ok
                 && token_required
+                && identity_ok
                 && (desired_token.is_none() || parsed.token.trim() == token)
             {
                 parsed.token = token.clone();
@@ -246,6 +278,7 @@ pub async fn ensure_running(
             if try_stop_http(&stop_state).await {
                 let _ = wait_for_port_to_free(&desired_bind_host, parsed.port).await;
                 let _ = tokio::fs::remove_file(&state_file).await;
+                should_start_new = true;
             } else {
                 anyhow::bail!(
                     "kiliax-server is reachable at {}:{}, but cannot be restarted (token mismatch?)",
@@ -255,9 +288,11 @@ pub async fn ensure_running(
             }
         }
 
-        if parsed.started_at_ms.is_some_and(|ms| {
-            now_ms().saturating_sub(ms) < STARTUP_GRACE_PERIOD.as_millis() as u64
-        }) {
+        if !should_start_new
+            && parsed.started_at_ms.is_some_and(|ms| {
+                now_ms().saturating_sub(ms) < STARTUP_GRACE_PERIOD.as_millis() as u64
+            })
+        {
             parsed.token = token.clone();
             return Ok(parsed);
         }
@@ -282,7 +317,17 @@ pub async fn ensure_running(
         if ping(&candidate).await {
             let web_ok = ping_web(&candidate).await;
             let token_required = token_is_required(&candidate).await;
+
+            let mut identity_ok = true;
             if web_ok && token_required {
+                if let Some(info) = fetch_admin_info(&candidate).await {
+                    let desired_root = workspace_root.display().to_string();
+                    let desired_config_path = config_path.display().to_string();
+                    identity_ok = info.workspace_root == desired_root && info.config_path == desired_config_path;
+                }
+            }
+
+            if web_ok && token_required && identity_ok {
                 let text = serde_json::to_string_pretty(&candidate).context("failed to serialize server state")?;
                 tokio::fs::write(&state_file, text)
                     .await
@@ -472,6 +517,7 @@ pub async fn stop() -> Result<StopOutcome> {
 
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {
+            let _ = wait_for_port_to_free(&state.host, state.port).await;
             let _ = tokio::fs::remove_file(&state_file).await;
             Ok(StopOutcome::Stopped)
         }
