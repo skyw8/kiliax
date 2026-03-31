@@ -60,7 +60,7 @@ fn print_help() {
     println!("{bin} {version}");
     println!();
     println!("Usage:");
-    println!("  {bin} [plan|general|build] [--resume <SESSION_ID>]");
+    println!("  {bin} [plan|general] [--resume <SESSION_ID>]");
     println!("  {bin} serve start");
     println!("  {bin} serve stop");
     println!("  {bin} serve restart");
@@ -194,7 +194,7 @@ async fn main() -> Result<()> {
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "plan" | "general" | "build" => profile_override = Some(arg.as_str()),
+            "plan" | "general" => profile_override = Some(arg.as_str()),
             "--resume" => {
                 let Some(id) = iter.next() else {
                     anyhow::bail!("--resume expects a session id");

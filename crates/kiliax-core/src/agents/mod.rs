@@ -32,14 +32,33 @@ impl AgentProfile {
     }
 
     /// Map an agent name into a built-in profile.
-    ///
-    /// Accepts legacy aliases (e.g. "build" -> "general") for backwards compatibility with
-    /// persisted sessions and older CLIs.
     pub fn from_name(name: &str) -> Option<Self> {
         match name.trim() {
             "plan" => Some(Self::plan()),
-            "general" | "build" => Some(Self::general()),
+            "general" => Some(Self::general()),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_name_trims_whitespace() {
+        let profile = AgentProfile::from_name("  general  ").unwrap();
+        assert_eq!(profile.kind, AgentKind::General);
+    }
+
+    #[test]
+    fn from_name_recognizes_plan() {
+        let profile = AgentProfile::from_name("plan").unwrap();
+        assert_eq!(profile.kind, AgentKind::Plan);
+    }
+
+    #[test]
+    fn from_name_rejects_legacy_build_alias() {
+        assert!(AgentProfile::from_name("build").is_none());
     }
 }

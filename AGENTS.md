@@ -21,6 +21,7 @@ minimal
 
 ### crates/kiliax-core (core library)
 
+- Agent profiles + tool permissions: `crates/kiliax-core/src/agents/`
 - Config + model routing: `crates/kiliax-core/src/config.rs`
 - OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` + per-call token `usage` capture: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly (env/tools/skills/project `AGENTS.md`): `crates/kiliax-core/src/prompt.rs`
@@ -28,14 +29,11 @@ minimal
 - Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
 - Tool engine + builtin tools + MCP + skills discovery (stable ordering): `crates/kiliax-core/src/tools/`
 
-### crates/kiliax-otel (OpenTelemetry)
-
-- OTLP exporters/providers + tracing/metrics/logs wiring: `crates/kiliax-otel/src/lib.rs`
-
 ### crates/kiliax-cli (TUI)
 
 - Ratatui UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
 - App state + render pipeline (+ per-call token usage display): `crates/kiliax-cli/src/app.rs`
+- Terminal init + viewport backend: `crates/kiliax-cli/src/terminal.rs`
 - Server daemon control (start/stop/restart): `crates/kiliax-cli/src/daemon.rs`
 
 ### crates/kiliax-server (HTTP control plane)
@@ -43,14 +41,10 @@ minimal
 - Axum routes + auth + static web hosting (serves `web/dist`): `crates/kiliax-server/src/main.rs`
 - Session lifecycle + settings (`settings.json`) + run queue + WS/SSE events (+ message `usage` passthrough): `crates/kiliax-server/src/state.rs`
 - REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
-- Key endpoints:
-  - `POST /v1/sessions/{id}/fork` (fork at an assistant message and rerun the preceding user turn)
-  - `GET /v1/config/providers` + `PATCH /v1/config/providers` (providers/models/api_key)
-  - `GET /v1/config/runtime` + `PATCH /v1/config/runtime` (agent `max_steps`)
-  - `GET /v1/config/skills` + `PATCH /v1/config/skills` (global per-skill enable settings)
-  - `GET /v1/fs/list` (server-side folder browser for the web picker)
-  - `POST /v1/sessions/{id}/open` (open workspace in `vscode` / `file_manager` / `terminal`)
-  - `GET /v1/admin/info` (workspace_root/config_path/version)
+
+### crates/kiliax-otel (OpenTelemetry)
+
+- OTLP exporters/providers + tracing/metrics/logs wiring: `crates/kiliax-otel/src/lib.rs`
 
 ### web (React UI)
 

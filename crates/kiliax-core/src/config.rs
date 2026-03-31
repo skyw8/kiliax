@@ -30,12 +30,12 @@ pub struct AgentRuntimeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentsConfig {
     #[serde(default)]
     pub plan: AgentRuntimeConfig,
 
     #[serde(default)]
-    #[serde(alias = "build")]
     pub general: AgentRuntimeConfig,
 }
 
@@ -107,18 +107,13 @@ pub struct ServerConfig {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OtelOtlpProtocol {
+    #[default]
     HttpProtobuf,
     HttpJson,
     Grpc,
-}
-
-impl Default for OtelOtlpProtocol {
-    fn default() -> Self {
-        Self::HttpProtobuf
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -181,30 +176,20 @@ impl Default for OtelSignalsConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OtelCaptureMode {
     Metadata,
+    #[default]
     Full,
 }
 
-impl Default for OtelCaptureMode {
-    fn default() -> Self {
-        Self::Full
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OtelCaptureHash {
     None,
+    #[default]
     Sha256,
-}
-
-impl Default for OtelCaptureHash {
-    fn default() -> Self {
-        Self::Sha256
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -838,6 +823,12 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn agents_config_rejects_unknown_fields() {
+        assert!(serde_yaml::from_str::<AgentsConfig>("build: {}\n").is_err());
+        assert!(serde_yaml::from_str::<AgentsConfig>("general: {}\n").is_ok());
     }
 
     #[test]

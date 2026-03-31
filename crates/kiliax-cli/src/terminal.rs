@@ -128,7 +128,7 @@ pub fn init() -> anyhow::Result<(TerminalGuard, TerminalState)> {
         0,
         viewport_y,
         full_size.width,
-        1.min(full_size.height.max(1)),
+        1,
     );
     terminal.backend_mut().set_viewport(viewport);
     terminal.clear()?;

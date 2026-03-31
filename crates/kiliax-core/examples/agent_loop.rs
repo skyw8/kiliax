@@ -17,8 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut resume_id: Option<SessionId> = None;
 
     let mut idx = 0;
-    let profile = match args.get(0).map(|s| s.as_str()) {
-        Some("general") | Some("build") => {
+    let profile = match args.first().map(|s| s.as_str()) {
+        Some("general") => {
             idx = 1;
             AgentProfile::general()
         }
