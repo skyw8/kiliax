@@ -128,8 +128,8 @@ function fmtTokenUsage(usage?: {
     `out ${usage.completion_tokens}`,
     `total ${usage.total_tokens}`,
   ];
-  const cached = usage.cached_tokens ?? null;
-  if (typeof cached === "number" && cached > 0) parts.push(`cached ${cached}`);
+  const cached = usage.cached_tokens ?? 0;
+  parts.push(`cached ${cached}`);
   return parts.join(" · ");
 }
 

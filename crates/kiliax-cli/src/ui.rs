@@ -439,10 +439,9 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::from("—").dim());
     }
 
-    spans.push(Span::from(" · ").dim());
-    spans.push(Span::from(format!("{} tok", app.turn_output_tokens())).dim());
-
     if let Some((tool, elapsed)) = app.active_tool_elapsed() {
+        spans.push(Span::from(" · ").dim());
+        spans.push(Span::from(format!("{} tok", app.turn_output_tokens())).dim());
         spans.push(Span::from(" · ").dim());
         let (name, rest) = match tool.split_once(' ') {
             Some((name, rest)) => (name.to_string(), rest.to_string()),
@@ -470,6 +469,9 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(fmt_duration_compact(elapsed), thinking_style));
         spans.push(Span::from(" · ").dim());
         spans.push(Span::from(format!("{} tok", app.step_output_tokens())).dim());
+    } else {
+        spans.push(Span::from(" · ").dim());
+        spans.push(Span::from(format!("{} tok", app.turn_output_tokens())).dim());
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

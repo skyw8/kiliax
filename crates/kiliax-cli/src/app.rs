@@ -2253,9 +2253,7 @@ fn render_token_usage_line(usage: TokenUsage) -> Line<'static> {
         "Tokens: in {} · out {} · total {}",
         usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
     );
-    if let Some(cached) = usage.cached_tokens.filter(|v| *v > 0) {
-        text.push_str(&format!(" · cached {cached}"));
-    }
+    text.push_str(&format!(" · cached {}", usage.cached_tokens.unwrap_or(0)));
 
     let mut line = Line::from(Span::from(text));
     line.style = Style::default().dim();
