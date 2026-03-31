@@ -41,10 +41,10 @@ minimal
 
 - Axum routes + auth + static web hosting: `crates/kiliax-server/src/main.rs`
 - Session lifecycle + settings (`settings.json`) + run queue + WS/SSE events: `crates/kiliax-server/src/state.rs`
-- REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.skills.enable`)
+- REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.skills.*`)
 - Key endpoints:
   - `POST /v1/sessions/{id}/fork` (fork at an assistant message and rerun the preceding user turn)
-  - `GET /v1/config/skills` + `PATCH /v1/config/skills` (global skills toggle)
+  - `GET /v1/config/skills` + `PATCH /v1/config/skills` (global per-skill enable settings)
   - `GET /v1/fs/list` (server-side folder browser for the web picker)
   - `POST /v1/sessions/{id}/open` (open workspace in `vscode` / `file_manager` / `terminal`)
 

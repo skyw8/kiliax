@@ -666,8 +666,9 @@ export default function App() {
 
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
-  const [skillsEnabled, setSkillsEnabled] = useState<boolean | null>(null);
-  const [skillsEnabledSaving, setSkillsEnabledSaving] = useState(false);
+  const [skillsDefaultEnable, setSkillsDefaultEnable] = useState(true);
+  const [skillsOverrides, setSkillsOverrides] = useState<Record<string, boolean>>({});
+  const [skillsSaving, setSkillsSaving] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [mcpSaving, setMcpSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1257,7 +1258,13 @@ export default function App() {
         api.getConfigSkills(),
       ]);
       setSkills(skillsRes.items);
-      setSkillsEnabled(cfgRes.enable);
+      setSkillsDefaultEnable(cfgRes.default_enable ?? true);
+      const nextOverrides: Record<string, boolean> = {};
+      for (const s of cfgRes.skills ?? []) {
+        if (!s?.id) continue;
+        nextOverrides[s.id] = Boolean(s.enable);
+      }
+      setSkillsOverrides(nextOverrides);
       setSkillsOpen(true);
     } catch (err) {
       handleApiError(err);
@@ -2271,54 +2278,60 @@ export default function App() {
             <DialogTitle>Skills</DialogTitle>
             <DialogDescription>Discovered from skills roots</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <label className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <div className="truncate text-sm">Enable skills</div>
-                <div className="mt-0.5 truncate text-xs text-zinc-600">
-                  Global setting (kiliax.yaml)
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={skillsEnabled ?? false}
-                disabled={skillsEnabled == null || skillsEnabledSaving}
-                onChange={async (e) => {
-                  const next = e.target.checked;
-                  const prev = skillsEnabled;
-                  setSkillsEnabled(next);
-                  setSkillsEnabledSaving(true);
-                  try {
-                    await api.patchConfigSkills({ enable: next });
-                  } catch (err) {
-                    setSkillsEnabled(prev);
-                    handleApiError(err);
-                  } finally {
-                    setSkillsEnabledSaving(false);
-                  }
-                }}
-              />
-            </label>
-
-            <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
-              {skills.length ? (
-                <div className="divide-y divide-zinc-200">
-                  {skills.map((s) => (
-                    <div key={s.id} className="px-3 py-2">
-                      <div className="text-sm font-medium">{s.name}</div>
-                      <div className="mt-0.5 text-xs text-zinc-600">
-                        <span className="font-mono">{s.id}</span>
-                        {s.description ? ` · ${s.description}` : ""}
+          <div className="max-h-[420px] overflow-auto rounded-md border border-zinc-200">
+            {skills.length ? (
+              <div className="divide-y divide-zinc-200">
+                {skills.map((s) => {
+                  const enabled = skillsOverrides[s.id] ?? skillsDefaultEnable;
+                  return (
+                    <label
+                      key={s.id}
+                      className="flex items-center justify-between gap-3 bg-white px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-zinc-900">
+                          {s.name}
+                        </div>
+                        <div className="mt-0.5 truncate text-xs text-zinc-600">
+                          <span className="font-mono">{s.id}</span>
+                          {s.description ? ` · ${s.description}` : ""}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="px-3 py-6 text-center text-sm text-zinc-500">
-                  No skills
-                </div>
-              )}
-            </div>
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        disabled={skillsSaving}
+                        onChange={async (e) => {
+                          const next = e.target.checked;
+                          const prev = skillsOverrides[s.id];
+                          setSkillsOverrides((o) => ({ ...o, [s.id]: next }));
+                          setSkillsSaving(true);
+                          try {
+                            await api.patchConfigSkills({
+                              skills: [{ id: s.id, enable: next }],
+                            });
+                          } catch (err) {
+                            setSkillsOverrides((o) => {
+                              const copy = { ...o };
+                              if (prev === undefined) delete copy[s.id];
+                              else copy[s.id] = prev;
+                              return copy;
+                            });
+                            handleApiError(err);
+                          } finally {
+                            setSkillsSaving(false);
+                          }
+                        }}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bg-white px-3 py-6 text-center text-sm text-zinc-500">
+                No skills
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

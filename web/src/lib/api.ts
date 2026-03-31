@@ -10,6 +10,7 @@ import type {
   RunCreateRequest,
   Session,
   SessionListResponse,
+  SkillEnableSetting,
   SkillListResponse,
 } from "@/lib/types";
 
@@ -130,7 +131,7 @@ export const api = {
   getConfigSkills(): Promise<ConfigSkillsResponse> {
     return apiFetch<ConfigSkillsResponse>("/v1/config/skills");
   },
-  patchConfigSkills(req: { enable: boolean }): Promise<void> {
+  patchConfigSkills(req: { default_enable?: boolean; skills: SkillEnableSetting[] }): Promise<void> {
     return apiFetch<void>("/v1/config/skills", {
       method: "PATCH",
       body: JSON.stringify(req),

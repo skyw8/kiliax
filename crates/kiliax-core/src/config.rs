@@ -66,13 +66,17 @@ pub struct WebSearchConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillsConfig {
     #[serde(default = "default_true")]
-    pub enable: bool,
+    pub default_enable: bool,
+
+    #[serde(default)]
+    pub overrides: BTreeMap<String, bool>,
 }
 
 impl Default for SkillsConfig {
     fn default() -> Self {
         Self {
-            enable: default_true(),
+            default_enable: default_true(),
+            overrides: Default::default(),
         }
     }
 }

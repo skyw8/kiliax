@@ -115,8 +115,14 @@ export interface ConfigUpdateRequest {
   yaml: string;
 }
 
-export interface ConfigSkillsResponse {
+export interface SkillEnableSetting {
+  id: string;
   enable: boolean;
+}
+
+export interface ConfigSkillsResponse {
+  default_enable: boolean;
+  skills: SkillEnableSetting[];
 }
 
 export interface SkillSummary {

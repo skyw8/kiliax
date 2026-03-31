@@ -185,7 +185,16 @@ impl ServerState {
     pub async fn get_config_skills(&self) -> Result<api::ConfigSkillsResponse, ApiError> {
         let config = self.config_snapshot()?;
         Ok(api::ConfigSkillsResponse {
-            enable: config.skills.enable,
+            default_enable: config.skills.default_enable,
+            skills: config
+                .skills
+                .overrides
+                .iter()
+                .map(|(id, enable)| api::SkillEnableSetting {
+                    id: id.clone(),
+                    enable: *enable,
+                })
+                .collect(),
         })
     }
 
@@ -195,7 +204,15 @@ impl ServerState {
     ) -> Result<(), ApiError> {
         let current = self.config_snapshot()?;
         let mut next = current.as_ref().clone();
-        next.skills.enable = req.enable;
+        if let Some(v) = req.default_enable {
+            next.skills.default_enable = v;
+        }
+        for s in req.skills {
+            if s.id.trim().is_empty() {
+                return Err(ApiError::invalid_argument("skill id must not be empty"));
+            }
+            next.skills.overrides.insert(s.id, s.enable);
+        }
 
         let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
         let _ = self
@@ -528,7 +545,7 @@ impl ServerState {
                 &workspace_root,
                 &settings.extra_workspace_roots,
                 &tools,
-                config.skills.enable,
+                &config.skills,
             )
             .await;
 
@@ -2309,7 +2326,7 @@ impl LiveSession {
                     &workspace_root,
                     &effective.extra_workspace_roots,
                     &tools_for_run,
-                    config.skills.enable,
+                    &config.skills,
                 )
                 .await;
                 replace_preamble(&mut messages, preamble);
@@ -2538,7 +2555,7 @@ impl LiveSession {
             &workspace_root,
             &settings.extra_workspace_roots,
             &tools,
-            config.skills.enable,
+            &config.skills,
         )
         .await;
 
@@ -2765,7 +2782,7 @@ async fn build_preamble(
     workspace_root: &PathBuf,
     extra_workspace_roots: &[String],
     tools: &ToolEngine,
-    skills_enable: bool,
+    skills_config: &kiliax_core::config::SkillsConfig,
 ) -> Vec<CoreMessage> {
     let extra_workspace_roots: Vec<PathBuf> = extra_workspace_roots
         .iter()
@@ -2778,10 +2795,15 @@ async fn build_preamble(
         .with_model_id(model_id.to_string())
         .with_workspace_root(workspace_root)
         .with_extra_workspace_roots(extra_workspace_roots);
-    if skills_enable {
-        if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
-            builder = builder.add_skills(skills);
-        }
+    if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
+        let filtered = skills.into_iter().filter(|s| {
+            skills_config
+                .overrides
+                .get(&s.id)
+                .copied()
+                .unwrap_or(skills_config.default_enable)
+        });
+        builder = builder.add_skills(filtered);
     }
     builder.build()
 }

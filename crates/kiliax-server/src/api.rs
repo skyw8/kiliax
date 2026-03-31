@@ -251,13 +251,24 @@ pub struct ConfigMcpPatchRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigSkillsResponse {
+    pub default_enable: bool,
+    pub skills: Vec<SkillEnableSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillEnableSetting {
+    pub id: String,
     pub enable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigSkillsPatchRequest {
-    pub enable: bool,
+    #[serde(default)]
+    pub default_enable: Option<bool>,
+
+    #[serde(default)]
+    pub skills: Vec<SkillEnableSetting>,
 }
 
 #[derive(Debug, Clone, Serialize)]
