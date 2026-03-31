@@ -63,6 +63,20 @@ pub struct WebSearchConfig {
     pub api_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillsConfig {
+    #[serde(default = "default_true")]
+    pub enable: bool,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enable: default_true(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct McpConfig {
     #[serde(default)]
@@ -268,6 +282,9 @@ pub struct Config {
     #[serde(default)]
     pub web_search: WebSearchConfig,
 
+    #[serde(default)]
+    pub skills: SkillsConfig,
+
     /// Default agent runtime options applied to all agents.
     #[serde(default)]
     pub runtime: AgentRuntimeConfig,
@@ -422,6 +439,9 @@ struct ConfigFile {
     pub web_search: WebSearchConfig,
 
     #[serde(default)]
+    pub skills: SkillsConfig,
+
+    #[serde(default)]
     pub tools: ToolsConfig,
 
     #[serde(default)]
@@ -558,6 +578,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         server,
         otel,
         mut web_search,
+        skills,
         tools,
         runtime,
         agents,
@@ -588,6 +609,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         server,
         otel,
         web_search,
+        skills,
         runtime,
         agents,
         mcp,

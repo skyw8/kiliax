@@ -80,9 +80,13 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .route("/sessions", post(create_session).get(list_sessions))
         .route("/config", get(get_config).put(put_config))
         .route("/config/mcp", patch(patch_config_mcp))
+        .route("/config/skills", get(get_config_skills).patch(patch_config_skills))
+        .route("/fs/list", get(fs_list))
         .route("/skills", get(list_global_skills))
         .route("/sessions/{session_id}", get(get_session).delete(delete_session))
+        .route("/sessions/{session_id}/fork", post(fork_session))
         .route("/sessions/{session_id}/resume", post(resume_session))
+        .route("/sessions/{session_id}/open", post(open_workspace))
         .route("/sessions/{session_id}/settings", patch(patch_settings))
         .route("/sessions/{session_id}/messages", get(get_messages))
         .route("/sessions/{session_id}/skills", get(list_skills))
@@ -501,6 +505,33 @@ async fn patch_config_mcp(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn get_config_skills(
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.get_config_skills().await?))
+}
+
+async fn patch_config_skills(
+    State(state): State<Arc<ServerState>>,
+    Json(req): Json<api::ConfigSkillsPatchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.patch_config_skills(req).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Deserialize)]
+struct FsListQuery {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+async fn fs_list(
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<FsListQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.fs_list(q.path).await?))
+}
+
 async fn list_sessions(
     State(state): State<Arc<ServerState>>,
     Query(q): Query<ListSessionsQuery>,
@@ -536,6 +567,26 @@ async fn resume_session(
     let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.resume_session(&id).await?;
     Ok(Json(out))
+}
+
+async fn fork_session(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+    Json(req): Json<api::ForkSessionRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let out = state.fork_session(&id, req).await?;
+    Ok((StatusCode::CREATED, Json(out)))
+}
+
+async fn open_workspace(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+    Json(req): Json<api::OpenWorkspaceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    state.open_workspace(&id, req.target).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn patch_settings(

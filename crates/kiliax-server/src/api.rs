@@ -250,6 +250,17 @@ pub struct ConfigMcpPatchRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ConfigSkillsResponse {
+    pub enable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSkillsPatchRequest {
+    pub enable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SkillListResponse {
     pub items: Vec<SkillSummary>,
 }
@@ -304,4 +315,45 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkSessionRequest {
+    pub assistant_message_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForkSessionResponse {
+    pub session: Session,
+    pub run: Run,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FsListResponse {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub entries: Vec<FsEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FsEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenWorkspaceTarget {
+    Vscode,
+    FileManager,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenWorkspaceRequest {
+    pub target: OpenWorkspaceTarget,
 }

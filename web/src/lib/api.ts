@@ -1,9 +1,12 @@
 import type {
   Capabilities,
   ConfigResponse,
+  ConfigSkillsResponse,
   ConfigUpdateRequest,
+  FsListResponse,
   MessageListResponse,
   McpServerSetting,
+  OpenWorkspaceTarget,
   RunCreateRequest,
   Session,
   SessionListResponse,
@@ -124,10 +127,35 @@ export const api = {
       body: JSON.stringify(req),
     });
   },
+  getConfigSkills(): Promise<ConfigSkillsResponse> {
+    return apiFetch<ConfigSkillsResponse>("/v1/config/skills");
+  },
+  patchConfigSkills(req: { enable: boolean }): Promise<void> {
+    return apiFetch<void>("/v1/config/skills", {
+      method: "PATCH",
+      body: JSON.stringify(req),
+    });
+  },
   listSkills(sessionId: string): Promise<SkillListResponse> {
     return apiFetch<SkillListResponse>(`/v1/sessions/${sessionId}/skills`);
   },
   listGlobalSkills(): Promise<SkillListResponse> {
     return apiFetch<SkillListResponse>("/v1/skills");
+  },
+  forkSession(sessionId: string, assistantMessageId: string): Promise<any> {
+    return apiFetch(`/v1/sessions/${sessionId}/fork`, {
+      method: "POST",
+      body: JSON.stringify({ assistant_message_id: assistantMessageId }),
+    });
+  },
+  fsList(path?: string): Promise<FsListResponse> {
+    const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+    return apiFetch<FsListResponse>(`/v1/fs/list${qs}`);
+  },
+  openWorkspace(sessionId: string, target: OpenWorkspaceTarget): Promise<void> {
+    return apiFetch<void>(`/v1/sessions/${sessionId}/open`, {
+      method: "POST",
+      body: JSON.stringify({ target }),
+    });
   },
 };

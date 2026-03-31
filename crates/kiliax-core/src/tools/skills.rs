@@ -115,6 +115,7 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
 pub fn skill_roots(workspace_root: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     roots.push(workspace_root.join("skills"));
+    roots.push(workspace_root.join(".kiliax").join("skills"));
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join(".kiliax").join("skills"));
     }

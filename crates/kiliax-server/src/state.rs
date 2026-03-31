@@ -15,6 +15,7 @@ use kiliax_core::session::{
 use kiliax_core::tools::{McpServerConnectionState, ToolEngine};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
+use tokio::process::Command;
 use tokio::sync::{broadcast, watch, Mutex, Notify};
 use tokio_stream::StreamExt;
 use tracing::{Instrument, Span};
@@ -181,6 +182,28 @@ impl ServerState {
         Ok(())
     }
 
+    pub async fn get_config_skills(&self) -> Result<api::ConfigSkillsResponse, ApiError> {
+        let config = self.config_snapshot()?;
+        Ok(api::ConfigSkillsResponse {
+            enable: config.skills.enable,
+        })
+    }
+
+    pub async fn patch_config_skills(
+        &self,
+        req: api::ConfigSkillsPatchRequest,
+    ) -> Result<(), ApiError> {
+        let current = self.config_snapshot()?;
+        let mut next = current.as_ref().clone();
+        next.skills.enable = req.enable;
+
+        let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
+        let _ = self
+            .update_config(api::ConfigUpdateRequest { yaml })
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_skills(
         &self,
         session_id: &SessionId,
@@ -228,6 +251,67 @@ impl ServerState {
         })
     }
 
+    pub async fn fs_list(&self, path: Option<String>) -> Result<api::FsListResponse, ApiError> {
+        let candidate = match path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(p) => validate_client_workspace_root(p)?,
+            None => dirs::home_dir()
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| PathBuf::from("/")),
+        };
+        let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        let meta = tokio::fs::metadata(&canonical)
+            .await
+            .map_err(|_| ApiError::not_found("path not found"))?;
+        if !meta.is_dir() {
+            return Err(ApiError::invalid_argument("path must be a directory"));
+        }
+
+        let mut rd = tokio::fs::read_dir(&canonical)
+            .await
+            .map_err(ApiError::internal_error)?;
+        let mut entries: Vec<api::FsEntry> = Vec::new();
+        while let Some(ent) = rd.next_entry().await.map_err(ApiError::internal_error)? {
+            let file_type = ent.file_type().await.map_err(ApiError::internal_error)?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = ent.file_name().to_string_lossy().to_string();
+            let path = ent.path().display().to_string();
+            entries.push(api::FsEntry {
+                name,
+                path,
+                is_dir: true,
+            });
+        }
+        entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        Ok(api::FsListResponse {
+            path: canonical.display().to_string(),
+            parent: canonical.parent().map(|p| p.display().to_string()),
+            entries,
+        })
+    }
+
+    pub async fn open_workspace(
+        &self,
+        session_id: &SessionId,
+        target: api::OpenWorkspaceTarget,
+    ) -> Result<(), ApiError> {
+        let settings = match self.get_live(session_id.as_str()).await {
+            Some(live) => live.settings.lock().await.clone(),
+            None => {
+                let config = self.config_snapshot()?;
+                let session = self.store.load(session_id).await.map_err(map_session_err)?;
+                load_settings_for_meta(&self.store, &session.meta, config.as_ref()).await?
+            }
+        };
+        if settings.workspace_root.trim().is_empty() {
+            return Err(ApiError::invalid_argument("workspace_root must not be empty"));
+        }
+        let root = PathBuf::from(settings.workspace_root.trim());
+        open_external(&root, target).await
+    }
+
     pub async fn get_live(&self, session_id: &str) -> Option<Arc<LiveSession>> {
         self.sessions.lock().await.get(session_id).cloned()
     }
@@ -264,6 +348,115 @@ impl ServerState {
             return Ok(created);
         }
         self.create_session_inner(req).await
+    }
+
+    pub async fn fork_session(
+        &self,
+        session_id: &SessionId,
+        req: api::ForkSessionRequest,
+    ) -> Result<api::ForkSessionResponse, ApiError> {
+        let assistant_seq = req
+            .assistant_message_id
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| ApiError::invalid_argument("assistant_message_id must be a number"))?;
+        if assistant_seq == 0 {
+            return Err(ApiError::invalid_argument("assistant_message_id must be >= 1"));
+        }
+
+        let config = self.config_snapshot()?;
+        let source = self.store.load(session_id).await.map_err(map_session_err)?;
+        let settings = load_settings_for_meta(&self.store, &source.meta, config.as_ref()).await?;
+
+        let assistant_index = (assistant_seq - 1) as usize;
+        if assistant_index >= source.messages.len() {
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                ApiErrorCode::NotFound,
+                "message not found",
+            ));
+        }
+        if !matches!(source.messages[assistant_index], CoreMessage::Assistant { .. }) {
+            return Err(ApiError::invalid_argument(
+                "assistant_message_id must refer to an assistant message",
+            ));
+        }
+
+        let mut user_index: Option<usize> = None;
+        let mut user_text: Option<String> = None;
+        for idx in (0..assistant_index).rev() {
+            if let CoreMessage::User { content } = &source.messages[idx] {
+                user_index = Some(idx);
+                user_text = Some(content.first_text().unwrap_or("").to_string());
+                break;
+            }
+        }
+        let Some(user_index) = user_index else {
+            return Err(ApiError::invalid_argument("cannot fork before the first user message"));
+        };
+        let user_text = user_text.unwrap_or_default();
+        if user_text.trim().is_empty() {
+            return Err(ApiError::invalid_argument(
+                "cannot fork: the preceding user message is empty",
+            ));
+        }
+
+        let initial_messages = source.messages[..user_index].to_vec();
+
+        if settings.workspace_root.trim().is_empty() {
+            return Err(ApiError::invalid_argument("workspace_root must not be empty"));
+        }
+        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        tokio::fs::create_dir_all(&workspace_root)
+            .await
+            .map_err(ApiError::internal_error)?;
+
+        let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
+        tools
+            .set_extra_workspace_roots(
+                settings
+                    .extra_workspace_roots
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect(),
+            )
+            .map_err(ApiError::internal_error)?;
+
+        let forked = self
+            .store
+            .create(
+                settings.agent.clone(),
+                Some(settings.model_id.clone()),
+                Some(self.config_path.display().to_string()),
+                Some(settings.workspace_root.clone()),
+                settings.extra_workspace_roots.clone(),
+                initial_messages,
+            )
+            .await
+            .map_err(map_session_err)?;
+
+        let live = LiveSession::from_state(self, forked, settings, tools, false).await?;
+        self.sessions
+            .lock()
+            .await
+            .insert(live.id().to_string(), live.clone());
+
+        let run = live
+            .enqueue_run(
+                &self.runs_dir,
+                api::RunCreateRequest {
+                    input: api::RunInput::Text { text: user_text },
+                    overrides: None,
+                    auto_resume: true,
+                },
+            )
+            .await?;
+
+        Ok(api::ForkSessionResponse {
+            session: live.snapshot().await?,
+            run,
+        })
     }
 
     async fn create_session_inner(&self, req: api::SessionCreateRequest) -> Result<api::Session, ApiError> {
@@ -329,7 +522,15 @@ impl ServerState {
             .map_err(ApiError::internal_error)?;
 
         let messages =
-            build_preamble(&profile, &settings.model_id, &workspace_root, &settings.extra_workspace_roots, &tools).await;
+            build_preamble(
+                &profile,
+                &settings.model_id,
+                &workspace_root,
+                &settings.extra_workspace_roots,
+                &tools,
+                config.skills.enable,
+            )
+            .await;
 
         let mut session = self
             .store
@@ -357,7 +558,7 @@ impl ServerState {
                 .map_err(map_session_err)?;
         }
 
-        let live = LiveSession::from_state(self, session, settings, tools).await?;
+        let live = LiveSession::from_state(self, session, settings, tools, true).await?;
         self.sessions
             .lock()
             .await
@@ -1648,7 +1849,7 @@ impl LiveSession {
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
 
-        let live = Self::from_state(server, session, settings, tools).await?;
+        let live = Self::from_state(server, session, settings, tools, true).await?;
         tracing::info!(
             event = "session.resumed",
             session_id = %live.session_id,
@@ -1664,6 +1865,7 @@ impl LiveSession {
         session: SessionState,
         settings: api::SessionSettings,
         tools: ToolEngine,
+        rebuild_preamble: bool,
     ) -> Result<Arc<Self>, ApiError> {
         let events_api_path = session_events_api_path(&server.store, session.id());
         let settings_path = session_settings_path(&server.store, session.id());
@@ -1714,7 +1916,9 @@ impl LiveSession {
                 .map_err(map_session_err)?;
         }
 
-        live.apply_settings_now(false).await?;
+        if rebuild_preamble {
+            live.apply_settings_now(false).await?;
+        }
 
         if server.runner_enabled {
             let worker = live.clone();
@@ -2105,6 +2309,7 @@ impl LiveSession {
                     &workspace_root,
                     &effective.extra_workspace_roots,
                     &tools_for_run,
+                    config.skills.enable,
                 )
                 .await;
                 replace_preamble(&mut messages, preamble);
@@ -2333,6 +2538,7 @@ impl LiveSession {
             &workspace_root,
             &settings.extra_workspace_roots,
             &tools,
+            config.skills.enable,
         )
         .await;
 
@@ -2559,6 +2765,7 @@ async fn build_preamble(
     workspace_root: &PathBuf,
     extra_workspace_roots: &[String],
     tools: &ToolEngine,
+    skills_enable: bool,
 ) -> Vec<CoreMessage> {
     let extra_workspace_roots: Vec<PathBuf> = extra_workspace_roots
         .iter()
@@ -2571,8 +2778,193 @@ async fn build_preamble(
         .with_model_id(model_id.to_string())
         .with_workspace_root(workspace_root)
         .with_extra_workspace_roots(extra_workspace_roots);
-    if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
-        builder = builder.add_skills(skills);
+    if skills_enable {
+        if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
+            builder = builder.add_skills(skills);
+        }
     }
     builder.build()
+}
+
+fn is_wsl() -> bool {
+    if std::env::var_os("WSL_INTEROP").is_some() || std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        return true;
+    }
+    std::fs::read_to_string("/proc/version")
+        .ok()
+        .map(|v| v.to_lowercase())
+        .is_some_and(|v| v.contains("microsoft") || v.contains("wsl"))
+}
+
+async fn wslpath_to_windows_path(path: &Path) -> Option<String> {
+    let out = Command::new("wslpath")
+        .arg("-w")
+        .arg(path)
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn wsl_unc_path(path: &Path) -> Option<String> {
+    let distro = std::env::var("WSL_DISTRO_NAME").ok()?;
+    let distro = distro.trim();
+    if distro.is_empty() {
+        return None;
+    }
+    let raw = path.to_string_lossy();
+    let win = raw.replace('/', "\\");
+    Some(format!("\\\\wsl$\\{distro}{win}"))
+}
+
+fn spawn_detached(program: &str, args: &[String]) -> Result<(), std::io::Error> {
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    cmd.spawn().map(|_| ())
+}
+
+async fn open_external(root: &Path, target: api::OpenWorkspaceTarget) -> Result<(), ApiError> {
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let meta = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|_| ApiError::not_found("path not found"))?;
+    if !meta.is_dir() {
+        return Err(ApiError::invalid_argument("path must be a directory"));
+    }
+
+    let path = canonical.display().to_string();
+    match target {
+        api::OpenWorkspaceTarget::Vscode => spawn_detached("code", &[path]).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                ApiError::invalid_argument("VS Code CLI `code` not found in PATH")
+            } else {
+                ApiError::internal_error(err)
+            }
+        }),
+        api::OpenWorkspaceTarget::FileManager => {
+            let (program, args): (&str, Vec<String>) = if is_wsl() {
+                let win_path = wslpath_to_windows_path(&canonical)
+                    .await
+                    .or_else(|| wsl_unc_path(&canonical))
+                    .unwrap_or(path);
+                ("explorer.exe", vec![win_path])
+            } else if std::env::consts::OS == "windows" {
+                ("explorer.exe", vec![path])
+            } else if std::env::consts::OS == "macos" {
+                ("open", vec![path])
+            } else {
+                ("xdg-open", vec![path])
+            };
+            spawn_detached(program, &args).map_err(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    ApiError::invalid_argument(format!("file manager launcher not found: {program}"))
+                } else {
+                    ApiError::internal_error(err)
+                }
+            })
+        }
+        api::OpenWorkspaceTarget::Terminal => {
+            if is_wsl() {
+                let distro = std::env::var("WSL_DISTRO_NAME")
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                let mut wt_args: Vec<String> = vec!["wsl.exe".to_string()];
+                if let Some(distro) = distro.clone() {
+                    wt_args.push("-d".to_string());
+                    wt_args.push(distro);
+                }
+                wt_args.push("--cd".to_string());
+                wt_args.push(path.clone());
+
+                match spawn_detached("wt.exe", &wt_args) {
+                    Ok(()) => return Ok(()),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        // fall through
+                    }
+                    Err(err) => return Err(ApiError::internal_error(err)),
+                }
+
+                let mut cmd_args: Vec<String> = vec![
+                    "/c".to_string(),
+                    "start".to_string(),
+                    "".to_string(),
+                    "wsl.exe".to_string(),
+                ];
+                if let Some(distro) = distro {
+                    cmd_args.push("-d".to_string());
+                    cmd_args.push(distro);
+                }
+                cmd_args.push("--cd".to_string());
+                cmd_args.push(path);
+                return spawn_detached("cmd.exe", &cmd_args).map_err(|err| {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        ApiError::invalid_argument("terminal launcher not found: wt.exe/cmd.exe")
+                    } else {
+                        ApiError::internal_error(err)
+                    }
+                });
+            }
+
+            if std::env::consts::OS == "windows" {
+                let wt_args: Vec<String> = vec!["-d".to_string(), path.clone()];
+                match spawn_detached("wt.exe", &wt_args) {
+                    Ok(()) => return Ok(()),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        // fall through
+                    }
+                    Err(err) => return Err(ApiError::internal_error(err)),
+                }
+
+                let cmd_args: Vec<String> = vec![
+                    "/c".to_string(),
+                    "start".to_string(),
+                    "".to_string(),
+                    "cmd.exe".to_string(),
+                    "/K".to_string(),
+                    format!("cd /d {path}"),
+                ];
+                return spawn_detached("cmd.exe", &cmd_args).map_err(ApiError::internal_error);
+            }
+
+            if std::env::consts::OS == "macos" {
+                let args: Vec<String> = vec!["-a".to_string(), "Terminal".to_string(), path];
+                return spawn_detached("open", &args).map_err(|err| {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        ApiError::invalid_argument("terminal launcher not found: open")
+                    } else {
+                        ApiError::internal_error(err)
+                    }
+                });
+            }
+
+            let candidates: [(&str, &[&str]); 4] = [
+                ("x-terminal-emulator", &["--working-directory"]),
+                ("gnome-terminal", &["--working-directory"]),
+                ("xfce4-terminal", &["--working-directory"]),
+                ("konsole", &["--workdir"]),
+            ];
+            for (program, prefix) in candidates {
+                let mut args = prefix.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+                args.push(path.clone());
+                match spawn_detached(program, &args) {
+                    Ok(()) => return Ok(()),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(err) => return Err(ApiError::internal_error(err)),
+                }
+            }
+
+            Err(ApiError::invalid_argument(
+                "terminal launcher not found (tried x-terminal-emulator/gnome-terminal/xfce4-terminal/konsole)",
+            ))
+        }
+    }
 }

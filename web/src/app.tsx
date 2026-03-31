@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, FolderPlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import type {
   Capabilities,
+  FsEntry,
   Message,
   Session,
   SessionSummary,
@@ -348,18 +349,149 @@ function renderToolCalls(
   );
 }
 
+function FolderPicker({
+  path,
+  onPathChange,
+}: {
+  path: string;
+  onPathChange: (next: string) => void;
+}) {
+  const [entries, setEntries] = useState<FsEntry[]>([]);
+  const [parent, setParent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadSeq, setReloadSeq] = useState(0);
+  const skipNextFetchPathRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const handle = window.setTimeout(() => {
+      if (cancelled) return;
+      async function load() {
+        if (skipNextFetchPathRef.current === path) {
+          skipNextFetchPathRef.current = null;
+          return;
+        }
+
+        setLoading(true);
+        setError(null);
+        try {
+          const res = await api.fsList(path.trim() ? path.trim() : undefined);
+          if (cancelled) return;
+          setEntries(res.entries ?? []);
+          setParent(res.parent ?? null);
+          setLoading(false);
+          if (res.path && res.path !== path) {
+            skipNextFetchPathRef.current = res.path;
+            onPathChange(res.path);
+          }
+        } catch (err) {
+          if (cancelled) return;
+          setLoading(false);
+          const msg =
+            err instanceof ApiError
+              ? err.message
+              : err instanceof Error
+                ? err.message
+                : "Failed to list folders";
+          setError(msg);
+        }
+      }
+      void load();
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [path, reloadSeq, onPathChange]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-2 py-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          aria-label="Up"
+          title="Up"
+          disabled={!parent || loading}
+          onClick={() => {
+            if (!parent) return;
+            onPathChange(parent);
+          }}
+        >
+          <ArrowLeft className="h-4 w-4 text-zinc-600" />
+        </Button>
+        <div
+          className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-800"
+          title={path}
+        >
+          {path || "…"}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          aria-label="Refresh"
+          title="Refresh"
+          disabled={loading}
+          onClick={() => setReloadSeq((v) => v + 1)}
+        >
+          <RefreshCcw className="h-4 w-4 text-zinc-600" />
+        </Button>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="max-h-[320px] overflow-auto rounded-md border border-zinc-200 bg-white">
+        {loading ? (
+          <div className="px-3 py-6 text-center text-xs text-zinc-500">
+            Loading…
+          </div>
+        ) : entries.length ? (
+          <div className="divide-y divide-zinc-200">
+            {entries.map((e) => (
+              <button
+                key={e.path}
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-50"
+                onClick={() => onPathChange(e.path)}
+              >
+                <ChevronRight className="h-4 w-4 shrink-0 text-zinc-500" />
+                <div className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-800">
+                  {e.name}
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="px-3 py-6 text-center text-xs text-zinc-500">
+            No folders
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MessageRow({
   msg,
   toolDurationsMs,
   thinkingDurationsMs,
   assistantDurationsMs,
   onMermaidError,
+  onFork,
 }: {
   msg: Message;
   toolDurationsMs: Record<string, number>;
   thinkingDurationsMs: Record<string, number>;
   assistantDurationsMs: Record<string, number>;
   onMermaidError?: (info: MermaidErrorInfo) => void;
+  onFork?: (assistantMessageId: string) => void;
 }) {
   if (msg.role === "user") {
     const wide = hasMermaidFence(msg.content);
@@ -418,6 +550,19 @@ function MessageRow({
                 onClick={() => copyToClipboard(msg.content ?? "")}
               >
                 <Copy className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={!onFork}
+                className={[
+                  "rounded-md p-1 text-zinc-500",
+                  onFork ? "hover:bg-zinc-100" : "cursor-not-allowed opacity-40",
+                ].join(" ")}
+                aria-label="Fork session"
+                title="Fork session from here"
+                onClick={() => onFork?.(msg.id)}
+              >
+                <GitFork className="h-4 w-4" />
               </button>
               <button
                 type="button"
@@ -521,6 +666,8 @@ export default function App() {
 
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [skillsEnabled, setSkillsEnabled] = useState<boolean | null>(null);
+  const [skillsEnabledSaving, setSkillsEnabledSaving] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [mcpSaving, setMcpSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -548,11 +695,11 @@ export default function App() {
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
-  const [workspaceCreateDraft, setWorkspaceCreateDraft] = useState("");
+  const [workspacePickerPath, setWorkspacePickerPath] = useState("");
   const [workspaceCreateSaving, setWorkspaceCreateSaving] = useState(false);
 
   const [addFolderOpen, setAddFolderOpen] = useState(false);
-  const [addFolderDraft, setAddFolderDraft] = useState("");
+  const [extraFolderPickerPath, setExtraFolderPickerPath] = useState("");
 
   const [authError, setAuthError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -1000,7 +1147,7 @@ export default function App() {
       const s = await api.createSession({ settings: { workspace_root: trimmed } });
       await refreshSessions();
       setWorkspaceCreateOpen(false);
-      setWorkspaceCreateDraft("");
+      setWorkspacePickerPath("");
       selectSession(s.id);
     } catch (err) {
       handleApiError(err);
@@ -1105,8 +1252,12 @@ export default function App() {
 
   async function openSkills() {
     try {
-      const res = await api.listGlobalSkills();
-      setSkills(res.items);
+      const [skillsRes, cfgRes] = await Promise.all([
+        api.listGlobalSkills(),
+        api.getConfigSkills(),
+      ]);
+      setSkills(skillsRes.items);
+      setSkillsEnabled(cfgRes.enable);
       setSkillsOpen(true);
     } catch (err) {
       handleApiError(err);
@@ -1162,6 +1313,36 @@ export default function App() {
     const existing = session.settings.extra_workspace_roots ?? [];
     const next = Array.from(new Set([...existing, trimmed]));
     await patchSession({ extra_workspace_roots: next });
+  }
+
+  async function removeExtraFolder(path: string) {
+    if (!session || !selectedId) return;
+    const next = (session.settings.extra_workspace_roots ?? []).filter((p) => p !== path);
+    await patchSession({ extra_workspace_roots: next });
+  }
+
+  async function openWorkspace(target: "vscode" | "file_manager" | "terminal") {
+    if (!selectedId) return;
+    try {
+      await api.openWorkspace(selectedId, target);
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function forkSessionFromAssistant(assistantMessageId: string) {
+    if (!selectedId) return;
+    try {
+      const res: any = await api.forkSession(selectedId, assistantMessageId);
+      const newId = res?.session?.id;
+      if (typeof newId !== "string" || !newId.trim()) {
+        throw new Error("Invalid fork response");
+      }
+      await refreshSessions();
+      selectSession(newId);
+    } catch (err) {
+      handleApiError(err);
+    }
   }
 
   useEffect(() => {
@@ -1480,7 +1661,7 @@ export default function App() {
                     className="h-7 w-7"
                     aria-label="Add workspace folder"
                     onClick={() => {
-                      setWorkspaceCreateDraft("");
+                      setWorkspacePickerPath("");
                       setWorkspaceCreateOpen(true);
                     }}
                   >
@@ -1810,7 +1991,7 @@ export default function App() {
                   size="sm"
                   className="justify-start gap-2"
                   onClick={() => {
-                    setAddFolderDraft("");
+                    setExtraFolderPickerPath(session.settings.workspace_root ?? "");
                     setAddFolderOpen(true);
                   }}
                 >
@@ -1836,6 +2017,7 @@ export default function App() {
                     thinkingDurationsMs={thinkingDurationsMs}
                     assistantDurationsMs={assistantDurationsMs}
                     onMermaidError={handleMermaidError}
+                    onFork={forkSessionFromAssistant}
                   />
                 ))}
 
@@ -1919,6 +2101,15 @@ export default function App() {
                           </button>
                           <button
                             type="button"
+                            disabled
+                            className="cursor-not-allowed rounded-md p-1 text-zinc-500 opacity-40"
+                            aria-label="Fork session"
+                            title="Fork session from here"
+                          >
+                            <GitFork className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
                             className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
                             aria-label="Menu"
                             title="Menu"
@@ -1963,48 +2154,87 @@ export default function App() {
 
           <div className="border-t border-zinc-200 bg-white px-4 py-3">
             <div className="mx-auto w-full max-w-4xl">
-              <div className="flex items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
-                <Textarea
-                  ref={composerRef}
-                  value={composerText}
-                  onChange={(e) => setComposerText(e.target.value)}
-                  placeholder="Ask anything…"
-                  className="min-h-[44px] max-h-[240px] resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      onSend();
-                    }
-                  }}
-                />
-                {showInterrupt ? (
-                  <Button
-                    size="icon"
-                    aria-label="Interrupt"
-                    className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
-                    onClick={async () => {
-                      if (!cancellableRunId) return;
-                      try {
-                        await api.cancelRun(cancellableRunId);
-                        await refreshSessions();
-                      } catch (err) {
-                        handleApiError(err);
+              <div className="flex items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
+                  <Textarea
+                    ref={composerRef}
+                    value={composerText}
+                    onChange={(e) => setComposerText(e.target.value)}
+                    placeholder="Ask anything…"
+                    className="min-h-[44px] max-h-[240px] min-w-0 flex-1 resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        onSend();
                       }
                     }}
-                  >
-                    <Square className="h-4 w-4" />
-                  </Button>
-                ) : (
+                  />
+
+                  {showInterrupt ? (
+                    <Button
+                      size="icon"
+                      aria-label="Interrupt"
+                      className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
+                      onClick={async () => {
+                        if (!cancellableRunId) return;
+                        try {
+                          await api.cancelRun(cancellableRunId);
+                          await refreshSessions();
+                        } catch (err) {
+                          handleApiError(err);
+                        }
+                      }}
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="icon"
+                      aria-label="Send"
+                      onClick={onSend}
+                      disabled={!composerHasText}
+                      className="shrink-0 rounded-full"
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm">
                   <Button
+                    variant="ghost"
                     size="icon"
-                    aria-label="Send"
-                    onClick={onSend}
-                    disabled={!composerHasText}
-                    className="shrink-0 rounded-full"
+                    className="h-9 w-9"
+                    aria-label="Open workspace in VS Code"
+                    title="Open workspace in VS Code"
+                    disabled={!session}
+                    onClick={() => openWorkspace("vscode")}
                   >
-                    <ArrowUp className="h-4 w-4" />
+                    <Code className="h-4 w-4 text-blue-600" />
                   </Button>
-                )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    aria-label="Open workspace in file manager"
+                    title="Open workspace in file manager"
+                    disabled={!session}
+                    onClick={() => openWorkspace("file_manager")}
+                  >
+                    <FolderOpen className="h-4 w-4 text-violet-600" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    aria-label="Open workspace in terminal"
+                    title="Open workspace in terminal"
+                    disabled={!session}
+                    onClick={() => openWorkspace("terminal")}
+                  >
+                    <Terminal className="h-4 w-4 text-emerald-600" />
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
@@ -2041,24 +2271,54 @@ export default function App() {
             <DialogTitle>Skills</DialogTitle>
             <DialogDescription>Discovered from skills roots</DialogDescription>
           </DialogHeader>
-          <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
-            {skills.length ? (
-              <div className="divide-y divide-zinc-200">
-                {skills.map((s) => (
-                  <div key={s.id} className="px-3 py-2">
-                    <div className="text-sm font-medium">{s.name}</div>
-                    <div className="mt-0.5 text-xs text-zinc-600">
-                      <span className="font-mono">{s.id}</span>
-                      {s.description ? ` · ${s.description}` : ""}
+          <div className="space-y-2">
+            <label className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm">
+              <div className="min-w-0">
+                <div className="truncate text-sm">Enable skills</div>
+                <div className="mt-0.5 truncate text-xs text-zinc-600">
+                  Global setting (kiliax.yaml)
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={skillsEnabled ?? false}
+                disabled={skillsEnabled == null || skillsEnabledSaving}
+                onChange={async (e) => {
+                  const next = e.target.checked;
+                  const prev = skillsEnabled;
+                  setSkillsEnabled(next);
+                  setSkillsEnabledSaving(true);
+                  try {
+                    await api.patchConfigSkills({ enable: next });
+                  } catch (err) {
+                    setSkillsEnabled(prev);
+                    handleApiError(err);
+                  } finally {
+                    setSkillsEnabledSaving(false);
+                  }
+                }}
+              />
+            </label>
+
+            <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
+              {skills.length ? (
+                <div className="divide-y divide-zinc-200">
+                  {skills.map((s) => (
+                    <div key={s.id} className="px-3 py-2">
+                      <div className="text-sm font-medium">{s.name}</div>
+                      <div className="mt-0.5 text-xs text-zinc-600">
+                        <span className="font-mono">{s.id}</span>
+                        {s.description ? ` · ${s.description}` : ""}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="px-3 py-6 text-center text-sm text-zinc-500">
-                No skills
-              </div>
-            )}
+                  ))}
+                </div>
+              ) : (
+                <div className="px-3 py-6 text-center text-sm text-zinc-500">
+                  No skills
+                </div>
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -2233,22 +2493,27 @@ export default function App() {
           <DialogHeader>
             <DialogTitle>Add workspace folder</DialogTitle>
             <DialogDescription>
-              Creates a new session in this workspace root (absolute path).
+              Creates a new session in this workspace root.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <Input
-              value={workspaceCreateDraft}
-              onChange={(e) => setWorkspaceCreateDraft(e.target.value)}
-              placeholder="/path/to/dir"
-            />
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-zinc-600">Path</div>
+              <Input
+                value={workspacePickerPath}
+                onChange={(e) => setWorkspacePickerPath(e.target.value)}
+                placeholder="/path/to/workspace"
+                className="font-mono text-xs"
+              />
+            </div>
+            <FolderPicker path={workspacePickerPath} onPathChange={setWorkspacePickerPath} />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setWorkspaceCreateOpen(false)}>
                 Cancel
               </Button>
               <Button
-                onClick={() => createSessionWithWorkspaceRoot(workspaceCreateDraft)}
-                disabled={!workspaceCreateDraft.trim() || workspaceCreateSaving}
+                onClick={() => createSessionWithWorkspaceRoot(workspacePickerPath)}
+                disabled={!workspacePickerPath.trim() || workspaceCreateSaving}
               >
                 {workspaceCreateSaving ? "Creating…" : "Create"}
               </Button>
@@ -2271,30 +2536,38 @@ export default function App() {
                 <div className="font-medium text-zinc-600">Existing</div>
                 <div className="mt-1 space-y-1">
                   {session.settings.extra_workspace_roots.map((p) => (
-                    <div key={p} className="truncate font-mono">
-                      {p}
+                    <div key={p} className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 truncate font-mono text-xs" title={p}>
+                        {p}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        aria-label="Remove folder"
+                        title="Remove folder"
+                        onClick={() => removeExtraFolder(p)}
+                      >
+                        <Trash2 className="h-4 w-4 text-zinc-500" />
+                      </Button>
                     </div>
                   ))}
                 </div>
               </div>
             ) : null}
-            <Input
-              value={addFolderDraft}
-              onChange={(e) => setAddFolderDraft(e.target.value)}
-              placeholder="/path/to/dir"
-            />
+            <FolderPicker path={extraFolderPickerPath} onPathChange={setExtraFolderPickerPath} />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setAddFolderOpen(false)}>
                 Cancel
               </Button>
               <Button
                 onClick={async () => {
-                  const path = addFolderDraft.trim();
+                  const path = extraFolderPickerPath.trim();
                   if (!path) return;
                   await addExtraFolder(path);
                   setAddFolderOpen(false);
                 }}
-                disabled={!addFolderDraft.trim() || !session}
+                disabled={!extraFolderPickerPath.trim() || !session}
               >
                 Add
               </Button>

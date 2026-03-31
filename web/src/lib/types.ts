@@ -115,6 +115,10 @@ export interface ConfigUpdateRequest {
   yaml: string;
 }
 
+export interface ConfigSkillsResponse {
+  enable: boolean;
+}
+
 export interface SkillSummary {
   id: string;
   name: string;
@@ -124,6 +128,20 @@ export interface SkillSummary {
 export interface SkillListResponse {
   items: SkillSummary[];
 }
+
+export interface FsEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface FsListResponse {
+  path: string;
+  parent?: string | null;
+  entries: FsEntry[];
+}
+
+export type OpenWorkspaceTarget = "vscode" | "file_manager" | "terminal";
 
 export type RunInput = { type: "text"; text: string };
 
