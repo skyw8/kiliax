@@ -116,6 +116,23 @@ function fmtDurationCompact(durationMs: number): string {
   return `${ms}ms`;
 }
 
+function fmtTokenUsage(usage?: {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_tokens?: number | null;
+} | null): string | null {
+  if (!usage) return null;
+  const parts = [
+    `Tokens: in ${usage.prompt_tokens}`,
+    `out ${usage.completion_tokens}`,
+    `total ${usage.total_tokens}`,
+  ];
+  const cached = usage.cached_tokens ?? null;
+  if (typeof cached === "number" && cached > 0) parts.push(`cached ${cached}`);
+  return parts.join(" · ");
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   const value = text ?? "";
   try {
@@ -576,6 +593,7 @@ function MessageRow({
   if (msg.role === "assistant") {
     const wide = hasMermaidFence(msg.content);
     const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[78%]";
+    const usageText = fmtTokenUsage(msg.usage);
     return (
       <div className="flex justify-start">
         <div className={`${bubbleWidth} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}>
@@ -607,6 +625,11 @@ function MessageRow({
             </details>
           ) : null}
           {renderToolCalls(msg.tool_calls ?? [], toolDurationsMs)}
+          {usageText ? (
+            <div className="mt-2 truncate text-xs text-zinc-500" title={usageText}>
+              {usageText}
+            </div>
+          ) : null}
 
           <div className="mt-2 border-t border-zinc-200 pt-1">
             <div className="flex items-center gap-1">

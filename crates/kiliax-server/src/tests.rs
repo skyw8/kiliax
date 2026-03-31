@@ -4,6 +4,8 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
 use kiliax_core::config::{Config, ProviderConfig};
+use kiliax_core::llm::{Message, TokenUsage, UserMessageContent};
+use kiliax_core::session::FileSessionStore;
 use kiliax_core::session::SessionId;
 use tempfile::TempDir;
 use tower::ServiceExt as _;
@@ -204,6 +206,71 @@ async fn web_serves_dist_and_spa_fallback() {
     let (status, body) = read_text(resp).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "HELLO_ASSET");
+}
+
+#[tokio::test]
+async fn messages_include_usage_when_present() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let store = FileSessionStore::project(dir.path());
+    let mut session = store
+        .create(
+            "general",
+            Some("test/test-model".to_string()),
+            None,
+            Some(dir.path().to_string_lossy().to_string()),
+            Vec::new(),
+            vec![Message::User {
+                content: UserMessageContent::Text("hello".to_string()),
+            }],
+        )
+        .await
+        .expect("create session");
+
+    store
+        .record_message(
+            &mut session,
+            Message::Assistant {
+                content: Some("hi".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: Some(TokenUsage {
+                    prompt_tokens: 19,
+                    completion_tokens: 21,
+                    total_tokens: 40,
+                    cached_tokens: Some(10),
+                }),
+            },
+        )
+        .await
+        .expect("record message");
+
+    let uri = format!("/v1/sessions/{}/messages?limit=10", session.id());
+    let resp = app.clone().oneshot(req_empty(Method::GET, &uri)).await.unwrap();
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let items = body
+        .get("items")
+        .and_then(|v| v.as_array())
+        .expect("items array");
+    let assistant = items
+        .iter()
+        .find(|m| m.get("role").and_then(|v| v.as_str()) == Some("assistant"))
+        .expect("assistant message");
+    let usage = assistant.get("usage").expect("usage");
+
+    assert_eq!(usage.get("prompt_tokens").and_then(|v| v.as_u64()), Some(19));
+    assert_eq!(
+        usage.get("completion_tokens").and_then(|v| v.as_u64()),
+        Some(21)
+    );
+    assert_eq!(usage.get("total_tokens").and_then(|v| v.as_u64()), Some(40));
+    assert_eq!(
+        usage.get("cached_tokens").and_then(|v| v.as_u64()),
+        Some(10)
+    );
 }
 
 #[tokio::test]

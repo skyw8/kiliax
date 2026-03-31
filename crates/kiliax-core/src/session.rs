@@ -670,6 +670,7 @@ mod tests {
                     content: Some("hi".to_string()),
                     reasoning_content: None,
                     tool_calls: Vec::new(),
+                    usage: None,
                 },
             )
             .await

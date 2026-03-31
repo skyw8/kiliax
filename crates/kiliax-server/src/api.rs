@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use kiliax_core::config::Config as KiliaxConfig;
+use kiliax_core::llm::TokenUsage;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionListResponse {
@@ -382,6 +383,8 @@ pub enum Message {
         reasoning_content: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCall>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
     },
     Tool {
         id: String,

@@ -22,10 +22,10 @@ minimal
 ### crates/kiliax-core (core library)
 
 - Config + model routing: `crates/kiliax-core/src/config.rs`
-- OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` injection: `crates/kiliax-core/src/llm.rs`
+- OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` + per-call token `usage` capture: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly (env/tools/skills/project `AGENTS.md`): `crates/kiliax-core/src/prompt.rs`
-- Agent runtime (tool loop, parallel tool calls, streaming events): `crates/kiliax-core/src/runtime.rs`
-- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + `prompt_cache_key`: `crates/kiliax-core/src/session.rs`
+- Agent runtime (tool loop, parallel tool calls, streaming events, attach `usage` to assistant messages): `crates/kiliax-core/src/runtime.rs`
+- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
 - Tool engine + builtin tools + MCP + skills discovery (stable ordering): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-otel (OpenTelemetry)
@@ -35,14 +35,14 @@ minimal
 ### crates/kiliax-cli (TUI)
 
 - Ratatui UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
-- App state + render pipeline: `crates/kiliax-cli/src/app.rs`
+- App state + render pipeline (+ per-call token usage display): `crates/kiliax-cli/src/app.rs`
 - Server daemon control (start/stop/restart): `crates/kiliax-cli/src/daemon.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
 - Axum routes + auth + static web hosting (serves `web/dist`): `crates/kiliax-server/src/main.rs`
-- Session lifecycle + settings (`settings.json`) + run queue + WS/SSE events: `crates/kiliax-server/src/state.rs`
-- REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*`)
+- Session lifecycle + settings (`settings.json`) + run queue + WS/SSE events (+ message `usage` passthrough): `crates/kiliax-server/src/state.rs`
+- REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
 - Key endpoints:
   - `POST /v1/sessions/{id}/fork` (fork at an assistant message and rerun the preceding user turn)
   - `GET /v1/config/providers` + `PATCH /v1/config/providers` (providers/models/api_key)
@@ -54,9 +54,9 @@ minimal
 
 ### web (React UI)
 
-- Main UI + WS streaming + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api_key + agent max steps + raw YAML): `web/src/app.tsx`
+- Main UI + WS streaming + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api_key + agent max steps + raw YAML): `web/src/app.tsx`
 - API client: `web/src/lib/api.ts`
-- Types: `web/src/lib/types.ts`
+- Types (includes message `usage`): `web/src/lib/types.ts`
 
 ## constraints
 **所有界面语言默认为英文，包括任何提示、输出等**

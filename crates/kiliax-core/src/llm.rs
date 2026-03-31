@@ -407,6 +407,19 @@ impl LlmClient {
                 inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
             }
             inject_prompt_cache_fields(&mut body, self.prompt_cache_key.as_deref());
+            if self.route.provider.eq_ignore_ascii_case("openai") {
+                if let Some(obj) = body.as_object_mut() {
+                    let stream_options = obj.entry("stream_options".to_string()).or_insert_with(
+                        || serde_json::Value::Object(serde_json::Map::new()),
+                    );
+                    if let Some(opts) = stream_options.as_object_mut() {
+                        opts.insert(
+                            "include_usage".to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                    }
+                }
+            }
 
             let cfg = self.client.config();
             let http = reqwest::Client::new();
@@ -911,6 +924,31 @@ pub enum UserContentPart {
     },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u32>,
+}
+
+impl TokenUsage {
+    pub fn from_completion_usage(usage: &CompletionUsage) -> Self {
+        let cached = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .unwrap_or(0) as u32;
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            cached_tokens: (cached > 0).then_some(cached),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
@@ -930,6 +968,8 @@ pub enum Message {
         reasoning_content: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCall>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
     },
     Tool {
         tool_call_id: String,
@@ -1067,8 +1107,8 @@ async fn to_openai_message(msg: &Message) -> Result<ChatCompletionRequestMessage
         }
         Message::Assistant {
             content,
-            reasoning_content: _,
             tool_calls,
+            ..
         } => {
             let tool_calls = if tool_calls.is_empty() {
                 None
@@ -1337,6 +1377,7 @@ fn chat_response_from_byot(
         reasoning_content.or(thinking).or(reasoning)
     };
 
+    let message_usage = usage.as_ref().map(TokenUsage::from_completion_usage);
     Ok(ChatResponse {
         id,
         created,
@@ -1345,6 +1386,7 @@ fn chat_response_from_byot(
             content,
             reasoning_content,
             tool_calls,
+            usage: message_usage,
         },
         finish_reason,
         usage,
@@ -1482,6 +1524,7 @@ mod tests {
                 name: "read".to_string(),
                 arguments: "{\"path\":\"README.md\"}".to_string(),
             }],
+            usage: None,
         };
         let openai = to_openai_message(&msg).await.unwrap();
         let ChatCompletionRequestMessage::Assistant(a) = openai else {

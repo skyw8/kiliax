@@ -68,6 +68,13 @@ export interface ToolCall {
   arguments: string;
 }
 
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_tokens?: number | null;
+}
+
 export type Message = UserMessage | AssistantMessage | ToolMessage;
 
 export interface UserMessage {
@@ -84,6 +91,7 @@ export interface AssistantMessage {
   content: string;
   reasoning_content?: string | null;
   tool_calls?: ToolCall[];
+  usage?: TokenUsage | null;
 }
 
 export interface ToolMessage {

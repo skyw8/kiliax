@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use kiliax_core::{
     agents::AgentProfile,
-    llm::{Message, UserContentPart, UserMessageContent},
+    llm::{Message, TokenUsage, UserContentPart, UserMessageContent},
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions},
     session::{FileSessionStore, SessionState},
 };
@@ -1711,7 +1711,10 @@ impl App {
                     .record_message(&mut self.session, message.clone())
                     .await?;
 
-                if let Message::Assistant { content, .. } = message {
+                if let Message::Assistant {
+                    content, usage, ..
+                } = message
+                {
                     self.close_thinking_stream();
 
                     let content = content.unwrap_or_default();
@@ -1731,6 +1734,10 @@ impl App {
                             self.pending_history_lines
                                 .extend(stream.finalize_and_drain());
                         }
+                    }
+                    if let Some(usage) = usage {
+                        self.pending_history_lines
+                            .push(render_token_usage_line(usage));
                     }
                     self.assistant_stream = None;
                     self.step_started_at = None;
@@ -2239,6 +2246,20 @@ fn turn_divider_marker(elapsed: Duration, output_tokens: u64) -> Line<'static> {
         elapsed.as_millis(),
         output_tokens
     )))
+}
+
+fn render_token_usage_line(usage: TokenUsage) -> Line<'static> {
+    let mut text = format!(
+        "Tokens: in {} · out {} · total {}",
+        usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+    );
+    if let Some(cached) = usage.cached_tokens.filter(|v| *v > 0) {
+        text.push_str(&format!(" · cached {cached}"));
+    }
+
+    let mut line = Line::from(Span::from(text));
+    line.style = Style::default().dim();
+    line
 }
 
 fn render_thinking_start_line(step: usize) -> Line<'static> {

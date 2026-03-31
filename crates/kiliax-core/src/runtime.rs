@@ -7,7 +7,8 @@ use crate::agents::{AgentKind, AgentProfile};
 use async_openai::types::FinishReason;
 
 use crate::llm::{
-    ChatRequest, ChatStreamChunk, LlmClient, LlmError, Message, ToolCall, ToolCallDelta, ToolChoice,
+    ChatRequest, ChatStreamChunk, LlmClient, LlmError, Message, TokenUsage, ToolCall,
+    ToolCallDelta, ToolChoice,
 };
 use crate::telemetry;
 use crate::tools::{policy, tool_parallelism, ToolEngine, ToolError, ToolParallelism};
@@ -817,6 +818,7 @@ fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
                 content,
                 reasoning_content,
                 tool_calls,
+                usage,
             } if !tool_calls.is_empty() => {
                 let expected_ids: Vec<String> =
                     tool_calls.iter().map(|c| c.id.clone()).collect();
@@ -824,6 +826,7 @@ fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
                     content,
                     reasoning_content,
                     tool_calls,
+                    usage,
                 });
 
                 let mut segment_tool_msgs: Vec<Message> = Vec::new();
@@ -928,6 +931,7 @@ async fn drive_stream_step(
     let mut assistant_reasoning = String::new();
     let mut tool_calls: BTreeMap<u32, ToolCallBuf> = BTreeMap::new();
     let mut finish_reason = None;
+    let mut last_usage = None;
 
     loop {
         let item = tokio::select! {
@@ -941,7 +945,16 @@ async fn drive_stream_step(
         };
         let chunk = item?;
 
-        if let Some(delta) = chunk.thinking_delta {
+        let ChatStreamChunk {
+            content_delta,
+            thinking_delta,
+            tool_calls: tool_call_deltas,
+            finish_reason: chunk_finish_reason,
+            usage,
+            ..
+        } = chunk;
+
+        if let Some(delta) = thinking_delta {
             assistant_reasoning.push_str(&delta);
             if tx
                 .send(Ok(AgentEvent::AssistantThinkingDelta { delta }))
@@ -952,7 +965,7 @@ async fn drive_stream_step(
             }
         }
 
-        if let Some(delta) = chunk.content_delta {
+        if let Some(delta) = content_delta {
             assistant_content.push_str(&delta);
             if tx
                 .send(Ok(AgentEvent::AssistantDelta { delta }))
@@ -963,17 +976,19 @@ async fn drive_stream_step(
             }
         }
 
-        if !chunk.tool_calls.is_empty() {
-            for tc in chunk.tool_calls {
-                tool_calls.entry(tc.index).or_default();
-                if let Some(buf) = tool_calls.get_mut(&tc.index) {
-                    merge_tool_call_delta(buf, tc);
-                }
+        for tc in tool_call_deltas {
+            tool_calls.entry(tc.index).or_default();
+            if let Some(buf) = tool_calls.get_mut(&tc.index) {
+                merge_tool_call_delta(buf, tc);
             }
         }
 
-        if chunk.finish_reason.is_some() {
-            finish_reason = chunk.finish_reason;
+        if chunk_finish_reason.is_some() {
+            finish_reason = chunk_finish_reason;
+        }
+
+        if let Some(usage) = usage {
+            last_usage = Some(usage);
         }
     }
 
@@ -1002,6 +1017,7 @@ async fn drive_stream_step(
             Some(assistant_reasoning)
         },
         tool_calls: resolved_calls.clone(),
+        usage: last_usage.as_ref().map(TokenUsage::from_completion_usage),
     };
 
     Ok(StreamStepOutput {
@@ -1036,6 +1052,7 @@ mod tests {
                         arguments: "{}".to_string(),
                     },
                 ],
+                usage: None,
             },
             Message::Tool {
                 tool_call_id: "b".to_string(),
@@ -1049,6 +1066,7 @@ mod tests {
                 content: Some("done".to_string()),
                 reasoning_content: None,
                 tool_calls: Vec::new(),
+                usage: None,
             },
         ];
 
@@ -1081,11 +1099,13 @@ mod tests {
                     name: "t".to_string(),
                     arguments: "{}".to_string(),
                 }],
+                usage: None,
             },
             Message::Assistant {
                 content: Some("next".to_string()),
                 reasoning_content: None,
                 tool_calls: Vec::new(),
+                usage: None,
             },
         ];
 
@@ -1115,6 +1135,7 @@ mod tests {
                         arguments: "{}".to_string(),
                     },
                 ],
+                usage: None,
             },
             Message::Tool {
                 tool_call_id: "a".to_string(),
@@ -1131,6 +1152,7 @@ mod tests {
                 content: Some("done".to_string()),
                 reasoning_content: None,
                 tool_calls: Vec::new(),
+                usage: None,
             },
         ];
 
@@ -1215,6 +1237,56 @@ mod tests {
         assert_eq!(tool_calls[0].name, "read");
         assert_eq!(tool_calls[0].arguments, "{\"path\":\"README.md\"}");
         assert_eq!(out.finish_reason, Some(FinishReason::Stop));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_attaches_usage_from_final_chunk() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+
+        let usage = serde_json::from_value::<async_openai::types::CompletionUsage>(
+            serde_json::json!({
+                "prompt_tokens": 19,
+                "completion_tokens": 21,
+                "total_tokens": 40,
+                "prompt_tokens_details": { "cached_tokens": 10 }
+            }),
+        )
+        .unwrap();
+
+        let chunks = vec![
+            Ok(ChatStreamChunk {
+                id: "chat_1".to_string(),
+                created: 0,
+                model: "m".to_string(),
+                content_delta: Some("hello".to_string()),
+                thinking_delta: None,
+                tool_calls: Vec::new(),
+                finish_reason: None,
+                usage: None,
+            }),
+            Ok(ChatStreamChunk {
+                id: "chat_1".to_string(),
+                created: 0,
+                model: "m".to_string(),
+                content_delta: None,
+                thinking_delta: None,
+                tool_calls: Vec::new(),
+                finish_reason: Some(FinishReason::Stop),
+                usage: Some(usage),
+            }),
+        ];
+
+        let stream = tokio_stream::iter(chunks);
+        let out = drive_stream_step(0, stream, &tx).await.unwrap();
+
+        let Message::Assistant { usage, .. } = out.assistant else {
+            panic!("expected assistant message");
+        };
+        let usage = usage.expect("usage");
+        assert_eq!(usage.prompt_tokens, 19);
+        assert_eq!(usage.completion_tokens, 21);
+        assert_eq!(usage.total_tokens, 40);
+        assert_eq!(usage.cached_tokens, Some(10));
     }
 
     #[tokio::test(flavor = "current_thread")]

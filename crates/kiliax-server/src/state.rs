@@ -1685,6 +1685,7 @@ fn map_core_message_to_api(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<api
             content,
             reasoning_content,
             tool_calls,
+            usage,
         } => Some(api::Message::Assistant {
             id,
             created_at,
@@ -1698,6 +1699,7 @@ fn map_core_message_to_api(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<api
                     arguments: c.arguments,
                 })
                 .collect(),
+            usage,
         }),
         CoreMessage::Tool {
             tool_call_id,
@@ -1728,6 +1730,7 @@ fn map_core_message_to_api_event_message(
             content,
             reasoning_content,
             tool_calls,
+            usage,
         } => Some(api::Message::Assistant {
             id,
             created_at,
@@ -1741,6 +1744,7 @@ fn map_core_message_to_api_event_message(
                     arguments: c.arguments,
                 })
                 .collect(),
+            usage,
         }),
         CoreMessage::Tool {
             tool_call_id,
@@ -2874,6 +2878,7 @@ impl LiveSession {
                         content: String::new(),
                         reasoning_content: None,
                         tool_calls: Vec::new(),
+                        usage: None,
                     });
                 self.emit_event(api::Event {
                     event_id: self.alloc_event_id(),
