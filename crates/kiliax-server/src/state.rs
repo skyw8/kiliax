@@ -1034,34 +1034,6 @@ impl ServerState {
         live.cancel_run(&self.runs_dir, run_id).await?;
         self.get_run(run_id).await
     }
-
-    pub async fn edit_user_message(
-        &self,
-        session_id: &SessionId,
-        user_message_id: u64,
-        req: api::MessageEditRequest,
-    ) -> Result<api::Run, ApiError> {
-        let live = self
-            .get_live(session_id.as_str())
-            .await
-            .ok_or_else(|| ApiError::session_not_live("session is archived"))?;
-        live.edit_user_message(&self.runs_dir, user_message_id, req.content)
-            .await
-    }
-
-    pub async fn regenerate_assistant_message(
-        &self,
-        session_id: &SessionId,
-        assistant_message_id: u64,
-    ) -> Result<api::Run, ApiError> {
-        let live = self
-            .get_live(session_id.as_str())
-            .await
-            .ok_or_else(|| ApiError::session_not_live("session is archived"))?;
-        live.regenerate_assistant_message(&self.runs_dir, assistant_message_id)
-            .await
-    }
-
     pub async fn get_messages(
         &self,
         session_id: &SessionId,
@@ -1202,13 +1174,8 @@ impl ServerState {
         &self,
         session_id: &SessionId,
     ) -> Result<broadcast::Receiver<api::Event>, ApiError> {
-        match self.get_live(session_id.as_str()).await {
-            Some(live) => Ok(live.events_tx.subscribe()),
-            None => {
-                self.ensure_on_disk_session_exists(session_id).await?;
-                Err(ApiError::session_not_live("session is archived"))
-            }
-        }
+        let live = self.ensure_live(session_id).await?;
+        Ok(live.events_tx.subscribe())
     }
 
     async fn ensure_on_disk_session_exists(&self, session_id: &SessionId) -> Result<(), ApiError> {
@@ -2323,12 +2290,11 @@ impl LiveSession {
         Ok(())
     }
 
-    pub async fn edit_user_message(
+    async fn apply_edit_user_message(
         &self,
-        runs_dir: &Path,
         user_message_id: u64,
-        content: String,
-    ) -> Result<api::Run, ApiError> {
+        content: &str,
+    ) -> Result<(), ApiError> {
         self.ensure_history_mutable().await?;
 
         let text = content.trim();
@@ -2378,23 +2344,13 @@ impl LiveSession {
             data: serde_json::json!({ "after_message_id": user_message_id, "reason": "edit" }),
         })
         .await?;
-
-        self.enqueue_run(
-            runs_dir,
-            api::RunCreateRequest {
-                input: api::RunInput::FromUserMessage { user_message_id },
-                overrides: None,
-                auto_resume: true,
-            },
-        )
-        .await
+        Ok(())
     }
 
-    pub async fn regenerate_assistant_message(
+    async fn apply_regenerate_assistant_message(
         &self,
-        runs_dir: &Path,
         assistant_message_id: u64,
-    ) -> Result<api::Run, ApiError> {
+    ) -> Result<(), ApiError> {
         self.ensure_history_mutable().await?;
 
         let user_message_id = {
@@ -2453,16 +2409,7 @@ impl LiveSession {
             }),
         })
         .await?;
-
-        self.enqueue_run(
-            runs_dir,
-            api::RunCreateRequest {
-                input: api::RunInput::FromUserMessage { user_message_id },
-                overrides: None,
-                auto_resume: true,
-            },
-        )
-        .await
+        Ok(())
     }
 
     pub async fn enqueue_run(
@@ -2507,6 +2454,28 @@ impl LiveSession {
                         ));
                     }
                 }
+            }
+            api::RunInput::EditUserMessage {
+                user_message_id,
+                content,
+            } => {
+                if *user_message_id == 0 {
+                    return Err(ApiError::invalid_argument(
+                        "user_message_id must be >= 1",
+                    ));
+                }
+                self.apply_edit_user_message(*user_message_id, content).await?;
+            }
+            api::RunInput::RegenerateAssistantMessage {
+                assistant_message_id,
+            } => {
+                if *assistant_message_id == 0 {
+                    return Err(ApiError::invalid_argument(
+                        "assistant_message_id must be >= 1",
+                    ));
+                }
+                self.apply_regenerate_assistant_message(*assistant_message_id)
+                    .await?;
             }
         }
 
@@ -2671,6 +2640,17 @@ impl LiveSession {
                         _ => None,
                     });
                     (by_id.or(last_user).unwrap_or_default(), false)
+                }
+                api::RunInput::EditUserMessage { content, .. } => (content.clone(), false),
+                api::RunInput::RegenerateAssistantMessage { .. } => {
+                    let session = self.session.lock().await;
+                    let last_user = session.messages.iter().rev().find_map(|m| match m {
+                        CoreMessage::User { content } => {
+                            Some(content.first_text().unwrap_or("").to_string())
+                        }
+                        _ => None,
+                    });
+                    (last_user.unwrap_or_default(), false)
                 }
             };
 

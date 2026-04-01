@@ -179,6 +179,8 @@ fn default_true() -> bool {
 pub enum RunInput {
     Text { text: String },
     FromUserMessage { user_message_id: u64 },
+    EditUserMessage { user_message_id: u64, content: String },
+    RegenerateAssistantMessage { assistant_message_id: u64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -412,12 +414,6 @@ pub struct ForkSessionRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct ForkSessionResponse {
     pub session: Session,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MessageEditRequest {
-    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -40,7 +40,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Axum routes + auth + static web hosting (serves `web/dist`): `crates/kiliax-server/src/main.rs`
-- Session lifecycle (create/resume/fork/edit/regenerate) + settings (`settings.json`) + run queue + WS/SSE events (+ message `usage` + per-session `prompt_cache_key`): `crates/kiliax-server/src/state.rs`
+- Session lifecycle (create/resume/fork) + settings (`settings.json`) + run queue (includes edit/regenerate via run inputs) + WS/SSE events (+ message `usage` + per-session `prompt_cache_key`): `crates/kiliax-server/src/state.rs`
 - REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
 
 ### crates/kiliax-otel (OpenTelemetry)
@@ -49,7 +49,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI + WS streaming + session fork + message edit/regenerate + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api-key + agent max steps + raw YAML): `web/src/app.tsx`
+- Main UI + WS streaming + session fork + message edit/regenerate (via runs) + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api-key + agent max steps + raw YAML): `web/src/app.tsx`
 - API client: `web/src/lib/api.ts`
 - Types (includes message `usage`): `web/src/lib/types.ts`
 

@@ -174,17 +174,6 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
-  editUserMessage(sessionId: string, userMessageId: string, content: string): Promise<any> {
-    return apiFetch(`/v1/sessions/${sessionId}/messages/${userMessageId}/edit`, {
-      method: "POST",
-      body: JSON.stringify({ content }),
-    });
-  },
-  regenerateAssistantMessage(sessionId: string, assistantMessageId: string): Promise<any> {
-    return apiFetch(`/v1/sessions/${sessionId}/messages/${assistantMessageId}/regenerate`, {
-      method: "POST",
-    });
-  },
   fsList(path?: string): Promise<FsListResponse> {
     const qs = path ? `?path=${encodeURIComponent(path)}` : "";
     return apiFetch<FsListResponse>(`/v1/fs/list${qs}`);

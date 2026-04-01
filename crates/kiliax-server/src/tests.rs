@@ -602,6 +602,40 @@ async fn create_run_nonexistent_session_returns_404() {
 }
 
 #[tokio::test]
+async fn events_stream_auto_resumes_archived_session() {
+    let dir = TempDir::new().expect("tempdir");
+    let workspace_root = dir.path().to_path_buf();
+
+    let store = FileSessionStore::project(&workspace_root);
+    let state = store
+        .create(
+            "general",
+            Some("test/test-model".to_string()),
+            None,
+            Some(workspace_root.display().to_string()),
+            Vec::new(),
+            vec![Message::User {
+                content: UserMessageContent::Text("u1".to_string()),
+            }],
+        )
+        .await
+        .expect("create");
+
+    let session_id = state.id().to_string();
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/events/stream?after_event_id=0"),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
     let dir = TempDir::new().expect("tempdir");
     let workspace_root = dir.path().to_path_buf();
@@ -674,8 +708,14 @@ async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
         .clone()
         .oneshot(req_json(
             Method::POST,
-            &format!("/v1/sessions/{session_id}/messages/{user2_id}/edit"),
-            serde_json::json!({ "content": "u2 edited" }),
+            &format!("/v1/sessions/{session_id}/runs"),
+            serde_json::json!({
+                "input": {
+                    "type": "edit_user_message",
+                    "user_message_id": user2_id,
+                    "content": "u2 edited",
+                }
+            }),
         ))
         .await
         .expect("oneshot");
@@ -685,13 +725,19 @@ async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
         body.get("input")
             .and_then(|i| i.get("type"))
             .and_then(|v| v.as_str()),
-        Some("from_user_message")
+        Some("edit_user_message")
     );
     assert_eq!(
         body.get("input")
             .and_then(|i| i.get("user_message_id"))
             .and_then(|v| v.as_u64()),
         Some(user2_id)
+    );
+    assert_eq!(
+        body.get("input")
+            .and_then(|i| i.get("content"))
+            .and_then(|v| v.as_str()),
+        Some("u2 edited")
     );
 
     let resp = app
@@ -799,9 +845,15 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
 
     let resp = app
         .clone()
-        .oneshot(req_empty(
+        .oneshot(req_json(
             Method::POST,
-            &format!("/v1/sessions/{session_id}/messages/{assistant2_id}/regenerate"),
+            &format!("/v1/sessions/{session_id}/runs"),
+            serde_json::json!({
+                "input": {
+                    "type": "regenerate_assistant_message",
+                    "assistant_message_id": assistant2_id,
+                }
+            }),
         ))
         .await
         .expect("oneshot");
@@ -811,13 +863,13 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
         body.get("input")
             .and_then(|i| i.get("type"))
             .and_then(|v| v.as_str()),
-        Some("from_user_message")
+        Some("regenerate_assistant_message")
     );
     assert_eq!(
         body.get("input")
-            .and_then(|i| i.get("user_message_id"))
+            .and_then(|i| i.get("assistant_message_id"))
             .and_then(|v| v.as_u64()),
-        Some(user2_id)
+        Some(assistant2_id)
     );
 
     let resp = app
@@ -910,8 +962,14 @@ async fn history_mutation_endpoints_return_conflict_when_session_busy() {
         .clone()
         .oneshot(req_json(
             Method::POST,
-            &format!("/v1/sessions/{session_id}/messages/{user2_id}/edit"),
-            serde_json::json!({ "content": "u2 edited" }),
+            &format!("/v1/sessions/{session_id}/runs"),
+            serde_json::json!({
+                "input": {
+                    "type": "edit_user_message",
+                    "user_message_id": user2_id,
+                    "content": "u2 edited",
+                }
+            }),
         ))
         .await
         .expect("oneshot");

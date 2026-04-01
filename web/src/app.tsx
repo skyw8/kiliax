@@ -1507,26 +1507,27 @@ export default function App() {
     setEditSaving(true);
     try {
       const afterId = parseMessageId(editMessageId);
-      if (afterId != null) {
-        setMessages((prev) =>
-          prev
-            .map((m) => {
-              if (m.role === "user" && m.id === editMessageId) {
-                return { ...m, content: text };
-              }
-              return m;
-            })
-            .filter((m) => {
-              const mid = parseMessageId(m.id);
-              if (mid == null) return false;
-              return mid <= afterId;
-            }),
-        );
-      }
+      if (afterId == null) throw new Error("Invalid user message id");
+      setMessages((prev) =>
+        prev
+          .map((m) => {
+            if (m.role === "user" && m.id === editMessageId) {
+              return { ...m, content: text };
+            }
+            return m;
+          })
+          .filter((m) => {
+            const mid = parseMessageId(m.id);
+            if (mid == null) return false;
+            return mid <= afterId;
+          }),
+      );
       resetStreamState();
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
 
-      const run: any = await api.editUserMessage(sessionId, editMessageId, text);
+      const run: any = await api.createRun(sessionId, {
+        input: { type: "edit_user_message", user_message_id: afterId, content: text },
+      });
       const runId = String(run?.id ?? "").trim();
       setPending((p) => [
         ...p,
@@ -1583,7 +1584,14 @@ export default function App() {
       resetStreamState();
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
 
-      const run: any = await api.regenerateAssistantMessage(sessionId, assistantMessageId);
+      const assistantId = parseMessageId(assistantMessageId);
+      if (assistantId == null) throw new Error("Invalid assistant message id");
+      const run: any = await api.createRun(sessionId, {
+        input: {
+          type: "regenerate_assistant_message",
+          assistant_message_id: assistantId,
+        },
+      });
       const runId = String(run?.id ?? "").trim();
       setPending((p) => [
         ...p,
