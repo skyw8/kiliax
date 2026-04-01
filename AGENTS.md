@@ -48,33 +48,34 @@ minimal
 
 ### web (React UI)
 
-- Main UI + WS streaming + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api_key + agent max steps + raw YAML): `web/src/app.tsx`
+- Main UI + WS streaming + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api-key + agent max steps + raw YAML): `web/src/app.tsx`
 - API client: `web/src/lib/api.ts`
 - Types (includes message `usage`): `web/src/lib/types.ts`
 
 ## constraints
-**所有界面语言默认为英文，包括任何提示、输出等**
+**All UI languages default to English, including any prompts, outputs, etc.**
 
 ### TUI
 
-后续修改必须保持一致
-- user bubble：历史区渲染需与输入框风格一致（无背景 + 上下 padding）
-- thinking：以灰色斜体显示；可以流式，但**不得**与正文输出交织；正文开始后应关闭/忽略后续 thinking delta
-- status bar： 在输入框底部，显示status/agent_name/model_name
-- 输出紧凑：避免引入多余空行（尤其是 thinking/流式渲染导致的空行）
-- 遵循无框线的设计，简化UI
+Subsequent modifications must remain consistent:
+- user bubble: history area rendering should match the input box style (no background + top/bottom padding)
+- thinking: displayed in gray italics; can be streamed, but **must not** interleave with body output; body output should close/ignore subsequent thinking deltas once started
+- status bar: at the bottom of the input box, showing status/agent_name/model_name
+- compact output: avoid introducing extra blank lines (especially those caused by thinking/streaming rendering)
+- follow a borderless design, simplify the UI
 
 #### color
-- 优先蓝色、紫色高亮，其次橙色绿色
-- 颜色使用场景：题头为紫色；选中为蓝色，未选中为白色；未开启的显示为灰色，开启显示为白色
+- prefer blue and purple highlights, followed by orange and green
+- color usage scenarios: headers in purple; selected in blue, unselected in white; disabled in gray, enabled in white
 
 ### Web
 
-- 左侧导航栏的 session 状态 badge（如 `step 1`）必须单行显示，不得换行占两行
+- The session status badge (e.g. `step 1`) in the left sidebar must display in a single line and must not wrap to two lines
 
-## ENV
+## dev ENV
 
-终端环境
+VSCode WSL2 ubuntu
+Terminal
 ```
 (base) skywo@skyw:~/github/kiliax$ stty -a
 speed 38400 baud; rows 55; columns 89; line = 0;
@@ -84,7 +85,7 @@ discard = ^O; min = 1; time = 0;
 -parenb -parodd -cmspar cs8 hupcl -cstopb cread -clocal -crtscts
 -ignbrk brkint -ignpar -parmrk -inpck -istrip -inlcr -igncr icrnl ixon -ixoff -iuclc
 ixany imaxbel iutf8
-opost -olcuc -ocrnl onlcr -onocr -onlret -ofill -ofdel nl0 cr0 tab0 bs0 vt0 ff0
+opost -oluc -ocrnl onlcr -onocr -onlret -ofill -ofdel nl0 cr0 tab0 bs0 vt0 ff0
 isig icanon iexten echo echoe echok -echonl -noflsh -xcase -tostop -echoprt echoctl
 echoke -flusho -extproc
 (base) skywo@skyw:~/github/kiliax$ echo $TERM
@@ -93,6 +94,6 @@ xterm-256color
 
 ## ATTENTION
 
-- 修改完代码后，更新AGENTS.md中的arch部分，只用说明这些核心代码部分
-- 优先遵循最佳实践，并兼顾常见终端兼容性（尤其 VSCode WSL / xterm.js）
-- **不要兼容旧接口、旧代码等，直接删除重构即可**
+- After modifying code, update the arch section in AGENTS.md, only describing these core code parts
+- Prioritize best practices, and take compatibility with common terminals into account (especially VSCode WSL / xterm.js)
+- **Do not maintain compatibility with old interfaces or old code—delete and refactor directly**
