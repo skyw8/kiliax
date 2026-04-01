@@ -194,7 +194,9 @@ export interface FsListResponse {
 
 export type OpenWorkspaceTarget = "vscode" | "file_manager" | "terminal";
 
-export type RunInput = { type: "text"; text: string };
+export type RunInput =
+  | { type: "text"; text: string }
+  | { type: "from_user_message"; user_message_id: number };
 
 export interface RunOverrides {
   agent?: string;

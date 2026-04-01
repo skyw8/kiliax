@@ -178,6 +178,7 @@ fn default_true() -> bool {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunInput {
     Text { text: String },
+    FromUserMessage { user_message_id: u64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -411,6 +412,12 @@ pub struct ForkSessionRequest {
 pub struct ForkSessionResponse {
     pub session: Session,
     pub run: Run,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageEditRequest {
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

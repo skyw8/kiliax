@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
 import { api, ApiError, wsUrl } from "@/lib/api";
 import { hrefToSession, navigate, useRoute } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -90,6 +90,18 @@ function stringifyUnknown(v: unknown): string {
     return JSON.stringify(v, null, 2);
   } catch {
     return String(v);
+  }
+}
+
+function parseMessageId(id: string): bigint | null {
+  const trimmed = (id ?? "").trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  try {
+    const v = BigInt(trimmed);
+    if (v <= 0n) return null;
+    return v;
+  } catch {
+    return null;
   }
 }
 
@@ -570,6 +582,9 @@ function MessageRow({
   assistantDurationsMs,
   onMermaidError,
   onFork,
+  onEditUser,
+  onRegenerateAssistant,
+  historyMutable,
 }: {
   msg: Message;
   toolDurationsMs: Record<string, number>;
@@ -577,13 +592,42 @@ function MessageRow({
   assistantDurationsMs: Record<string, number>;
   onMermaidError?: (info: MermaidErrorInfo) => void;
   onFork?: (assistantMessageId: string) => void;
+  onEditUser?: (userMessageId: string, content: string) => void;
+  onRegenerateAssistant?: (assistantMessageId: string) => void;
+  historyMutable?: boolean;
 }) {
   if (msg.role === "user") {
     const wide = hasMermaidFence(msg.content);
     const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[78%]";
+    const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     return (
-      <div className="flex justify-end">
-        <div className={`${bubbleWidth} rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}>
+      <div className="group flex justify-end">
+        <div className={`${bubbleWidth} relative rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}>
+          <div className="absolute right-full top-2 flex items-center gap-1 pr-2 invisible opacity-0 transition-opacity group-hover:visible group-hover:opacity-100">
+            <button
+              type="button"
+              className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+              aria-label="Copy message"
+              title="Copy message"
+              onClick={() => copyToClipboard(msg.content)}
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit}
+              className={[
+                "rounded-md p-1 text-zinc-500",
+                canEdit ? "hover:bg-zinc-100" : "cursor-not-allowed opacity-40",
+              ].join(" ")}
+              aria-label="Edit message"
+              title="Edit message"
+              onClick={() => onEditUser?.(msg.id, msg.content)}
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+          </div>
+
           {msg.content}
         </div>
       </div>
@@ -594,6 +638,7 @@ function MessageRow({
     const wide = hasMermaidFence(msg.content);
     const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[78%]";
     const usageText = fmtTokenUsage(msg.usage);
+    const canRegenerate = Boolean(historyMutable && onRegenerateAssistant);
     return (
       <div className="flex justify-start">
         <div className={`${bubbleWidth} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}>
@@ -641,6 +686,19 @@ function MessageRow({
                 onClick={() => copyToClipboard(msg.content ?? "")}
               >
                 <Copy className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={!canRegenerate}
+                className={[
+                  "rounded-md p-1 text-zinc-500",
+                  canRegenerate ? "hover:bg-zinc-100" : "cursor-not-allowed opacity-40",
+                ].join(" ")}
+                aria-label="Regenerate"
+                title="Regenerate"
+                onClick={() => onRegenerateAssistant?.(msg.id)}
+              >
+                <RefreshCcw className="h-4 w-4" />
               </button>
               <button
                 type="button"
@@ -751,6 +809,10 @@ export default function App() {
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const [composerText, setComposerText] = useState("");
+  const [editMessageOpen, setEditMessageOpen] = useState(false);
+  const [editMessageId, setEditMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [configYaml, setConfigYaml] = useState("");
   const [configPath, setConfigPath] = useState("");
@@ -1200,6 +1262,13 @@ export default function App() {
       return;
     }
 
+    if (type === "session_messages_reset") {
+      if (selectedId) {
+        await fetchSession(selectedId);
+      }
+      return;
+    }
+
     if (type === "run_error") {
       const run = ev?.data?.run ?? null;
       const diagnostics = ev?.data?.diagnostics ?? null;
@@ -1347,6 +1416,132 @@ export default function App() {
         }
       }
       handleApiError(err);
+    }
+  }
+
+  function resetStreamState() {
+    setStream({ thinking: "", assistant: "", assistantStarted: false, toolCalls: [] });
+    setToolDurationsMs({});
+    setAssistantDurationsMs({});
+    setThinkingDurationsMs({});
+    toolStartsRef.current = {};
+    thinkingStartedAtRef.current = null;
+    assistantStartedAtRef.current = null;
+    nextThinkingDurationMsRef.current = null;
+  }
+
+  function openEditDialog(userMessageId: string, content: string) {
+    if (!selectedId) return;
+    if (parseMessageId(userMessageId) == null) return;
+    setEditMessageId(userMessageId);
+    setEditDraft(content);
+    setEditMessageOpen(true);
+  }
+
+  async function saveEditAndSend() {
+    if (!selectedId || editMessageId == null) return;
+    const text = editDraft.trim();
+    if (!text) return;
+
+    const sessionId = selectedId;
+    const baseEventId = selectedSummary?.status.last_event_id ?? 0;
+    setEditSaving(true);
+    try {
+      const afterId = parseMessageId(editMessageId);
+      if (afterId != null) {
+        setMessages((prev) =>
+          prev
+            .map((m) => {
+              if (m.role === "user" && m.id === editMessageId) {
+                return { ...m, content: text };
+              }
+              return m;
+            })
+            .filter((m) => {
+              const mid = parseMessageId(m.id);
+              if (mid == null) return false;
+              return mid <= afterId;
+            }),
+        );
+      }
+      resetStreamState();
+      setPending((p) => p.filter((m) => m.sessionId !== sessionId));
+
+      const run: any = await api.editUserMessage(sessionId, editMessageId, text);
+      const runId = String(run?.id ?? "").trim();
+      setPending((p) => [
+        ...p,
+        {
+          sessionId,
+          runId,
+          baseEventId,
+          createdAt: new Date().toISOString(),
+          content: text,
+        },
+      ]);
+      setEditMessageOpen(false);
+      await refreshSessions();
+    } catch (err) {
+      handleApiError(err);
+      if (selectedIdRef.current === sessionId) {
+        await fetchSession(sessionId);
+      }
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function regenerateAssistant(assistantMessageId: string) {
+    if (!selectedId) return;
+    const sessionId = selectedId;
+    const baseEventId = selectedSummary?.status.last_event_id ?? 0;
+
+    const assistantIdx = messages.findIndex(
+      (m) => m.role === "assistant" && m.id === assistantMessageId,
+    );
+    const precedingUser =
+      assistantIdx === -1
+        ? null
+        : (() => {
+            for (let i = assistantIdx - 1; i >= 0; i -= 1) {
+              const m = messages[i];
+              if (m?.role === "user") return m;
+            }
+            return null;
+          })();
+    const afterId = precedingUser ? parseMessageId(precedingUser.id) : null;
+
+    try {
+      if (afterId != null) {
+        setMessages((prev) =>
+          prev.filter((m) => {
+            const mid = parseMessageId(m.id);
+            if (mid == null) return false;
+            return mid <= afterId;
+          }),
+        );
+      }
+      resetStreamState();
+      setPending((p) => p.filter((m) => m.sessionId !== sessionId));
+
+      const run: any = await api.regenerateAssistantMessage(sessionId, assistantMessageId);
+      const runId = String(run?.id ?? "").trim();
+      setPending((p) => [
+        ...p,
+        {
+          sessionId,
+          runId,
+          baseEventId,
+          createdAt: new Date().toISOString(),
+          content: precedingUser?.content ?? "",
+        },
+      ]);
+      await refreshSessions();
+    } catch (err) {
+      handleApiError(err);
+      if (selectedIdRef.current === sessionId) {
+        await fetchSession(sessionId);
+      }
     }
   }
 
@@ -1997,6 +2192,12 @@ export default function App() {
         selectedSummary.status.run_state === "running" ||
         selectedSummary.status.run_state === "tooling"),
   );
+  const historyMutable = Boolean(
+    selectedSummary &&
+      selectedSummary.status.active_run_id == null &&
+      selectedSummary.status.queue_len === 0 &&
+      selectedSummary.status.run_state === "idle",
+  );
   const pendingCanCancel =
     Boolean(lastPendingRun?.runId) &&
     (selectedSummary == null ||
@@ -2460,6 +2661,9 @@ export default function App() {
                     assistantDurationsMs={assistantDurationsMs}
                     onMermaidError={handleMermaidError}
                     onFork={forkSessionFromAssistant}
+                    onEditUser={openEditDialog}
+                    onRegenerateAssistant={regenerateAssistant}
+                    historyMutable={historyMutable}
                   />
                 ))}
 
@@ -3466,6 +3670,53 @@ export default function App() {
             >
               Delete
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={editMessageOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setEditMessageOpen(true);
+            return;
+          }
+          setEditMessageOpen(false);
+          setEditMessageId(null);
+          setEditDraft("");
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit message</DialogTitle>
+            <DialogDescription>Edits history and regenerates from here.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              value={editDraft}
+              onChange={(e) => setEditDraft(e.target.value)}
+              className="min-h-[140px] resize-none"
+              placeholder="Update the user message…"
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditMessageOpen(false);
+                  setEditMessageId(null);
+                  setEditDraft("");
+                }}
+                disabled={editSaving}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={saveEditAndSend}
+                disabled={!historyMutable || editSaving || !editDraft.trim() || !editMessageId}
+              >
+                {editSaving ? "Saving…" : "Save & Send"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

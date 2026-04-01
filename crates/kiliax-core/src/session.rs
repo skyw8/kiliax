@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::llm::Message;
 
-const SESSION_SCHEMA_VERSION: u32 = 2;
+const SESSION_SCHEMA_VERSION: u32 = 3;
 const DEFAULT_CHECKPOINT_EVERY: u64 = 32;
 
 const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
@@ -121,6 +121,8 @@ pub struct SessionSnapshot {
     pub schema_version: u32,
     pub meta: SessionMeta,
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub message_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -136,6 +138,8 @@ pub struct SessionEventLine {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEvent {
     Message { message: Message },
+    MessageEdit { message_id: u64, message: Message },
+    TruncateAfter { message_id: u64 },
     Finish { finish_reason: Option<String> },
     Error { error: String },
 }
@@ -144,6 +148,7 @@ pub enum SessionEvent {
 pub struct SessionState {
     pub meta: SessionMeta,
     pub messages: Vec<Message>,
+    pub message_ids: Vec<u64>,
 }
 
 impl SessionState {
@@ -279,13 +284,16 @@ impl FileSessionStore {
             message_count: initial_messages.len(),
         };
 
+        let message_ids = (1..=last_seq).collect::<Vec<_>>();
         let state = SessionState {
             meta: meta.clone(),
             messages: initial_messages,
+            message_ids,
         };
 
         self.write_meta(&meta).await?;
-        self.write_snapshot(&meta, &state.messages).await?;
+        self.write_snapshot(&meta, &state.messages, &state.message_ids)
+            .await?;
 
         Ok(state)
     }
@@ -297,7 +305,14 @@ impl FileSessionStore {
         let mut state = SessionState {
             meta: snapshot.meta,
             messages: snapshot.messages,
+            message_ids: snapshot.message_ids,
         };
+        state.meta.schema_version = SESSION_SCHEMA_VERSION;
+        if state.message_ids.len() != state.messages.len() {
+            state.message_ids =
+                self.rebuild_message_ids_from_events(id, state.meta.last_snapshot_seq)
+                    .await?;
+        }
 
         self.replay_events_after_snapshot(&mut state).await?;
         if state.meta.prompt_cache_key.is_none() {
@@ -360,6 +375,31 @@ impl FileSessionStore {
             .await
     }
 
+    pub async fn edit_message(
+        &self,
+        state: &mut SessionState,
+        message_id: u64,
+        message: Message,
+    ) -> Result<(), SessionError> {
+        self.record_event(
+            state,
+            SessionEvent::MessageEdit {
+                message_id,
+                message,
+            },
+        )
+        .await
+    }
+
+    pub async fn truncate_after(
+        &self,
+        state: &mut SessionState,
+        message_id: u64,
+    ) -> Result<(), SessionError> {
+        self.record_event(state, SessionEvent::TruncateAfter { message_id })
+            .await
+    }
+
     pub async fn record_finish(
         &self,
         state: &mut SessionState,
@@ -386,7 +426,8 @@ impl FileSessionStore {
     pub async fn checkpoint(&self, state: &mut SessionState) -> Result<(), SessionError> {
         state.meta.last_snapshot_seq = state.meta.last_seq;
         state.meta.schema_version = SESSION_SCHEMA_VERSION;
-        self.write_snapshot(&state.meta, &state.messages).await?;
+        self.write_snapshot(&state.meta, &state.messages, &state.message_ids)
+            .await?;
         self.write_meta(&state.meta).await?;
         Ok(())
     }
@@ -396,6 +437,7 @@ impl FileSessionStore {
         state: &mut SessionState,
         event: SessionEvent,
     ) -> Result<(), SessionError> {
+        state.meta.schema_version = SESSION_SCHEMA_VERSION;
         let id = state.meta.id.clone();
         let ts_ms = now_ms();
         let seq = state.meta.last_seq + 1;
@@ -505,12 +547,14 @@ impl FileSessionStore {
         &self,
         meta: &SessionMeta,
         messages: &[Message],
+        message_ids: &[u64],
     ) -> Result<(), SessionError> {
         let path = self.snapshot_path(&meta.id);
         let snapshot = SessionSnapshot {
             schema_version: SESSION_SCHEMA_VERSION,
             meta: meta.clone(),
             messages: messages.to_vec(),
+            message_ids: message_ids.to_vec(),
         };
         write_json_atomic(&path, &snapshot).await
     }
@@ -531,6 +575,64 @@ impl FileSessionStore {
         }
         Ok(snapshot)
     }
+
+    async fn rebuild_message_ids_from_events(
+        &self,
+        id: &SessionId,
+        up_to_seq: u64,
+    ) -> Result<Vec<u64>, SessionError> {
+        if up_to_seq == 0 {
+            return Ok(Vec::new());
+        }
+
+        let path = self.events_path(id);
+        let file = match tokio::fs::File::open(&path).await {
+            Ok(f) => f,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
+
+        let mut out: Vec<u64> = Vec::new();
+        let mut reader = tokio::io::BufReader::new(file);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = reader.read_line(&mut line).await?;
+            if n == 0 {
+                break;
+            }
+
+            let raw = line.trim_end_matches(&['\r', '\n'][..]);
+            let raw = raw.trim();
+            if raw.is_empty() {
+                continue;
+            }
+
+            let parsed: Result<SessionEventLine, _> = serde_json::from_str(raw);
+            let parsed = match parsed {
+                Ok(v) => v,
+                Err(err) => {
+                    let ends_with_newline = line.ends_with('\n');
+                    if !ends_with_newline {
+                        break;
+                    }
+                    return Err(SessionError::Deserialize(err));
+                }
+            };
+
+            if parsed.schema_version > SESSION_SCHEMA_VERSION {
+                return Err(SessionError::UnsupportedSchema(parsed.schema_version));
+            }
+            if parsed.seq > up_to_seq {
+                continue;
+            }
+            if matches!(parsed.event, SessionEvent::Message { .. }) {
+                out.push(parsed.seq);
+            }
+        }
+
+        Ok(out)
+    }
 }
 
 fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u64) {
@@ -550,7 +652,32 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
                 }
             }
             state.messages.push(message);
+            state.message_ids.push(seq);
             state.meta.message_count = state.messages.len();
+        }
+        SessionEvent::MessageEdit { message_id, message } => {
+            if let Some(idx) = state.message_ids.iter().position(|id| *id == message_id) {
+                state.messages[idx] = message.clone();
+                if idx == 0 {
+                    if let Message::User { content } = &message {
+                        if let Some(t) = content.first_text() {
+                            let t = t.trim();
+                            if !t.is_empty() {
+                                state.meta.title = Some(truncate_title(t));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        SessionEvent::TruncateAfter { message_id } => {
+            if let Some(idx) = state.message_ids.iter().position(|id| *id == message_id) {
+                state.messages.truncate(idx + 1);
+                state.message_ids.truncate(idx + 1);
+                state.meta.message_count = state.messages.len();
+                state.meta.last_finish_reason = None;
+                state.meta.last_error = None;
+            }
         }
         SessionEvent::Finish { finish_reason } => {
             state.meta.last_finish_reason = finish_reason;
@@ -679,6 +806,7 @@ mod tests {
         // Not checkpointed yet: load must replay events.
         let loaded = store.load(state.id()).await.unwrap();
         assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.message_ids, vec![1, 2]);
         assert_eq!(loaded.meta.message_count, 2);
         assert_eq!(loaded.meta.prompt_cache_key, state.meta.prompt_cache_key);
 

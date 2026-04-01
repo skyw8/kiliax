@@ -602,6 +602,325 @@ async fn create_run_nonexistent_session_returns_404() {
 }
 
 #[tokio::test]
+async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
+    let dir = TempDir::new().expect("tempdir");
+    let workspace_root = dir.path().to_path_buf();
+
+    let store = FileSessionStore::project(&workspace_root);
+    let mut state = store
+        .create(
+            "general",
+            Some("test/test-model".to_string()),
+            None,
+            Some(workspace_root.display().to_string()),
+            Vec::new(),
+            vec![Message::User {
+                content: UserMessageContent::Text("u1".to_string()),
+            }],
+        )
+        .await
+        .expect("create");
+    store
+        .record_message(
+            &mut state,
+            Message::Assistant {
+                content: Some("a1".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        )
+        .await
+        .expect("assistant1");
+    store
+        .record_message(
+            &mut state,
+            Message::User {
+                content: UserMessageContent::Text("u2".to_string()),
+            },
+        )
+        .await
+        .expect("user2");
+    let user2_id = state.meta.last_seq;
+    store
+        .record_message(
+            &mut state,
+            Message::Assistant {
+                content: Some("a2".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        )
+        .await
+        .expect("assistant2");
+    let assistant2_id = state.meta.last_seq;
+
+    let session_id = state.id().to_string();
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/resume"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/messages/{user2_id}/edit"),
+            serde_json::json!({ "content": "u2 edited" }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        body.get("input")
+            .and_then(|i| i.get("type"))
+            .and_then(|v| v.as_str()),
+        Some("from_user_message")
+    );
+    assert_eq!(
+        body.get("input")
+            .and_then(|i| i.get("user_message_id"))
+            .and_then(|v| v.as_u64()),
+        Some(user2_id)
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/messages?limit=50"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items[2]
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse::<u64>().ok()),
+        Some(user2_id)
+    );
+    assert_eq!(
+        items[2].get("content").and_then(|v| v.as_str()),
+        Some("u2 edited")
+    );
+    assert!(
+        !items.iter().any(|m| {
+            m.get("id")
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse::<u64>().ok())
+                == Some(assistant2_id)
+        }),
+        "assistant2 should be truncated"
+    );
+}
+
+#[tokio::test]
+async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
+    let dir = TempDir::new().expect("tempdir");
+    let workspace_root = dir.path().to_path_buf();
+
+    let store = FileSessionStore::project(&workspace_root);
+    let mut state = store
+        .create(
+            "general",
+            Some("test/test-model".to_string()),
+            None,
+            Some(workspace_root.display().to_string()),
+            Vec::new(),
+            vec![Message::User {
+                content: UserMessageContent::Text("u1".to_string()),
+            }],
+        )
+        .await
+        .expect("create");
+    store
+        .record_message(
+            &mut state,
+            Message::Assistant {
+                content: Some("a1".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        )
+        .await
+        .expect("assistant1");
+    store
+        .record_message(
+            &mut state,
+            Message::User {
+                content: UserMessageContent::Text("u2".to_string()),
+            },
+        )
+        .await
+        .expect("user2");
+    let user2_id = state.meta.last_seq;
+    store
+        .record_message(
+            &mut state,
+            Message::Assistant {
+                content: Some("a2".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        )
+        .await
+        .expect("assistant2");
+    let assistant2_id = state.meta.last_seq;
+
+    let session_id = state.id().to_string();
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/resume"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/messages/{assistant2_id}/regenerate"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        body.get("input")
+            .and_then(|i| i.get("type"))
+            .and_then(|v| v.as_str()),
+        Some("from_user_message")
+    );
+    assert_eq!(
+        body.get("input")
+            .and_then(|i| i.get("user_message_id"))
+            .and_then(|v| v.as_u64()),
+        Some(user2_id)
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/messages?limit=50"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items[2]
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse::<u64>().ok()),
+        Some(user2_id)
+    );
+    assert!(
+        !items.iter().any(|m| {
+            m.get("id")
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse::<u64>().ok())
+                == Some(assistant2_id)
+        }),
+        "assistant2 should be truncated"
+    );
+}
+
+#[tokio::test]
+async fn history_mutation_endpoints_return_conflict_when_session_busy() {
+    let dir = TempDir::new().expect("tempdir");
+    let workspace_root = dir.path().to_path_buf();
+
+    let store = FileSessionStore::project(&workspace_root);
+    let mut state = store
+        .create(
+            "general",
+            Some("test/test-model".to_string()),
+            None,
+            Some(workspace_root.display().to_string()),
+            Vec::new(),
+            vec![Message::User {
+                content: UserMessageContent::Text("u1".to_string()),
+            }],
+        )
+        .await
+        .expect("create");
+    store
+        .record_message(
+            &mut state,
+            Message::User {
+                content: UserMessageContent::Text("u2".to_string()),
+            },
+        )
+        .await
+        .expect("user2");
+    let user2_id = state.meta.last_seq;
+
+    let session_id = state.id().to_string();
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/resume"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/runs"),
+            serde_json::json!({ "input": { "type": "text", "text": "hi" } }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/messages/{user2_id}/edit"),
+            serde_json::json!({ "content": "u2 edited" }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_error_code(&body, "conflict");
+}
+
+#[tokio::test]
 async fn cancel_queued_run_marks_cancelled_and_emits_event() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;

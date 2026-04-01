@@ -1128,6 +1128,33 @@ impl ServerState {
         self.get_run(run_id).await
     }
 
+    pub async fn edit_user_message(
+        &self,
+        session_id: &SessionId,
+        user_message_id: u64,
+        req: api::MessageEditRequest,
+    ) -> Result<api::Run, ApiError> {
+        let live = self
+            .get_live(session_id.as_str())
+            .await
+            .ok_or_else(|| ApiError::session_not_live("session is archived"))?;
+        live.edit_user_message(&self.runs_dir, user_message_id, req.content)
+            .await
+    }
+
+    pub async fn regenerate_assistant_message(
+        &self,
+        session_id: &SessionId,
+        assistant_message_id: u64,
+    ) -> Result<api::Run, ApiError> {
+        let live = self
+            .get_live(session_id.as_str())
+            .await
+            .ok_or_else(|| ApiError::session_not_live("session is archived"))?;
+        live.regenerate_assistant_message(&self.runs_dir, assistant_message_id)
+            .await
+    }
+
     pub async fn get_messages(
         &self,
         session_id: &SessionId,
@@ -1156,6 +1183,7 @@ impl ServerState {
         let mut line = String::new();
 
         let mut messages: Vec<(u64, u64, CoreMessage)> = Vec::new(); // (seq, ts_ms, message)
+        let mut index_by_seq: HashMap<u64, usize> = HashMap::new();
         loop {
             line.clear();
             let n = reader
@@ -1173,19 +1201,42 @@ impl ServerState {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if let Some(before_seq) = before_seq {
-                if parsed.seq >= before_seq {
-                    continue;
+            match parsed.event {
+                SessionEvent::Message { message } => {
+                    index_by_seq.insert(parsed.seq, messages.len());
+                    messages.push((parsed.seq, parsed.ts_ms, message));
                 }
-            }
-            if let SessionEvent::Message { message } = parsed.event {
-                messages.push((parsed.seq, parsed.ts_ms, message));
+                SessionEvent::MessageEdit { message_id, message } => {
+                    if let Some(idx) = index_by_seq.get(&message_id).copied() {
+                        if let Some(entry) = messages.get_mut(idx) {
+                            entry.2 = message;
+                        }
+                    }
+                }
+                SessionEvent::TruncateAfter { message_id } => {
+                    let Some(idx) = index_by_seq.get(&message_id).copied() else {
+                        continue;
+                    };
+                    let removed = messages.split_off(idx + 1);
+                    for (seq, _, _) in removed {
+                        index_by_seq.remove(&seq);
+                    }
+                }
+                SessionEvent::Finish { .. } | SessionEvent::Error { .. } => {}
             }
         }
 
-        messages.sort_by_key(|(seq, _, _)| *seq);
-        let slice = messages.into_iter().rev().take(limit).collect::<Vec<_>>();
-        let slice = slice.into_iter().rev().collect::<Vec<_>>();
+        if let Some(before_seq) = before_seq {
+            messages.retain(|(seq, _, _)| *seq < before_seq);
+        }
+        let slice = messages
+            .into_iter()
+            .rev()
+            .take(limit)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
 
         let next_before = slice.first().map(|(seq, _, _)| seq.to_string());
 
@@ -2350,16 +2401,206 @@ impl LiveSession {
         Ok(())
     }
 
+    async fn ensure_history_mutable(&self) -> Result<(), ApiError> {
+        let q = self.queue.lock().await;
+        let st = self.status.lock().await;
+
+        let busy = !q.is_empty() || st.queue_len > 0 || st.run_state != api::SessionRunState::Idle;
+        if busy {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                ApiErrorCode::Conflict,
+                "session is busy",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn edit_user_message(
+        &self,
+        runs_dir: &Path,
+        user_message_id: u64,
+        content: String,
+    ) -> Result<api::Run, ApiError> {
+        self.ensure_history_mutable().await?;
+
+        let text = content.trim();
+        if text.is_empty() {
+            return Err(ApiError::invalid_argument("content must not be empty"));
+        }
+
+        {
+            let mut session = self.session.lock().await;
+            let idx = session
+                .message_ids
+                .iter()
+                .position(|id| *id == user_message_id)
+                .ok_or_else(|| ApiError::not_found("message not found"))?;
+            if !matches!(session.messages[idx], CoreMessage::User { .. }) {
+                return Err(ApiError::invalid_argument(
+                    "user_message_id must refer to a user message",
+                ));
+            }
+
+            self.store
+                .edit_message(
+                    &mut session,
+                    user_message_id,
+                    CoreMessage::User {
+                        content: UserMessageContent::Text(text.to_string()),
+                    },
+                )
+                .await
+                .map_err(map_session_err)?;
+            self.store
+                .truncate_after(&mut session, user_message_id)
+                .await
+                .map_err(map_session_err)?;
+            self.store
+                .checkpoint(&mut session)
+                .await
+                .map_err(map_session_err)?;
+        }
+
+        self.emit_event(api::Event {
+            event_id: self.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: self.session_id.to_string(),
+            run_id: None,
+            event_type: "session_messages_reset".to_string(),
+            data: serde_json::json!({ "after_message_id": user_message_id, "reason": "edit" }),
+        })
+        .await?;
+
+        self.enqueue_run(
+            runs_dir,
+            api::RunCreateRequest {
+                input: api::RunInput::FromUserMessage { user_message_id },
+                overrides: None,
+                auto_resume: true,
+            },
+        )
+        .await
+    }
+
+    pub async fn regenerate_assistant_message(
+        &self,
+        runs_dir: &Path,
+        assistant_message_id: u64,
+    ) -> Result<api::Run, ApiError> {
+        self.ensure_history_mutable().await?;
+
+        let user_message_id = {
+            let session = self.session.lock().await;
+            let assistant_idx = session
+                .message_ids
+                .iter()
+                .position(|id| *id == assistant_message_id)
+                .ok_or_else(|| ApiError::not_found("message not found"))?;
+            if !matches!(session.messages[assistant_idx], CoreMessage::Assistant { .. }) {
+                return Err(ApiError::invalid_argument(
+                    "assistant_message_id must refer to an assistant message",
+                ));
+            }
+
+            let mut found: Option<u64> = None;
+            for idx in (0..assistant_idx).rev() {
+                if let CoreMessage::User { content } = &session.messages[idx] {
+                    let text = content.first_text().unwrap_or("").trim();
+                    if text.is_empty() {
+                        return Err(ApiError::invalid_argument(
+                            "cannot regenerate: the preceding user message is empty",
+                        ));
+                    }
+                    found = Some(session.message_ids[idx]);
+                    break;
+                }
+            }
+            found.ok_or_else(|| {
+                ApiError::invalid_argument("cannot regenerate before the first user message")
+            })?
+        };
+
+        {
+            let mut session = self.session.lock().await;
+            self.store
+                .truncate_after(&mut session, user_message_id)
+                .await
+                .map_err(map_session_err)?;
+            self.store
+                .checkpoint(&mut session)
+                .await
+                .map_err(map_session_err)?;
+        }
+
+        self.emit_event(api::Event {
+            event_id: self.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: self.session_id.to_string(),
+            run_id: None,
+            event_type: "session_messages_reset".to_string(),
+            data: serde_json::json!({
+                "after_message_id": user_message_id,
+                "reason": "regenerate",
+                "assistant_message_id": assistant_message_id,
+            }),
+        })
+        .await?;
+
+        self.enqueue_run(
+            runs_dir,
+            api::RunCreateRequest {
+                input: api::RunInput::FromUserMessage { user_message_id },
+                overrides: None,
+                auto_resume: true,
+            },
+        )
+        .await
+    }
+
     pub async fn enqueue_run(
         &self,
         runs_dir: &Path,
         req: api::RunCreateRequest,
     ) -> Result<api::Run, ApiError> {
-        let input_text = match &req.input {
-            api::RunInput::Text { text } => text.trim(),
-        };
-        if input_text.is_empty() {
-            return Err(ApiError::invalid_argument("input text must not be empty"));
+        match &req.input {
+            api::RunInput::Text { text } => {
+                if text.trim().is_empty() {
+                    return Err(ApiError::invalid_argument("input text must not be empty"));
+                }
+            }
+            api::RunInput::FromUserMessage { user_message_id } => {
+                if *user_message_id == 0 {
+                    return Err(ApiError::invalid_argument(
+                        "user_message_id must be >= 1",
+                    ));
+                }
+                let session = self.session.lock().await;
+                let idx = session
+                    .message_ids
+                    .iter()
+                    .position(|id| *id == *user_message_id)
+                    .ok_or_else(|| ApiError::not_found("message not found"))?;
+                if idx != session.messages.len().saturating_sub(1) {
+                    return Err(ApiError::invalid_argument(
+                        "user_message_id must refer to the last message",
+                    ));
+                }
+                match &session.messages[idx] {
+                    CoreMessage::User { content } => {
+                        if content.first_text().unwrap_or("").trim().is_empty() {
+                            return Err(ApiError::invalid_argument(
+                                "input text must not be empty",
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(ApiError::invalid_argument(
+                            "user_message_id must refer to a user message",
+                        ));
+                    }
+                }
+            }
         }
 
         let run = api::Run {
@@ -2502,14 +2743,37 @@ impl LiveSession {
             run.started_at = Some(now_rfc3339());
             write_run_file(&self.runs_dir, &run).await?;
 
-            // Persist user message at execution time.
-            let user_text = match &run.input {
-                api::RunInput::Text { text } => text.clone(),
+            let (user_text, persist_user) = match &run.input {
+                api::RunInput::Text { text } => (text.clone(), true),
+                api::RunInput::FromUserMessage { user_message_id } => {
+                    let session = self.session.lock().await;
+                    let by_id = session
+                        .message_ids
+                        .iter()
+                        .position(|id| *id == *user_message_id)
+                        .and_then(|idx| match &session.messages[idx] {
+                            CoreMessage::User { content } => {
+                                Some(content.first_text().unwrap_or("").to_string())
+                            }
+                            _ => None,
+                        });
+                    let last_user = session.messages.iter().rev().find_map(|m| match m {
+                        CoreMessage::User { content } => {
+                            Some(content.first_text().unwrap_or("").to_string())
+                        }
+                        _ => None,
+                    });
+                    (by_id.or(last_user).unwrap_or_default(), false)
+                }
             };
-            self.record_message(CoreMessage::User {
-                content: UserMessageContent::Text(user_text.clone()),
-            })
-            .await?;
+
+            if persist_user {
+                // Persist user message at execution time.
+                self.record_message(CoreMessage::User {
+                    content: UserMessageContent::Text(user_text.clone()),
+                })
+                .await?;
+            }
 
             let base_settings = self.settings.lock().await.clone();
             let overrides = run.overrides.take();
@@ -2860,7 +3124,13 @@ impl LiveSession {
         .await;
 
         let mut session = self.session.lock().await;
-        append_preamble_updates(&mut session.messages, preamble);
+        let updates = preamble_updates(session.messages.as_slice(), preamble);
+        for msg in updates {
+            self.store
+                .record_message(&mut session, msg)
+                .await
+                .map_err(map_session_err)?;
+        }
         session.meta.agent = profile.name.to_string();
         session.meta.model_id = Some(settings.model_id.clone());
         session.meta.workspace_root = Some(settings.workspace_root.clone());
@@ -3101,10 +3371,6 @@ fn preamble_updates(messages: &[CoreMessage], new_preamble: Vec<CoreMessage>) ->
     }
     out.extend(updates);
     out
-}
-
-fn append_preamble_updates(messages: &mut Vec<CoreMessage>, new_preamble: Vec<CoreMessage>) {
-    messages.extend(preamble_updates(messages.as_slice(), new_preamble));
 }
 
 fn insert_preamble_updates_before_last_user(

@@ -97,6 +97,14 @@ pub(crate) fn build_app(state: Arc<ServerState>) -> Router {
         .route("/sessions/{session_id}/open", post(open_workspace))
         .route("/sessions/{session_id}/settings", patch(patch_settings))
         .route("/sessions/{session_id}/messages", get(get_messages))
+        .route(
+            "/sessions/{session_id}/messages/{user_message_id}/edit",
+            post(edit_user_message),
+        )
+        .route(
+            "/sessions/{session_id}/messages/{assistant_message_id}/regenerate",
+            post(regenerate_assistant_message),
+        )
         .route("/sessions/{session_id}/skills", get(list_skills))
         .route("/sessions/{session_id}/runs", post(create_run))
         .route("/runs/{run_id}", get(get_run))
@@ -716,6 +724,47 @@ async fn get_messages(
     let limit = q.limit.unwrap_or(50);
     let out = state.get_messages(&id, limit, q.before).await?;
     Ok(Json(out))
+}
+
+async fn edit_user_message(
+    State(state): State<Arc<ServerState>>,
+    Path((session_id, user_message_id)): Path<(String, String)>,
+    Json(req): Json<api::MessageEditRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let user_message_id = user_message_id
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| ApiError::invalid_argument("user_message_id must be a number"))?;
+    if user_message_id == 0 {
+        return Err(ApiError::invalid_argument(
+            "user_message_id must be >= 1",
+        ));
+    }
+
+    let out = state.edit_user_message(&id, user_message_id, req).await?;
+    Ok((StatusCode::CREATED, Json(out)))
+}
+
+async fn regenerate_assistant_message(
+    State(state): State<Arc<ServerState>>,
+    Path((session_id, assistant_message_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let assistant_message_id = assistant_message_id
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| ApiError::invalid_argument("assistant_message_id must be a number"))?;
+    if assistant_message_id == 0 {
+        return Err(ApiError::invalid_argument(
+            "assistant_message_id must be >= 1",
+        ));
+    }
+
+    let out = state
+        .regenerate_assistant_message(&id, assistant_message_id)
+        .await?;
+    Ok((StatusCode::CREATED, Json(out)))
 }
 
 async fn list_skills(

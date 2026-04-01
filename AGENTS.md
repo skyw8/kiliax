@@ -26,7 +26,7 @@ minimal
 - OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` + per-call token `usage` capture: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly (env/tools/skills/project `AGENTS.md`): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime (tool loop, parallel tool calls, streaming events, attach `usage` to assistant messages): `crates/kiliax-core/src/runtime.rs`
-- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
+- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + message edit/truncate + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
 - Tool engine + builtin tools + MCP + skills discovery (stable ordering): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-cli (TUI)
@@ -39,7 +39,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Axum routes + auth + static web hosting (serves `web/dist`): `crates/kiliax-server/src/main.rs`
-- Session lifecycle (create/resume/fork) + settings (`settings.json`) + run queue + WS/SSE events (+ message `usage` + per-session `prompt_cache_key`): `crates/kiliax-server/src/state.rs`
+- Session lifecycle (create/resume/fork/edit/regenerate) + settings (`settings.json`) + run queue + WS/SSE events (+ message `usage` + per-session `prompt_cache_key`): `crates/kiliax-server/src/state.rs`
 - REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
 
 ### crates/kiliax-otel (OpenTelemetry)
@@ -48,7 +48,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI + WS streaming + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api-key + agent max steps + raw YAML): `web/src/app.tsx`
+- Main UI + WS streaming + message edit/regenerate + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api-key + agent max steps + raw YAML): `web/src/app.tsx`
 - API client: `web/src/lib/api.ts`
 - Types (includes message `usage`): `web/src/lib/types.ts`
 
