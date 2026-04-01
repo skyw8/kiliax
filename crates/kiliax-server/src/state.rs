@@ -830,7 +830,6 @@ impl ServerState {
                     updated_at: ts_ms_to_rfc3339(meta.updated_at_ms),
                     last_outcome,
                     status: api::SessionStatus {
-                        session_state: api::SessionState::Archived,
                         run_state: api::SessionRunState::Idle,
                         active_run_id: None,
                         step: 0,
@@ -884,7 +883,6 @@ impl ServerState {
                 updated_at: ts_ms_to_rfc3339(state.meta.updated_at_ms),
                 last_outcome,
                 status: api::SessionStatus {
-                    session_state: api::SessionState::Archived,
                     run_state: api::SessionRunState::Idle,
                     active_run_id: None,
                     step: 0,
@@ -905,11 +903,6 @@ impl ServerState {
         }
         self.store.delete(session_id).await.map_err(map_session_err)?;
         Ok(())
-    }
-
-    pub async fn resume_session(&self, session_id: &SessionId) -> Result<api::Session, ApiError> {
-        let live = self.ensure_live(session_id).await?;
-        live.snapshot().await
     }
 
     pub async fn patch_session_settings(
@@ -1011,7 +1004,7 @@ impl ServerState {
                 Some(live) => live,
                 None => {
                     self.ensure_on_disk_session_exists(session_id).await?;
-                    return Err(ApiError::session_not_live("session is archived"));
+                    return Err(ApiError::session_not_live("session is not live"));
                 }
             }
         };
@@ -2117,7 +2110,6 @@ impl LiveSession {
             worker: Mutex::new(None),
             tools: Mutex::new(tools),
             status: Mutex::new(api::SessionStatus {
-                session_state: api::SessionState::Live,
                 run_state: api::SessionRunState::Idle,
                 active_run_id: None,
                 step: 0,
@@ -2347,42 +2339,34 @@ impl LiveSession {
         Ok(())
     }
 
-    async fn apply_regenerate_assistant_message(
+    async fn apply_regenerate_after_user_message(
         &self,
-        assistant_message_id: u64,
+        user_message_id: u64,
     ) -> Result<(), ApiError> {
         self.ensure_history_mutable().await?;
 
-        let user_message_id = {
+        {
             let session = self.session.lock().await;
-            let assistant_idx = session
+            let idx = session
                 .message_ids
                 .iter()
-                .position(|id| *id == assistant_message_id)
+                .position(|id| *id == user_message_id)
                 .ok_or_else(|| ApiError::not_found("message not found"))?;
-            if !matches!(session.messages[assistant_idx], CoreMessage::Assistant { .. }) {
-                return Err(ApiError::invalid_argument(
-                    "assistant_message_id must refer to an assistant message",
-                ));
-            }
-
-            let mut found: Option<u64> = None;
-            for idx in (0..assistant_idx).rev() {
-                if let CoreMessage::User { content } = &session.messages[idx] {
-                    let text = content.first_text().unwrap_or("").trim();
-                    if text.is_empty() {
+            match &session.messages[idx] {
+                CoreMessage::User { content } => {
+                    if content.first_text().unwrap_or("").trim().is_empty() {
                         return Err(ApiError::invalid_argument(
-                            "cannot regenerate: the preceding user message is empty",
+                            "cannot regenerate: user message is empty",
                         ));
                     }
-                    found = Some(session.message_ids[idx]);
-                    break;
+                }
+                _ => {
+                    return Err(ApiError::invalid_argument(
+                        "user_message_id must refer to a user message",
+                    ));
                 }
             }
-            found.ok_or_else(|| {
-                ApiError::invalid_argument("cannot regenerate before the first user message")
-            })?
-        };
+        }
 
         {
             let mut session = self.session.lock().await;
@@ -2405,7 +2389,6 @@ impl LiveSession {
             data: serde_json::json!({
                 "after_message_id": user_message_id,
                 "reason": "regenerate",
-                "assistant_message_id": assistant_message_id,
             }),
         })
         .await?;
@@ -2466,15 +2449,13 @@ impl LiveSession {
                 }
                 self.apply_edit_user_message(*user_message_id, content).await?;
             }
-            api::RunInput::RegenerateAssistantMessage {
-                assistant_message_id,
-            } => {
-                if *assistant_message_id == 0 {
+            api::RunInput::RegenerateAfterUserMessage { user_message_id } => {
+                if *user_message_id == 0 {
                     return Err(ApiError::invalid_argument(
-                        "assistant_message_id must be >= 1",
+                        "user_message_id must be >= 1",
                     ));
                 }
-                self.apply_regenerate_assistant_message(*assistant_message_id)
+                self.apply_regenerate_after_user_message(*user_message_id)
                     .await?;
             }
         }
@@ -2642,7 +2623,7 @@ impl LiveSession {
                     (by_id.or(last_user).unwrap_or_default(), false)
                 }
                 api::RunInput::EditUserMessage { content, .. } => (content.clone(), false),
-                api::RunInput::RegenerateAssistantMessage { .. } => {
+                api::RunInput::RegenerateAfterUserMessage { .. } => {
                     let session = self.session.lock().await;
                     let last_user = session.messages.iter().rev().find_map(|m| match m {
                         CoreMessage::User { content } => {

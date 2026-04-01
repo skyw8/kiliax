@@ -1345,11 +1345,6 @@ impl App {
             return Ok(());
         }
 
-        let prev_profile = self.profile.clone();
-        let prev_options = self.options.clone();
-        let prev_session = self.session.clone();
-        let prev_messages = self.messages.clone();
-
         self.profile = next;
         self.options = AgentRuntimeOptions::from_config(&self.profile, &self.config);
         self.session.meta.agent = self.profile.name.to_string();
@@ -1362,17 +1357,12 @@ impl App {
             self.runtime.tools(),
         )
         .await;
-        append_preamble_updates(&mut self.session.messages, new_preamble);
-        self.session.meta.message_count = self.session.messages.len();
+        for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
+            self.store.record_message(&mut self.session, msg).await?;
+        }
         self.messages = self.session.messages.clone();
 
-        if let Err(err) = self.store.checkpoint(&mut self.session).await {
-            self.profile = prev_profile;
-            self.options = prev_options;
-            self.session = prev_session;
-            self.messages = prev_messages;
-            return Err(err.into());
-        }
+        self.store.checkpoint(&mut self.session).await?;
 
         self.pending_history_lines.push(Line::from(vec![
             Span::from("• ").dim(),
@@ -1480,11 +1470,12 @@ impl App {
                 self.runtime.tools(),
             )
             .await;
-            append_preamble_updates(&mut self.session.messages, new_preamble);
-            self.session.meta.message_count = self.session.messages.len();
+            for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
+                self.store.record_message(&mut self.session, msg).await?;
+            }
             self.messages = self.session.messages.clone();
 
-            self.store.checkpoint(&mut self.session).await?;
+            let _ = self.store.checkpoint(&mut self.session).await;
 
             self.pending_history_lines.push(Line::from(vec![
                 Span::from("• ").dim(),
@@ -1571,10 +1562,11 @@ impl App {
                 self.runtime.tools(),
             )
             .await;
-            append_preamble_updates(&mut self.session.messages, new_preamble);
-            self.session.meta.message_count = self.session.messages.len();
+            for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
+                self.store.record_message(&mut self.session, msg).await?;
+            }
             self.messages = self.session.messages.clone();
-            self.store.checkpoint(&mut self.session).await?;
+            let _ = self.store.checkpoint(&mut self.session).await;
 
             let action = if enable { "enabled" } else { "disabled" };
             self.pending_history_lines.push(Line::from(vec![
@@ -1928,7 +1920,7 @@ fn parse_known_slash_command(text: &str) -> Option<(crate::slash_command::SlashC
     Some((cmd, args.to_string()))
 }
 
-fn append_preamble_updates(messages: &mut Vec<Message>, new_preamble: Vec<Message>) {
+fn preamble_updates(messages: &[Message], new_preamble: Vec<Message>) -> Vec<Message> {
     const HEADER: &str =
         "Session update: the following system messages override earlier system context.";
 
@@ -1952,15 +1944,17 @@ fn append_preamble_updates(messages: &mut Vec<Message>, new_preamble: Vec<Messag
     }
 
     if updates.is_empty() {
-        return;
+        return Vec::new();
     }
 
+    let mut out = Vec::with_capacity(updates.len().saturating_add(1));
     if !header_seen {
-        messages.push(Message::System {
+        out.push(Message::System {
             content: HEADER.to_string(),
         });
     }
-    messages.extend(updates);
+    out.extend(updates);
+    out
 }
 
 async fn build_preamble(

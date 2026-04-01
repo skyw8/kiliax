@@ -105,6 +105,13 @@ function parseMessageId(id: string): bigint | null {
   }
 }
 
+function messageIdToSafeNumber(id: bigint): number {
+  if (id > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("Message id is too large");
+  }
+  return Number(id);
+}
+
 function newAlertId(prefix: string): string {
   return `${prefix}_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`;
 }
@@ -1508,6 +1515,7 @@ export default function App() {
     try {
       const afterId = parseMessageId(editMessageId);
       if (afterId == null) throw new Error("Invalid user message id");
+      const afterIdNum = messageIdToSafeNumber(afterId);
       setMessages((prev) =>
         prev
           .map((m) => {
@@ -1526,7 +1534,7 @@ export default function App() {
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
 
       const run: any = await api.createRun(sessionId, {
-        input: { type: "edit_user_message", user_message_id: afterId, content: text },
+        input: { type: "edit_user_message", user_message_id: afterIdNum, content: text },
       });
       const runId = String(run?.id ?? "").trim();
       setPending((p) => [
@@ -1572,6 +1580,9 @@ export default function App() {
     const afterId = precedingUser ? parseMessageId(precedingUser.id) : null;
 
     try {
+      if (afterId == null) {
+        throw new Error("Could not locate preceding user message");
+      }
       if (afterId != null) {
         setMessages((prev) =>
           prev.filter((m) => {
@@ -1584,12 +1595,11 @@ export default function App() {
       resetStreamState();
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
 
-      const assistantId = parseMessageId(assistantMessageId);
-      if (assistantId == null) throw new Error("Invalid assistant message id");
+      const userIdNum = messageIdToSafeNumber(afterId);
       const run: any = await api.createRun(sessionId, {
         input: {
-          type: "regenerate_assistant_message",
-          assistant_message_id: assistantId,
+          type: "regenerate_after_user_message",
+          user_message_id: userIdNum,
         },
       });
       const runId = String(run?.id ?? "").trim();

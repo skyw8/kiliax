@@ -470,7 +470,7 @@ async fn delete_session_removes_session() {
 }
 
 #[tokio::test]
-async fn list_sessions_shows_archived_after_restart() {
+async fn list_sessions_shows_persisted_after_restart() {
     let dir = TempDir::new().expect("tempdir");
     let app1 = build_test_app(&dir, None).await;
 
@@ -506,14 +506,20 @@ async fn list_sessions_shows_archived_after_restart() {
     let found = found.expect("session listed");
     assert_eq!(
         found.get("status")
-            .and_then(|s| s.get("session_state"))
+            .and_then(|s| s.get("run_state"))
             .and_then(|v| v.as_str()),
-        Some("archived")
+        Some("idle")
+    );
+    assert!(
+        found.get("status")
+            .and_then(|s| s.get("session_state"))
+            .is_none(),
+        "session_state should not be part of the public API"
     );
 }
 
 #[tokio::test]
-async fn resume_session_makes_it_live() {
+async fn create_run_auto_resumes_session_into_live_only_list() {
     let dir = TempDir::new().expect("tempdir");
     let app1 = build_test_app(&dir, None).await;
 
@@ -529,19 +535,36 @@ async fn resume_session_makes_it_live() {
 
     let resp = app2
         .clone()
-        .oneshot(req_empty(
-            Method::POST,
-            &format!("/v1/sessions/{session_id}/resume"),
-        ))
+        .oneshot(req_empty(Method::GET, "/v1/sessions?live=true"))
         .await
         .expect("oneshot");
     let (status, body) = read_json(resp).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        body.get("status")
-            .and_then(|s| s.get("session_state"))
-            .and_then(|v| v.as_str()),
-        Some("live")
+    assert_eq!(body.get("items").and_then(|v| v.as_array()).unwrap().len(), 0);
+
+    let resp = app2
+        .clone()
+        .oneshot(req_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/runs"),
+            serde_json::json!({ "input": { "type": "text", "text": "hello" } }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let resp = app2
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/sessions?live=true"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    assert!(
+        items.iter().any(|it| it.get("id").and_then(|v| v.as_str()) == Some(&session_id)),
+        "expected session to be loaded into live list after create_run"
     );
 }
 
@@ -558,7 +581,7 @@ async fn create_run_auto_resume_false_requires_live_session() {
     let (_status, body) = read_json(resp).await;
     let session_id = body.get("id").and_then(|v| v.as_str()).unwrap().to_string();
 
-    // new state => archived
+    // new state => not loaded (not live)
     let app2 = build_test_app(&dir, None).await;
 
     let resp = app2
@@ -602,7 +625,7 @@ async fn create_run_nonexistent_session_returns_404() {
 }
 
 #[tokio::test]
-async fn events_stream_auto_resumes_archived_session() {
+async fn events_stream_auto_loads_session() {
     let dir = TempDir::new().expect("tempdir");
     let workspace_root = dir.path().to_path_buf();
 
@@ -692,17 +715,6 @@ async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
 
     let session_id = state.id().to_string();
     let app = build_test_app(&dir, None).await;
-
-    let resp = app
-        .clone()
-        .oneshot(req_empty(
-            Method::POST,
-            &format!("/v1/sessions/{session_id}/resume"),
-        ))
-        .await
-        .expect("oneshot");
-    let (status, _body) = read_json(resp).await;
-    assert_eq!(status, StatusCode::OK);
 
     let resp = app
         .clone()
@@ -834,24 +846,13 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
 
     let resp = app
         .clone()
-        .oneshot(req_empty(
-            Method::POST,
-            &format!("/v1/sessions/{session_id}/resume"),
-        ))
-        .await
-        .expect("oneshot");
-    let (status, _body) = read_json(resp).await;
-    assert_eq!(status, StatusCode::OK);
-
-    let resp = app
-        .clone()
         .oneshot(req_json(
             Method::POST,
             &format!("/v1/sessions/{session_id}/runs"),
             serde_json::json!({
                 "input": {
-                    "type": "regenerate_assistant_message",
-                    "assistant_message_id": assistant2_id,
+                    "type": "regenerate_after_user_message",
+                    "user_message_id": user2_id,
                 }
             }),
         ))
@@ -863,13 +864,13 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
         body.get("input")
             .and_then(|i| i.get("type"))
             .and_then(|v| v.as_str()),
-        Some("regenerate_assistant_message")
+        Some("regenerate_after_user_message")
     );
     assert_eq!(
         body.get("input")
-            .and_then(|i| i.get("assistant_message_id"))
+            .and_then(|i| i.get("user_message_id"))
             .and_then(|v| v.as_u64()),
-        Some(assistant2_id)
+        Some(user2_id)
     );
 
     let resp = app
@@ -934,17 +935,6 @@ async fn history_mutation_endpoints_return_conflict_when_session_busy() {
 
     let session_id = state.id().to_string();
     let app = build_test_app(&dir, None).await;
-
-    let resp = app
-        .clone()
-        .oneshot(req_empty(
-            Method::POST,
-            &format!("/v1/sessions/{session_id}/resume"),
-        ))
-        .await
-        .expect("oneshot");
-    let (status, _body) = read_json(resp).await;
-    assert_eq!(status, StatusCode::OK);
 
     let resp = app
         .clone()

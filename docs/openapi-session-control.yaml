@@ -88,26 +88,6 @@ paths:
         default:
           $ref: "#/components/responses/ErrorResponse"
 
-  /v1/sessions/{session_id}/resume:
-    post:
-      tags: [Sessions]
-      operationId: resumeSession
-      summary: Resume session as live
-      description: |
-        Makes an archived session live (creates an in-memory runtime).
-        Implementations may also auto-resume on `createRun`; this endpoint exists for explicit warm-up.
-      parameters:
-        - $ref: "#/components/parameters/SessionId"
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Session"
-        default:
-          $ref: "#/components/responses/ErrorResponse"
-
   /v1/sessions/{session_id}/settings:
     patch:
       tags: [Sessions]
@@ -165,8 +145,8 @@ paths:
         Enqueues a new run for a session. Runs are executed sequentially per session.
 
         Auto-resume:
-        - If the session is archived and `auto_resume=true`, the server SHOULD resume it automatically.
-        - If `auto_resume=false` and the session is archived, the server SHOULD return an error
+        - If the session is not currently loaded and `auto_resume=true`, the server SHOULD load it automatically.
+        - If `auto_resume=false` and the session is not currently loaded, the server SHOULD return an error
           with `error.code=session_not_live` (recommended HTTP status: 409).
 
         Streaming:
@@ -511,9 +491,6 @@ components:
           items: { $ref: "#/components/schemas/McpServerStatus" }
 
     # ---- session / run ----
-    SessionState:
-      type: string
-      enum: [live, archived]
     SessionRunState:
       type: string
       description: Current activity of the live runtime.
@@ -521,9 +498,8 @@ components:
 
     SessionStatus:
       type: object
-      required: [session_state, run_state, queue_len, last_event_id]
+      required: [run_state, queue_len, last_event_id]
       properties:
-        session_state: { $ref: "#/components/schemas/SessionState" }
         run_state: { $ref: "#/components/schemas/SessionRunState" }
         active_run_id:
           anyOf:
@@ -643,8 +619,8 @@ components:
           type: boolean
           default: true
           description: |
-            If true (default), server should auto-resume an archived session to accept this run.
-            If false, server may reject archived sessions with `error.code=session_not_live`.
+            If true (default), server may load the session into memory to accept this run.
+            If false, server may reject sessions that are not already loaded with `error.code=session_not_live`.
 
     # ---- messages ----
     MessageRole:

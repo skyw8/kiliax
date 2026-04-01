@@ -27,7 +27,7 @@ minimal
 - OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` + per-call token `usage` capture: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly (model/agent/tools/skills/project + env last): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime (tool loop, parallel tool calls, streaming events, attach `usage` to assistant messages): `crates/kiliax-core/src/runtime.rs`
-- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + message edit/truncate + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
+- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + message edit/truncate + snapshot self-heal + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
 - Tool engine + builtin tools + MCP + skills discovery (stable ordering): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-cli (TUI)
@@ -40,7 +40,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Axum routes + auth + static web hosting (serves `web/dist`): `crates/kiliax-server/src/main.rs`
-- Session lifecycle (create/resume/fork) + settings (`settings.json`) + run queue (includes edit/regenerate via run inputs) + WS/SSE events (+ message `usage` + per-session `prompt_cache_key`): `crates/kiliax-server/src/state.rs`
+- Session lifecycle (create/fork) + settings (`settings.json`) + run queue (includes edit/regenerate via run inputs) + WS/SSE events (+ message `usage` + per-session `prompt_cache_key`): `crates/kiliax-server/src/state.rs`
 - REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
 
 ### crates/kiliax-otel (OpenTelemetry)

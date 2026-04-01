@@ -52,7 +52,6 @@ pub struct Session {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionStatus {
-    pub session_state: SessionState,
     pub run_state: SessionRunState,
     pub active_run_id: Option<String>,
     pub step: u32,
@@ -60,13 +59,6 @@ pub struct SessionStatus {
     pub active_tool: Option<String>,
     pub queue_len: usize,
     pub last_event_id: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    Live,
-    Archived,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -180,7 +172,7 @@ pub enum RunInput {
     Text { text: String },
     FromUserMessage { user_message_id: u64 },
     EditUserMessage { user_message_id: u64, content: String },
-    RegenerateAssistantMessage { assistant_message_id: u64 },
+    RegenerateAfterUserMessage { user_message_id: u64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

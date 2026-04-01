@@ -309,9 +309,28 @@ impl FileSessionStore {
         };
         state.meta.schema_version = SESSION_SCHEMA_VERSION;
         if state.message_ids.len() != state.messages.len() {
-            state.message_ids =
-                self.rebuild_message_ids_from_events(id, state.meta.last_snapshot_seq)
-                    .await?;
+            // Snapshot corruption recovery: some older code paths mutated `messages` directly
+            // without recording events (so `message_ids` fell out of sync). In that case, the
+            // append-only log is the source of truth; rebuild from events and write a fresh
+            // checkpoint to self-heal.
+            let mut rebuilt = SessionState {
+                meta: state.meta.clone(),
+                messages: Vec::new(),
+                message_ids: Vec::new(),
+            };
+            rebuilt.meta.schema_version = SESSION_SCHEMA_VERSION;
+            rebuilt.meta.last_seq = 0;
+            rebuilt.meta.last_snapshot_seq = 0;
+            rebuilt.meta.message_count = 0;
+            rebuilt.meta.last_finish_reason = None;
+            rebuilt.meta.last_error = None;
+
+            self.replay_events_after_snapshot(&mut rebuilt).await?;
+            if rebuilt.meta.prompt_cache_key.is_none() {
+                rebuilt.meta.prompt_cache_key = Some(new_prompt_cache_key());
+            }
+            let _ = self.checkpoint(&mut rebuilt).await;
+            return Ok(rebuilt);
         }
 
         self.replay_events_after_snapshot(&mut state).await?;
@@ -576,63 +595,6 @@ impl FileSessionStore {
         Ok(snapshot)
     }
 
-    async fn rebuild_message_ids_from_events(
-        &self,
-        id: &SessionId,
-        up_to_seq: u64,
-    ) -> Result<Vec<u64>, SessionError> {
-        if up_to_seq == 0 {
-            return Ok(Vec::new());
-        }
-
-        let path = self.events_path(id);
-        let file = match tokio::fs::File::open(&path).await {
-            Ok(f) => f,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(err.into()),
-        };
-
-        let mut out: Vec<u64> = Vec::new();
-        let mut reader = tokio::io::BufReader::new(file);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let n = reader.read_line(&mut line).await?;
-            if n == 0 {
-                break;
-            }
-
-            let raw = line.trim_end_matches(&['\r', '\n'][..]);
-            let raw = raw.trim();
-            if raw.is_empty() {
-                continue;
-            }
-
-            let parsed: Result<SessionEventLine, _> = serde_json::from_str(raw);
-            let parsed = match parsed {
-                Ok(v) => v,
-                Err(err) => {
-                    let ends_with_newline = line.ends_with('\n');
-                    if !ends_with_newline {
-                        break;
-                    }
-                    return Err(SessionError::Deserialize(err));
-                }
-            };
-
-            if parsed.schema_version > SESSION_SCHEMA_VERSION {
-                return Err(SessionError::UnsupportedSchema(parsed.schema_version));
-            }
-            if parsed.seq > up_to_seq {
-                continue;
-            }
-            if matches!(parsed.event, SessionEvent::Message { .. }) {
-                out.push(parsed.seq);
-            }
-        }
-
-        Ok(out)
-    }
 }
 
 fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u64) {
@@ -814,5 +776,75 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, state.meta.id);
         assert_eq!(list[0].title.as_deref(), Some("hello"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_repairs_corrupted_snapshot_when_message_ids_out_of_sync() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(tmp.path()).with_checkpoint_every(1000);
+
+        let mut state = store
+            .create(
+                "general",
+                Some("p/m".to_string()),
+                None,
+                None,
+                Vec::new(),
+                vec![
+                    Message::System {
+                        content: "sys".to_string(),
+                    },
+                    Message::User {
+                        content: crate::llm::UserMessageContent::Text("u1".to_string()),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        store
+            .record_message(
+                &mut state,
+                Message::Assistant {
+                    content: Some("a1".to_string()),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                    usage: None,
+                },
+            )
+            .await
+            .unwrap();
+        store.checkpoint(&mut state).await.unwrap();
+
+        let snapshot_path = store.snapshot_path(state.id());
+        let raw = tokio::fs::read_to_string(&snapshot_path).await.unwrap();
+        let mut snapshot: SessionSnapshot = serde_json::from_str(&raw).unwrap();
+        snapshot.messages.insert(
+            1,
+            Message::System {
+                content: "CORRUPT".to_string(),
+            },
+        );
+        snapshot.meta.message_count = snapshot.messages.len();
+        tokio::fs::write(&snapshot_path, serde_json::to_string(&snapshot).unwrap())
+            .await
+            .unwrap();
+
+        let loaded = store.load(state.id()).await.unwrap();
+        assert_eq!(loaded.messages.len(), loaded.message_ids.len());
+        assert!(
+            !loaded.messages.iter().any(|m| matches!(m, Message::System { content } if content == "CORRUPT"))
+        );
+        let user_idx = loaded
+            .message_ids
+            .iter()
+            .position(|id| *id == 2)
+            .expect("user id exists");
+        assert!(matches!(loaded.messages[user_idx], Message::User { .. }));
+
+        // Snapshot is self-healed for future loads.
+        let raw = tokio::fs::read_to_string(&snapshot_path).await.unwrap();
+        let snapshot: SessionSnapshot = serde_json::from_str(&raw).unwrap();
+        assert_eq!(snapshot.messages.len(), snapshot.message_ids.len());
     }
 }
