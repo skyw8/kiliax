@@ -590,12 +590,12 @@ impl ServerState {
         session_id: &SessionId,
         req: api::ForkSessionRequest,
     ) -> Result<api::ForkSessionResponse, ApiError> {
-        let assistant_seq = req
+        let assistant_message_id = req
             .assistant_message_id
             .trim()
             .parse::<u64>()
             .map_err(|_| ApiError::invalid_argument("assistant_message_id must be a number"))?;
-        if assistant_seq == 0 {
+        if assistant_message_id == 0 {
             return Err(ApiError::invalid_argument("assistant_message_id must be >= 1"));
         }
 
@@ -603,15 +603,70 @@ impl ServerState {
         let source = self.store.load(session_id).await.map_err(map_session_err)?;
         let settings = load_settings_for_meta(&self.store, &source.meta, config.as_ref()).await?;
 
-        let assistant_index = (assistant_seq - 1) as usize;
-        if assistant_index >= source.messages.len() {
+        let mut found = false;
+        let mut is_message = false;
+        let mut messages: Vec<(u64, CoreMessage)> = Vec::new();
+
+        let path = self.store.events_path(session_id);
+        let file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ApiError::not_found("session not found")
+                } else {
+                    ApiError::internal_error(e)
+                }
+            })?;
+        let mut reader = tokio::io::BufReader::new(file);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = reader
+                .read_line(&mut line)
+                .await
+                .map_err(ApiError::internal_error)?;
+            if n == 0 {
+                break;
+            }
+            let raw = line.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let parsed: SessionEventLine = match serde_json::from_str(raw) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if parsed.seq > assistant_message_id {
+                continue;
+            }
+            if parsed.seq == assistant_message_id {
+                found = true;
+                is_message = matches!(parsed.event, SessionEvent::Message { .. });
+            }
+            if let SessionEvent::Message { message } = parsed.event {
+                messages.push((parsed.seq, message));
+            }
+        }
+
+        if !found {
             return Err(ApiError::new(
                 StatusCode::NOT_FOUND,
                 ApiErrorCode::NotFound,
                 "message not found",
             ));
         }
-        if !matches!(source.messages[assistant_index], CoreMessage::Assistant { .. }) {
+        if !is_message {
+            return Err(ApiError::invalid_argument(
+                "assistant_message_id must refer to a message",
+            ));
+        }
+
+        messages.sort_by_key(|(seq, _,)| *seq);
+        let assistant_index = messages
+            .iter()
+            .position(|(seq, _)| *seq == assistant_message_id)
+            .ok_or_else(|| ApiError::not_found("message not found"))?;
+        if !matches!(messages[assistant_index].1, CoreMessage::Assistant { .. }) {
             return Err(ApiError::invalid_argument(
                 "assistant_message_id must refer to an assistant message",
             ));
@@ -620,7 +675,7 @@ impl ServerState {
         let mut user_index: Option<usize> = None;
         let mut user_text: Option<String> = None;
         for idx in (0..assistant_index).rev() {
-            if let CoreMessage::User { content } = &source.messages[idx] {
+            if let CoreMessage::User { content } = &messages[idx].1 {
                 user_index = Some(idx);
                 user_text = Some(content.first_text().unwrap_or("").to_string());
                 break;
@@ -636,7 +691,11 @@ impl ServerState {
             ));
         }
 
-        let initial_messages = source.messages[..user_index].to_vec();
+        let initial_messages = messages
+            .into_iter()
+            .take(user_index)
+            .map(|(_, msg)| msg)
+            .collect::<Vec<_>>();
 
         if settings.workspace_root.trim().is_empty() {
             return Err(ApiError::invalid_argument("workspace_root must not be empty"));
@@ -658,7 +717,7 @@ impl ServerState {
             )
             .map_err(ApiError::internal_error)?;
 
-        let forked = self
+        let mut forked = self
             .store
             .create(
                 settings.agent.clone(),
@@ -670,6 +729,16 @@ impl ServerState {
             )
             .await
             .map_err(map_session_err)?;
+
+        if let Some(key) = source
+            .meta
+            .prompt_cache_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
+            forked.meta.prompt_cache_key = Some(key.to_string());
+        }
 
         let live = LiveSession::from_state(self, forked, settings, tools, false).await?;
         self.sessions
@@ -2535,7 +2604,15 @@ impl LiveSession {
                     e.to_string(),
                 )
             })?;
-            let llm = llm.with_prompt_cache_key(Some(self.session_id.to_string()));
+            let prompt_cache_key = {
+                let session = self.session.lock().await;
+                session
+                    .meta
+                    .prompt_cache_key
+                    .clone()
+                    .filter(|k| !k.trim().is_empty())
+            };
+            let llm = llm.with_prompt_cache_key(prompt_cache_key);
             let runtime = AgentRuntime::new(llm, tools_for_run.clone());
 
             let mut messages = { self.session.lock().await.messages.clone() };

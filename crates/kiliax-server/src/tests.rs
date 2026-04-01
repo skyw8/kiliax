@@ -306,6 +306,68 @@ async fn create_session_accepts_empty_body_and_persists_settings() {
 }
 
 #[tokio::test]
+async fn fork_session_inherits_prompt_cache_key() {
+    let dir = TempDir::new().expect("tempdir");
+    let workspace_root = dir.path().to_path_buf();
+    let config_path = workspace_root.join("kiliax.yaml");
+    let state = ServerState::new_for_tests(workspace_root.clone(), config_path, test_config(), None)
+        .await
+        .expect("new_for_tests");
+
+    let store = state.store.clone();
+    let mut source = store
+        .create(
+            "general",
+            Some("test/test-model".to_string()),
+            None,
+            Some(workspace_root.display().to_string()),
+            Vec::new(),
+            vec![Message::User {
+                content: UserMessageContent::Text("hello".to_string()),
+            }],
+        )
+        .await
+        .expect("create source session");
+
+    let expected = source.meta.prompt_cache_key.clone();
+    store
+        .record_finish(&mut source, Some("test".to_string()))
+        .await
+        .expect("record finish");
+    store
+        .record_message(
+            &mut source,
+            Message::Assistant {
+                content: Some("hi".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        )
+        .await
+        .expect("record assistant");
+    let assistant_message_id = source.meta.last_seq.to_string();
+
+    let out = state
+        .fork_session(
+            source.id(),
+            crate::api::ForkSessionRequest {
+                assistant_message_id: assistant_message_id.clone(),
+            },
+        )
+        .await
+        .expect("fork_session");
+
+    let forked_id = SessionId::parse(&out.session.summary.id).expect("forked id");
+    let forked = store.load(&forked_id).await.expect("load forked");
+    assert_eq!(forked.meta.prompt_cache_key, expected);
+
+    // Ensure the original key didn't change.
+    source = store.load(source.id()).await.expect("reload source");
+    assert_eq!(source.meta.prompt_cache_key, expected);
+}
+
+#[tokio::test]
 async fn idempotency_key_makes_create_session_idempotent() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;

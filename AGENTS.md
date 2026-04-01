@@ -39,7 +39,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Axum routes + auth + static web hosting (serves `web/dist`): `crates/kiliax-server/src/main.rs`
-- Session lifecycle + settings (`settings.json`) + run queue + WS/SSE events (+ message `usage` passthrough): `crates/kiliax-server/src/state.rs`
+- Session lifecycle (create/resume/fork) + settings (`settings.json`) + run queue + WS/SSE events (+ message `usage` + per-session `prompt_cache_key`): `crates/kiliax-server/src/state.rs`
 - REST schema: `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
 
 ### crates/kiliax-otel (OpenTelemetry)
