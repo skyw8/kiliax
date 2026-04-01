@@ -25,7 +25,7 @@ minimal
 - Agent profiles + tool permissions: `crates/kiliax-core/src/agents/`
 - Config + model routing: `crates/kiliax-core/src/config.rs`
 - OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` + per-call token `usage` capture: `crates/kiliax-core/src/llm.rs`
-- Prompt assembly (env/tools/skills/project `AGENTS.md`): `crates/kiliax-core/src/prompt.rs`
+- Prompt assembly (model/agent/tools/skills/project + env last): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime (tool loop, parallel tool calls, streaming events, attach `usage` to assistant messages): `crates/kiliax-core/src/runtime.rs`
 - Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + message edit/truncate + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
 - Tool engine + builtin tools + MCP + skills discovery (stable ordering): `crates/kiliax-core/src/tools/`

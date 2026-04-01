@@ -738,7 +738,6 @@ impl ServerState {
                 &profile,
                 &settings.model_id,
                 &workspace_root,
-                &settings.extra_workspace_roots,
                 &tools,
                 &config.skills,
             )
@@ -2796,7 +2795,6 @@ impl LiveSession {
                     &profile,
                     &effective.model_id,
                     &workspace_root,
-                    &effective.extra_workspace_roots,
                     &tools_for_run,
                     &config.skills,
                 )
@@ -3025,7 +3023,6 @@ impl LiveSession {
             &profile,
             &settings.model_id,
             &workspace_root,
-            &settings.extra_workspace_roots,
             &tools,
             &config.skills,
         )
@@ -3300,21 +3297,15 @@ async fn build_preamble(
     profile: &AgentProfile,
     model_id: &str,
     workspace_root: &PathBuf,
-    extra_workspace_roots: &[String],
     tools: &ToolEngine,
     skills_config: &kiliax_core::config::SkillsConfig,
 ) -> Vec<CoreMessage> {
-    let extra_workspace_roots: Vec<PathBuf> = extra_workspace_roots
-        .iter()
-        .map(PathBuf::from)
-        .collect();
     let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
         .with_tools({
             kiliax_core::tools::policy::tool_definitions_for_agent(profile, tools, model_id).await
         })
         .with_model_id(model_id.to_string())
-        .with_workspace_root(workspace_root)
-        .with_extra_workspace_roots(extra_workspace_roots);
+        .with_workspace_root(workspace_root);
     if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
         let filtered = skills.into_iter().filter(|s| {
             skills_config

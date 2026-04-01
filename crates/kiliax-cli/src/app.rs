@@ -1119,18 +1119,6 @@ impl App {
             .collect();
         self.session.meta.updated_at_ms = now_ms();
 
-        let new_preamble = build_preamble(
-            &self.profile,
-            &self.model_id,
-            &self.workspace_root,
-            &self.extra_workspace_roots,
-            self.runtime.tools(),
-        )
-        .await;
-        append_preamble_updates(&mut self.session.messages, new_preamble);
-        self.session.meta.message_count = self.session.messages.len();
-        self.messages = self.session.messages.clone();
-
         self.store.checkpoint(&mut self.session).await?;
 
         self.pending_history_lines.push(Line::from(vec![
@@ -1168,7 +1156,6 @@ impl App {
             &self.profile,
             &self.model_id,
             &self.workspace_root,
-            &self.extra_workspace_roots,
             self.runtime.tools(),
         )
         .await;
@@ -1372,7 +1359,6 @@ impl App {
             &self.profile,
             &self.model_id,
             &self.workspace_root,
-            &self.extra_workspace_roots,
             self.runtime.tools(),
         )
         .await;
@@ -1491,7 +1477,6 @@ impl App {
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
-                &self.extra_workspace_roots,
                 self.runtime.tools(),
             )
             .await;
@@ -1583,7 +1568,6 @@ impl App {
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
-                &self.extra_workspace_roots,
                 self.runtime.tools(),
             )
             .await;
@@ -1983,7 +1967,6 @@ async fn build_preamble(
     profile: &AgentProfile,
     model_id: &str,
     workspace_root: &PathBuf,
-    extra_workspace_roots: &[PathBuf],
     tools: &kiliax_core::tools::ToolEngine,
 ) -> Vec<Message> {
     let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
@@ -1991,8 +1974,7 @@ async fn build_preamble(
             kiliax_core::tools::policy::tool_definitions_for_agent(profile, tools, model_id).await
         })
         .with_model_id(model_id.to_string())
-        .with_workspace_root(workspace_root)
-        .with_extra_workspace_roots(extra_workspace_roots.iter().cloned());
+        .with_workspace_root(workspace_root);
     if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
         builder = builder.add_skills(skills);
     }

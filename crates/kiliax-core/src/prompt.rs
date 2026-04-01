@@ -19,7 +19,6 @@ const SUBAGENTS_LINE: &str = "Subagents: not supported.";
 #[derive(Debug, Clone)]
 pub struct PromptBuilder {
     workspace_root: Option<PathBuf>,
-    extra_workspace_roots: Vec<PathBuf>,
     model_id: Option<String>,
     include_model_prompt: bool,
     agent_prompt: Option<String>,
@@ -35,7 +34,6 @@ impl PromptBuilder {
     pub fn new() -> Self {
         Self {
             workspace_root: None,
-            extra_workspace_roots: Vec::new(),
             model_id: None,
             include_model_prompt: true,
             agent_prompt: None,
@@ -54,14 +52,6 @@ impl PromptBuilder {
 
     pub fn with_workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.workspace_root = Some(root.into());
-        self
-    }
-
-    pub fn with_extra_workspace_roots<I>(mut self, roots: I) -> Self
-    where
-        I: IntoIterator<Item = PathBuf>,
-    {
-        self.extra_workspace_roots = roots.into_iter().collect();
         self
     }
 
@@ -152,16 +142,6 @@ impl PromptBuilder {
             out.push(Message::System { content: prompt });
         }
 
-        if self.include_environment_prompt {
-            out.push(Message::System {
-                content: render_environment_prompt(
-                    self.workspace_root.as_deref(),
-                    &self.extra_workspace_roots,
-                    self.model_id.as_deref(),
-                ),
-            });
-        }
-
         if self.include_tools_prompt {
             out.push(Message::System {
                 content: render_tools_prompt(&self.tool_definitions),
@@ -176,6 +156,15 @@ impl PromptBuilder {
             if let Some(project) = render_project_prompt(self.workspace_root.as_deref()) {
                 out.push(Message::System { content: project });
             }
+        }
+
+        if self.include_environment_prompt {
+            out.push(Message::System {
+                content: render_environment_prompt(
+                    self.workspace_root.as_deref(),
+                    self.model_id.as_deref(),
+                ),
+            });
         }
 
         out.extend(self.messages);
@@ -203,23 +192,12 @@ fn model_prompt_for(model_id: Option<&str>) -> Option<&'static str> {
 
 fn render_environment_prompt(
     workspace_root: Option<&Path>,
-    extra_workspace_roots: &[PathBuf],
     model_id: Option<&str>,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if let Some(root) = workspace_root {
         lines.push(format!("PWD: {}", root.display()));
-    }
-    if !extra_workspace_roots.is_empty() {
-        let formatted = extra_workspace_roots
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !formatted.trim().is_empty() {
-            lines.push(format!("EXTRA_DIRS: {formatted}"));
-        }
     }
 
     lines.push(format!(
@@ -447,5 +425,70 @@ mod tests {
             matches!(m, Message::System { content } if content.contains("# Project (AGENTS.md)") && content.contains("claude rules"))
         });
         assert!(has_project);
+    }
+
+    #[test]
+    fn environment_prompt_is_last_system_message() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "project rules").unwrap();
+
+        let tool = ToolDefinition {
+            name: "read_file".to_string(),
+            description: Some("Read a file.".to_string()),
+            parameters: None,
+            strict: None,
+        };
+        let skill = Skill {
+            id: "demo".to_string(),
+            name: "demo".to_string(),
+            description: Some("desc".to_string()),
+            path: PathBuf::from("skills/demo/SKILL.md"),
+            content: "hello".to_string(),
+        };
+
+        let msgs = PromptBuilder::new()
+            .with_agent_prompt("agent")
+            .with_tools(vec![tool])
+            .add_skill(skill)
+            .with_workspace_root(dir.path())
+            .push_user("hi")
+            .build();
+
+        let env_idx = msgs
+            .iter()
+            .position(|m| matches!(m, Message::System { content } if content.contains(ENV_OPEN_TAG)))
+            .unwrap();
+        let last_system_idx = msgs
+            .iter()
+            .rposition(|m| matches!(m, Message::System { .. }))
+            .unwrap();
+        assert_eq!(env_idx, last_system_idx);
+
+        let tools_idx = msgs
+            .iter()
+            .position(|m| matches!(m, Message::System { content } if content.contains("# Tool Use")))
+            .unwrap();
+        assert!(tools_idx < env_idx);
+
+        let skills_idx = msgs
+            .iter()
+            .position(|m| {
+                matches!(m, Message::System { content } if content.contains(SKILLS_INSTRUCTIONS_OPEN_TAG))
+            })
+            .unwrap();
+        assert!(skills_idx < env_idx);
+
+        let project_idx = msgs
+            .iter()
+            .position(|m| {
+                matches!(m, Message::System { content } if content.contains("# Project (AGENTS.md)"))
+            })
+            .unwrap();
+        assert!(project_idx < env_idx);
+
+        let Message::System { content } = &msgs[env_idx] else {
+            panic!("expected environment prompt to be a system message");
+        };
+        assert!(!content.contains("EXTRA_DIRS:"));
     }
 }
