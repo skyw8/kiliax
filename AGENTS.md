@@ -6,6 +6,7 @@ minimal
 
 ## philosophy
 
+- high cohesion, low coupling
 - keep it simple, stupid
 - less is more
 
