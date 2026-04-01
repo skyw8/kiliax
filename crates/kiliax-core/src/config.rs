@@ -22,6 +22,26 @@ fn default_capture_max_bytes() -> usize {
     65536
 }
 
+fn default_server_max_live_sessions() -> usize {
+    64
+}
+
+fn default_server_live_session_idle_ttl_secs() -> u64 {
+    900
+}
+
+fn default_server_idempotency_max_entries() -> usize {
+    1024
+}
+
+fn default_server_idempotency_ttl_secs() -> u64 {
+    600
+}
+
+fn default_server_events_ring_size() -> usize {
+    4096
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentRuntimeConfig {
     /// Maximum number of ReAct steps in a single run.
@@ -97,7 +117,7 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerConfig {
     #[serde(default)]
     pub host: Option<String>,
@@ -105,6 +125,56 @@ pub struct ServerConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub token: Option<String>,
+
+    #[serde(
+        default = "default_server_max_live_sessions",
+        alias = "maxLiveSessions",
+        alias = "max-live-sessions"
+    )]
+    pub max_live_sessions: usize,
+
+    #[serde(
+        default = "default_server_live_session_idle_ttl_secs",
+        alias = "liveSessionIdleTtlSecs",
+        alias = "live-session-idle-ttl-secs"
+    )]
+    pub live_session_idle_ttl_secs: u64,
+
+    #[serde(
+        default = "default_server_idempotency_max_entries",
+        alias = "idempotencyMaxEntries",
+        alias = "idempotency-max-entries"
+    )]
+    pub idempotency_max_entries: usize,
+
+    #[serde(
+        default = "default_server_idempotency_ttl_secs",
+        alias = "idempotencyTtlSecs",
+        alias = "idempotency-ttl-secs"
+    )]
+    pub idempotency_ttl_secs: u64,
+
+    #[serde(
+        default = "default_server_events_ring_size",
+        alias = "eventsRingSize",
+        alias = "events-ring-size"
+    )]
+    pub events_ring_size: usize,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            host: None,
+            port: None,
+            token: None,
+            max_live_sessions: default_server_max_live_sessions(),
+            live_session_idle_ttl_secs: default_server_live_session_idle_ttl_secs(),
+            idempotency_max_entries: default_server_idempotency_max_entries(),
+            idempotency_ttl_secs: default_server_idempotency_ttl_secs(),
+            events_ring_size: default_server_events_ring_size(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

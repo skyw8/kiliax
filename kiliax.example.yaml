@@ -8,6 +8,12 @@ server:
   port: 8123
   # token is optional when host is loopback. Recommended for non-loopback binds (e.g. 0.0.0.0).
   # token: your-long-random-token
+  # Optional: server-side limits (defaults shown).
+  # max_live_sessions: 64
+  # live_session_idle_ttl_secs: 900
+  # idempotency_max_entries: 1024
+  # idempotency_ttl_secs: 600
+  # events_ring_size: 4096
 
 # OpenTelemetry (optional).
 otel:

@@ -1160,7 +1160,17 @@ async fn auth_middleware_enforces_bearer_token() {
         .oneshot(req_empty(Method::GET, "/v1/capabilities?token=secret"))
         .await
         .expect("oneshot");
-    assert_eq!(resp.status(), StatusCode::OK);
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
+    assert_error_code(&body, "unauthorized");
+
+    // Query token is only used for web handshake.
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/?token=secret"))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::FOUND);
     let set_cookie = resp
         .headers()
         .get(header::SET_COOKIE)
@@ -1170,7 +1180,16 @@ async fn auth_middleware_enforces_bearer_token() {
         set_cookie.contains("kiliax_token=secret"),
         "set-cookie missing token: {set_cookie}"
     );
-    let (_status, _body) = read_json(resp).await;
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/capabilities")
+        .header(header::COOKIE, "kiliax_token=secret")
+        .body(Body::empty())
+        .expect("request");
+    let resp = app.clone().oneshot(req).await.expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
 
     let req = Request::builder()
         .method(Method::GET)

@@ -1,32 +1,35 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use axum::http::StatusCode;
+use arc_swap::ArcSwap;
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::config::{Config, ProviderConfig};
 use kiliax_core::llm::{Message as CoreMessage, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
 use kiliax_core::session::{
-    FileSessionStore, SessionError, SessionEvent, SessionEventLine, SessionId, SessionMeta,
-    SessionState,
+    FileSessionStore, SessionError, SessionId, SessionMeta, SessionState,
 };
 use kiliax_core::tools::{McpServerConnectionState, ToolEngine};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
-use tokio::process::Command;
 use tokio::sync::{broadcast, watch, Mutex, Notify};
 use tokio_stream::StreamExt;
 use tracing::{Instrument, Span};
 
 use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
+use crate::infra::{
+    default_tmp_workspace_root, open_external, validate_client_extra_workspace_roots,
+    validate_client_workspace_root,
+};
 
 pub struct ServerState {
     pub workspace_root: PathBuf,
     pub config_path: PathBuf,
-    pub config: Arc<RwLock<Arc<Config>>>,
+    pub config: Arc<ArcSwap<Config>>,
     pub token: Option<String>,
 
     pub store: FileSessionStore,
@@ -35,8 +38,14 @@ pub struct ServerState {
 
     pub shutdown: Arc<Notify>,
     runner_enabled: bool,
-    sessions: Mutex<HashMap<String, Arc<LiveSession>>>,
-    idempotency: Mutex<HashMap<String, String>>,
+    sessions: Mutex<HashMap<String, LiveSessionEntry>>,
+    idempotency: Mutex<HashMap<String, (String, u64)>>,
+}
+
+#[derive(Clone)]
+struct LiveSessionEntry {
+    live: Arc<LiveSession>,
+    last_access_ms: u64,
 }
 
 impl ServerState {
@@ -84,7 +93,7 @@ impl ServerState {
         Ok(Self {
             workspace_root: workspace_root.clone(),
             config_path,
-            config: Arc::new(RwLock::new(Arc::new(config))),
+            config: Arc::new(ArcSwap::from_pointee(config)),
             token,
             store,
             runs_dir,
@@ -96,11 +105,134 @@ impl ServerState {
         })
     }
 
-    fn config_snapshot(&self) -> Result<Arc<Config>, ApiError> {
-        self.config
-            .read()
-            .map(|v| v.clone())
-            .map_err(|_| ApiError::internal("config lock poisoned"))
+    fn config_snapshot(&self) -> Arc<Config> {
+        self.config.load_full()
+    }
+
+    async fn idempotency_get(&self, key: &str) -> Option<String> {
+        let cfg = self.config_snapshot();
+        let max = cfg.server.idempotency_max_entries;
+        if max == 0 {
+            return None;
+        }
+        let ttl_ms = cfg.server.idempotency_ttl_secs.saturating_mul(1000);
+        let now = now_ms();
+
+        let mut map = self.idempotency.lock().await;
+        if ttl_ms > 0 {
+            map.retain(|_, (_, ts_ms)| now.saturating_sub(*ts_ms) <= ttl_ms);
+        }
+        map.get(key).map(|(v, _)| v.clone())
+    }
+
+    async fn idempotency_put(&self, key: String, value: String) {
+        let cfg = self.config_snapshot();
+        let max = cfg.server.idempotency_max_entries;
+        let ttl_ms = cfg.server.idempotency_ttl_secs.saturating_mul(1000);
+        let now = now_ms();
+
+        let mut map = self.idempotency.lock().await;
+        if max == 0 {
+            map.clear();
+            return;
+        }
+        if ttl_ms > 0 {
+            map.retain(|_, (_, ts_ms)| now.saturating_sub(*ts_ms) <= ttl_ms);
+        }
+        map.insert(key, (value, now));
+
+        if map.len() <= max {
+            return;
+        }
+
+        let mut entries = map
+            .iter()
+            .map(|(k, (_, ts_ms))| (*ts_ms, k.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(ts_ms, _)| *ts_ms);
+        let overflow = map.len().saturating_sub(max);
+        for (_, k) in entries.into_iter().take(overflow) {
+            map.remove(&k);
+        }
+    }
+
+    async fn enforce_live_session_limits(&self) {
+        let cfg = self.config_snapshot();
+        let max = cfg.server.max_live_sessions;
+        let ttl_secs = cfg.server.live_session_idle_ttl_secs;
+        if max == 0 && ttl_secs == 0 {
+            return;
+        }
+
+        let now = now_ms();
+        let ttl_deadline_ms = ttl_secs
+            .checked_mul(1000)
+            .and_then(|ttl_ms| now.checked_sub(ttl_ms));
+
+        let items = {
+            let guard = self.sessions.lock().await;
+            guard
+                .iter()
+                .map(|(id, entry)| (id.clone(), entry.live.clone(), entry.last_access_ms))
+                .collect::<Vec<_>>()
+        };
+
+        let mut candidates: HashSet<String> = HashSet::new();
+
+        if let Some(deadline) = ttl_deadline_ms {
+            for (id, _, last_access_ms) in &items {
+                if *last_access_ms < deadline {
+                    candidates.insert(id.clone());
+                }
+            }
+        }
+
+        if max > 0 && items.len() > max {
+            let mut sorted = items
+                .iter()
+                .map(|(id, _, last_access_ms)| (*last_access_ms, id.clone()))
+                .collect::<Vec<_>>();
+            sorted.sort_by_key(|(last_access_ms, _)| *last_access_ms);
+            let overflow = items.len().saturating_sub(max);
+            for (_, id) in sorted.into_iter().take(overflow) {
+                candidates.insert(id);
+            }
+        }
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        let mut to_shutdown: Vec<Arc<LiveSession>> = Vec::new();
+        for (id, live, last_access_ms) in items {
+            if !candidates.contains(&id) {
+                continue;
+            }
+            if !live.is_idle_for_eviction().await {
+                continue;
+            }
+
+            let removed = {
+                let mut guard = self.sessions.lock().await;
+                match guard.get(&id) {
+                    Some(entry)
+                        if Arc::ptr_eq(&entry.live, &live)
+                            && entry.last_access_ms == last_access_ms =>
+                    {
+                        guard.remove(&id)
+                    }
+                    _ => None,
+                }
+            };
+
+            if removed.is_some() {
+                to_shutdown.push(live);
+            }
+        }
+
+        for live in to_shutdown {
+            live.shutdown().await;
+        }
     }
 
     pub async fn get_config(&self) -> Result<api::ConfigResponse, ApiError> {
@@ -109,7 +241,7 @@ impl ServerState {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(err) => return Err(ApiError::internal_error(err)),
         };
-        let config = self.config_snapshot()?.as_ref().clone();
+        let config = self.config_snapshot().as_ref().clone();
         Ok(api::ConfigResponse {
             path: self.config_path.display().to_string(),
             yaml,
@@ -126,20 +258,14 @@ impl ServerState {
 
         write_text_atomic(&self.config_path, &req.yaml).await?;
 
-        {
-            let mut guard = self
-                .config
-                .write()
-                .map_err(|_| ApiError::internal("config lock poisoned"))?;
-            *guard = Arc::new(next.clone());
-        }
+        self.config.store(Arc::new(next.clone()));
         self.tools_for_caps
             .set_config(next.clone())
             .map_err(ApiError::internal_error)?;
 
         let live_sessions = {
             let guard = self.sessions.lock().await;
-            guard.values().cloned().collect::<Vec<_>>()
+            guard.values().map(|s| s.live.clone()).collect::<Vec<_>>()
         };
         for live in live_sessions {
             live.on_config_updated().await?;
@@ -156,7 +282,7 @@ impl ServerState {
         &self,
         req: api::ConfigMcpPatchRequest,
     ) -> Result<(), ApiError> {
-        let current = self.config_snapshot()?;
+        let current = self.config_snapshot();
         let mut next = current.as_ref().clone();
 
         let known: HashSet<String> = next.mcp.servers.iter().map(|s| s.name.clone()).collect();
@@ -183,7 +309,7 @@ impl ServerState {
     }
 
     pub async fn get_config_providers(&self) -> Result<api::ConfigProvidersResponse, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         Ok(api::ConfigProvidersResponse {
             default_model: config.default_model.clone(),
             providers: config
@@ -203,7 +329,7 @@ impl ServerState {
         &self,
         req: api::ConfigProvidersPatchRequest,
     ) -> Result<(), ApiError> {
-        let current = self.config_snapshot()?;
+        let current = self.config_snapshot();
         let mut next = current.as_ref().clone();
 
         if let Some(v) = req.default_model {
@@ -342,7 +468,7 @@ impl ServerState {
     }
 
     pub async fn get_config_runtime(&self) -> Result<api::ConfigRuntimeResponse, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         Ok(api::ConfigRuntimeResponse {
             runtime_max_steps: config.runtime.max_steps,
             agents_plan_max_steps: config.agents.plan.max_steps,
@@ -354,7 +480,7 @@ impl ServerState {
         &self,
         req: api::ConfigRuntimePatchRequest,
     ) -> Result<(), ApiError> {
-        let current = self.config_snapshot()?;
+        let current = self.config_snapshot();
         let mut next = current.as_ref().clone();
 
         if let Some(v) = req.runtime_max_steps {
@@ -401,7 +527,7 @@ impl ServerState {
     }
 
     pub async fn get_config_skills(&self) -> Result<api::ConfigSkillsResponse, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         Ok(api::ConfigSkillsResponse {
             default_enable: config.skills.default_enable,
             skills: config
@@ -420,7 +546,7 @@ impl ServerState {
         &self,
         req: api::ConfigSkillsPatchRequest,
     ) -> Result<(), ApiError> {
-        let current = self.config_snapshot()?;
+        let current = self.config_snapshot();
         let mut next = current.as_ref().clone();
         if let Some(v) = req.default_enable {
             next.skills.default_enable = v;
@@ -447,7 +573,7 @@ impl ServerState {
             live.settings.lock().await.workspace_root.clone()
         } else {
             let state = self.store.load(session_id).await.map_err(map_session_err)?;
-            let config = self.config_snapshot()?;
+            let config = self.config_snapshot();
             let settings = load_settings_for_meta(&self.store, &state.meta, config.as_ref()).await?;
             settings.workspace_root
         };
@@ -535,7 +661,7 @@ impl ServerState {
         let settings = match self.get_live(session_id.as_str()).await {
             Some(live) => live.settings.lock().await.clone(),
             None => {
-                let config = self.config_snapshot()?;
+                let config = self.config_snapshot();
                 let session = self.store.load(session_id).await.map_err(map_session_err)?;
                 load_settings_for_meta(&self.store, &session.meta, config.as_ref()).await?
             }
@@ -548,7 +674,19 @@ impl ServerState {
     }
 
     pub async fn get_live(&self, session_id: &str) -> Option<Arc<LiveSession>> {
-        self.sessions.lock().await.get(session_id).cloned()
+        let now = now_ms();
+        let live = {
+            let mut guard = self.sessions.lock().await;
+            match guard.get_mut(session_id) {
+                Some(entry) => {
+                    entry.last_access_ms = now;
+                    Some(entry.live.clone())
+                }
+                None => None,
+            }
+        };
+        self.enforce_live_session_limits().await;
+        live
     }
 
     pub async fn ensure_live(&self, session_id: &SessionId) -> Result<Arc<LiveSession>, ApiError> {
@@ -556,10 +694,14 @@ impl ServerState {
             return Ok(live);
         }
         let live = LiveSession::resume(self, session_id).await?;
-        self.sessions
-            .lock()
-            .await
-            .insert(session_id.to_string(), live.clone());
+        self.sessions.lock().await.insert(
+            session_id.to_string(),
+            LiveSessionEntry {
+                live: live.clone(),
+                last_access_ms: now_ms(),
+            },
+        );
+        self.enforce_live_session_limits().await;
         Ok(live)
     }
 
@@ -570,16 +712,13 @@ impl ServerState {
     ) -> Result<api::Session, ApiError> {
         if let Some(key) = idem_key {
             let map_key = format!("POST:/v1/sessions:{key}");
-            if let Some(existing) = self.idempotency.lock().await.get(&map_key).cloned() {
+            if let Some(existing) = self.idempotency_get(&map_key).await {
                 let id = SessionId::parse(&existing).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
                 let live = self.ensure_live(&id).await?;
                 return live.snapshot().await;
             }
             let created = self.create_session_inner(req).await?;
-            self.idempotency
-                .lock()
-                .await
-                .insert(map_key, created.summary.id.clone());
+            self.idempotency_put(map_key, created.summary.id.clone()).await;
             return Ok(created);
         }
         self.create_session_inner(req).await
@@ -590,7 +729,7 @@ impl ServerState {
         session_id: &SessionId,
         req: api::ForkSessionRequest,
     ) -> Result<api::ForkSessionResponse, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         let source = self.store.load(session_id).await.map_err(map_session_err)?;
         let settings = load_settings_for_meta(&self.store, &source.meta, config.as_ref()).await?;
 
@@ -661,10 +800,14 @@ impl ServerState {
         }
 
         let live = LiveSession::from_state(self, forked, settings, tools, false).await?;
-        self.sessions
-            .lock()
-            .await
-            .insert(live.id().to_string(), live.clone());
+        self.sessions.lock().await.insert(
+            live.id().to_string(),
+            LiveSessionEntry {
+                live: live.clone(),
+                last_access_ms: now_ms(),
+            },
+        );
+        self.enforce_live_session_limits().await;
 
         Ok(api::ForkSessionResponse {
             session: live.snapshot().await?,
@@ -672,7 +815,7 @@ impl ServerState {
     }
 
     async fn create_session_inner(&self, req: api::SessionCreateRequest) -> Result<api::Session, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
 
         let mut settings = default_settings(config.as_ref(), None)?;
         let mut extra_workspace_roots: Option<Vec<String>> = None;
@@ -770,10 +913,14 @@ impl ServerState {
         }
 
         let live = LiveSession::from_state(self, session, settings, tools, true).await?;
-        self.sessions
-            .lock()
-            .await
-            .insert(live.id().to_string(), live.clone());
+        self.sessions.lock().await.insert(
+            live.id().to_string(),
+            LiveSessionEntry {
+                live: live.clone(),
+                last_access_ms: now_ms(),
+            },
+        );
+        self.enforce_live_session_limits().await;
 
         tracing::info!(
             event = "session.created",
@@ -791,7 +938,7 @@ impl ServerState {
         limit: usize,
         cursor: Option<String>,
     ) -> Result<api::SessionListResponse, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
 
         let limit = limit.clamp(1, 200);
         let offset = cursor
@@ -803,7 +950,7 @@ impl ServerState {
         if live_only {
             let live = self.sessions.lock().await;
             for s in live.values() {
-                items.push(s.summary().await?);
+                items.push(s.live.summary().await?);
             }
         } else {
             for meta in self.store.list().await.map_err(map_session_err)? {
@@ -854,7 +1001,7 @@ impl ServerState {
     }
 
     pub async fn get_session(&self, session_id: &SessionId) -> Result<api::Session, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
 
         if let Some(live) = self.get_live(session_id.as_str()).await {
             return live.snapshot().await;
@@ -897,8 +1044,8 @@ impl ServerState {
     }
 
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<(), ApiError> {
-        let live = self.sessions.lock().await.remove(session_id.as_str());
-        if let Some(live) = live {
+        let removed = self.sessions.lock().await.remove(session_id.as_str());
+        if let Some(live) = removed.map(|e| e.live) {
             live.shutdown().await;
         }
         self.store.delete(session_id).await.map_err(map_session_err)?;
@@ -927,7 +1074,7 @@ impl ServerState {
             return Err(ApiError::invalid_argument("model id must not be empty"));
         }
 
-        let current = self.config_snapshot()?;
+        let current = self.config_snapshot();
         current.resolve_model(model_id).map_err(|e| {
             ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -956,13 +1103,7 @@ impl ServerState {
             write_text_atomic(&self.config_path, &updated_yaml).await?;
         }
 
-        {
-            let mut guard = self
-                .config
-                .write()
-                .map_err(|_| ApiError::internal("config lock poisoned"))?;
-            *guard = Arc::new(next.clone());
-        }
+        self.config.store(Arc::new(next.clone()));
 
         self.tools_for_caps
             .set_config(next)
@@ -979,14 +1120,11 @@ impl ServerState {
     ) -> Result<api::Run, ApiError> {
         if let Some(key) = idem_key {
             let map_key = format!("POST:/v1/sessions/{session_id}/runs:{key}");
-            if let Some(existing) = self.idempotency.lock().await.get(&map_key).cloned() {
+            if let Some(existing) = self.idempotency_get(&map_key).await {
                 return self.get_run(&existing).await;
             }
             let run = self.create_run_inner(session_id, req).await?;
-            self.idempotency
-                .lock()
-                .await
-                .insert(map_key, run.id.clone());
+            self.idempotency_put(map_key, run.id.clone()).await;
             return Ok(run);
         }
         self.create_run_inner(session_id, req).await
@@ -1038,70 +1176,18 @@ impl ServerState {
             .as_deref()
             .and_then(|v| v.parse::<u64>().ok());
 
-        // Ensure session exists.
-        let _ = self.store.load(session_id).await.map_err(map_session_err)?;
+        let state = self.store.load(session_id).await.map_err(map_session_err)?;
 
-        let path = self.store.events_path(session_id);
-        let file = tokio::fs::File::open(&path)
-            .await
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    ApiError::not_found("session not found")
-                } else {
-                    ApiError::internal_error(e)
-                }
-            })?;
-        let mut reader = tokio::io::BufReader::new(file);
-        let mut line = String::new();
-
-        let mut messages: Vec<(u64, u64, CoreMessage)> = Vec::new(); // (seq, ts_ms, message)
-        let mut index_by_seq: HashMap<u64, usize> = HashMap::new();
-        loop {
-            line.clear();
-            let n = reader
-                .read_line(&mut line)
-                .await
-                .map_err(ApiError::internal_error)?;
-            if n == 0 {
-                break;
-            }
-            let raw = line.trim();
-            if raw.is_empty() {
-                continue;
-            }
-            let parsed: SessionEventLine = match serde_json::from_str(raw) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            match parsed.event {
-                SessionEvent::Message { message } => {
-                    index_by_seq.insert(parsed.seq, messages.len());
-                    messages.push((parsed.seq, parsed.ts_ms, message));
-                }
-                SessionEvent::MessageEdit { message_id, message } => {
-                    if let Some(idx) = index_by_seq.get(&message_id).copied() {
-                        if let Some(entry) = messages.get_mut(idx) {
-                            entry.2 = message;
-                        }
-                    }
-                }
-                SessionEvent::TruncateAfter { message_id } => {
-                    let Some(idx) = index_by_seq.get(&message_id).copied() else {
-                        continue;
-                    };
-                    let removed = messages.split_off(idx + 1);
-                    for (seq, _, _) in removed {
-                        index_by_seq.remove(&seq);
-                    }
-                }
-                SessionEvent::Finish { .. } | SessionEvent::Error { .. } => {}
-            }
-        }
-
+        let mut pairs = state
+            .message_ids
+            .into_iter()
+            .zip(state.messages.into_iter())
+            .collect::<Vec<_>>();
         if let Some(before_seq) = before_seq {
-            messages.retain(|(seq, _, _)| *seq < before_seq);
+            pairs.retain(|(seq, _)| *seq < before_seq);
         }
-        let slice = messages
+
+        let slice = pairs
             .into_iter()
             .rev()
             .take(limit)
@@ -1110,23 +1196,25 @@ impl ServerState {
             .rev()
             .collect::<Vec<_>>();
 
-        let next_before = slice.first().map(|(seq, _, _)| seq.to_string());
-
-        let mut out = Vec::new();
-        for (seq, ts_ms, msg) in slice {
-            if let Some(api_msg) = map_core_message_to_api(seq, ts_ms, msg) {
-                out.push(api_msg);
+        let base_ts_ms = state.meta.created_at_ms;
+        let mut next_before: Option<String> = None;
+        let mut out: Vec<api::Message> = Vec::new();
+        for (seq, msg) in slice {
+            let ts_ms = base_ts_ms.saturating_add(seq);
+            let Some(api_msg) = map_core_message_to_api(seq, ts_ms, msg) else {
+                continue;
+            };
+            if next_before.is_none() {
+                next_before = Some(seq.to_string());
             }
+            out.push(api_msg);
         }
 
-        Ok(api::MessageListResponse {
-            items: out,
-            next_before,
-        })
+        Ok(api::MessageListResponse { items: out, next_before })
     }
 
     pub async fn get_capabilities(&self) -> Result<api::Capabilities, ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         Ok(api::Capabilities {
             agents: vec!["general".to_string(), "plan".to_string()],
             models: list_models(config.as_ref()),
@@ -1159,6 +1247,13 @@ impl ServerState {
         limit: usize,
     ) -> Result<Vec<api::Event>, ApiError> {
         self.ensure_on_disk_session_exists(session_id).await?;
+
+        if let Some(live) = self.get_live(session_id.as_str()).await {
+            if let Some(events) = live.backlog_after(after_event_id, limit).await {
+                return Ok(events);
+            }
+        }
+
         let path = session_events_api_path(&self.store, session_id);
         read_events_after(&path, after_event_id, limit).await
     }
@@ -1168,7 +1263,7 @@ impl ServerState {
         session_id: &SessionId,
     ) -> Result<broadcast::Receiver<api::Event>, ApiError> {
         let live = self.ensure_live(session_id).await?;
-        Ok(live.events_tx.subscribe())
+        Ok(live.subscribe_events())
     }
 
     async fn ensure_on_disk_session_exists(&self, session_id: &SessionId) -> Result<(), ApiError> {
@@ -1346,88 +1441,6 @@ fn normalize_settings(
         })
         .collect();
     Ok(())
-}
-
-fn home_kiliax_dir() -> Result<PathBuf, ApiError> {
-    let home = dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"))?;
-    Ok(home.join(".kiliax"))
-}
-
-fn expand_tilde(path: &str) -> Result<PathBuf, ApiError> {
-    let trimmed = path.trim();
-    if trimmed == "~" {
-        return dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"));
-    }
-    let Some(rest) = trimmed.strip_prefix("~/") else {
-        return Ok(PathBuf::from(trimmed));
-    };
-    let home = dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"))?;
-    Ok(home.join(rest))
-}
-
-fn validate_client_workspace_root(input: &str) -> Result<PathBuf, ApiError> {
-    let candidate = expand_tilde(input)?;
-    if !candidate.is_absolute() {
-        return Err(ApiError::invalid_argument("workspace_root must be an absolute path"));
-    }
-    for c in candidate.components() {
-        if matches!(c, std::path::Component::ParentDir) {
-            return Err(ApiError::invalid_argument(
-                "workspace_root must not contain `..`",
-            ));
-        }
-    }
-
-    Ok(candidate)
-}
-
-fn validate_client_extra_workspace_roots(
-    inputs: &[String],
-    workspace_root: &Path,
-) -> Result<Vec<String>, ApiError> {
-    let workspace_root = std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
-    let mut out: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
-    for raw in inputs {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let candidate = validate_client_workspace_root(trimmed)?;
-        let meta = std::fs::metadata(&candidate).map_err(|_| {
-            ApiError::invalid_argument(format!(
-                "extra workspace root not found: {}",
-                candidate.display()
-            ))
-        })?;
-        if !meta.is_dir() {
-            return Err(ApiError::invalid_argument(format!(
-                "extra workspace root must be a directory: {}",
-                candidate.display()
-            )));
-        }
-        let canonical = std::fs::canonicalize(&candidate).map_err(|_| {
-            ApiError::invalid_argument(format!(
-                "extra workspace root not accessible: {}",
-                candidate.display()
-            ))
-        })?;
-        if canonical == workspace_root {
-            continue;
-        }
-        let display = canonical.display().to_string();
-        if seen.insert(display.clone()) {
-            out.push(display);
-        }
-    }
-
-    Ok(out)
-}
-
-fn default_tmp_workspace_root() -> Result<PathBuf, ApiError> {
-    let base = home_kiliax_dir()?.join("workspace");
-    Ok(base.join(format!("tmp_{}", SessionId::new())))
 }
 
 fn default_settings(config: &Config, meta: Option<&SessionMeta>) -> Result<api::SessionSettings, ApiError> {
@@ -1650,6 +1663,14 @@ fn ts_ms_to_rfc3339(ms: u64) -> String {
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     dt.format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn now_rfc3339() -> String {
@@ -1979,7 +2000,7 @@ fn runtime_error_hint(code: &str, agent: &str) -> Option<String> {
 pub struct LiveSession {
     session_id: SessionId,
     store: FileSessionStore,
-    config: Arc<RwLock<Arc<Config>>>,
+    config: Arc<ArcSwap<Config>>,
     runs_dir: PathBuf,
 
     session: Mutex<SessionState>,
@@ -1998,6 +2019,8 @@ pub struct LiveSession {
     events_api_path: PathBuf,
     settings_path: PathBuf,
     events_tx: broadcast::Sender<api::Event>,
+    events_ring: Mutex<VecDeque<api::Event>>,
+    events_ring_size: AtomicUsize,
     next_event_id: AtomicU64,
 }
 
@@ -2007,16 +2030,24 @@ struct QueuedRun {
 }
 
 impl LiveSession {
-    fn config_snapshot(&self) -> Result<Arc<Config>, ApiError> {
-        self.config
-            .read()
-            .map(|v| v.clone())
-            .map_err(|_| ApiError::internal("config lock poisoned"))
+    fn config_snapshot(&self) -> Arc<Config> {
+        self.config.load_full()
     }
 
     pub async fn on_config_updated(&self) -> Result<(), ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         let meta = { self.session.lock().await.meta.clone() };
+
+        self.events_ring_size
+            .store(config.server.events_ring_size, Ordering::SeqCst);
+        if config.server.events_ring_size == 0 {
+            self.events_ring.lock().await.clear();
+        } else {
+            let mut ring = self.events_ring.lock().await;
+            while ring.len() > config.server.events_ring_size {
+                ring.pop_front();
+            }
+        }
 
         let mut settings = self.settings.lock().await.clone();
         normalize_settings(&mut settings, &meta, config.as_ref())?;
@@ -2052,7 +2083,7 @@ impl LiveSession {
     }
 
     pub async fn resume(server: &ServerState, session_id: &SessionId) -> Result<Arc<Self>, ApiError> {
-        let config = server.config_snapshot()?;
+        let config = server.config_snapshot();
         let session = server.store.load(session_id).await.map_err(map_session_err)?;
         let mut settings = load_settings_for_meta(&server.store, &session.meta, config.as_ref()).await?;
 
@@ -2097,6 +2128,7 @@ impl LiveSession {
         let settings_path = session_settings_path(&server.store, session.id());
         let last_event_id = read_last_event_id(&events_api_path).await?;
         let (events_tx, _) = broadcast::channel(2048);
+        let events_ring_size = server.config_snapshot().server.events_ring_size;
 
         let live = Arc::new(Self {
             session_id: session.meta.id.clone(),
@@ -2123,6 +2155,8 @@ impl LiveSession {
             events_api_path,
             settings_path,
             events_tx,
+            events_ring: Mutex::new(VecDeque::new()),
+            events_ring_size: AtomicUsize::new(events_ring_size),
             next_event_id: AtomicU64::new(last_event_id),
         });
 
@@ -2190,6 +2224,12 @@ impl LiveSession {
         }
     }
 
+    pub async fn is_idle_for_eviction(&self) -> bool {
+        let q = self.queue.lock().await;
+        let st = self.status.lock().await;
+        q.is_empty() && st.run_state == api::SessionRunState::Idle
+    }
+
     pub async fn summary(&self) -> Result<api::SessionSummary, ApiError> {
         let session = self.session.lock().await;
         let settings = self.settings.lock().await.clone();
@@ -2224,8 +2264,35 @@ impl LiveSession {
         })
     }
 
+    pub fn subscribe_events(&self) -> broadcast::Receiver<api::Event> {
+        self.events_tx.subscribe()
+    }
+
+    pub async fn last_event_id(&self) -> u64 {
+        self.status.lock().await.last_event_id
+    }
+
+    pub async fn backlog_after(
+        &self,
+        after_event_id: u64,
+        limit: usize,
+    ) -> Option<Vec<api::Event>> {
+        let ring = self.events_ring.lock().await;
+        let first = ring.front()?.event_id;
+        if after_event_id.saturating_add(1) < first {
+            return None;
+        }
+        let out = ring
+            .iter()
+            .filter(|e| e.event_id > after_event_id)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        Some(out)
+    }
+
     async fn validate_settings_patch(&self, patch: &api::SessionSettingsPatch) -> Result<(), ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         let meta = { self.session.lock().await.meta.clone() };
         let mut settings = self.settings.lock().await.clone();
         let mut patch = patch.clone();
@@ -2241,7 +2308,7 @@ impl LiveSession {
     }
 
     pub async fn patch_settings(&self, patch: api::SessionSettingsPatch) -> Result<(), ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         let meta = { self.session.lock().await.meta.clone() };
         let mut settings = self.settings.lock().await.clone();
         let mut patch = patch;
@@ -2583,7 +2650,7 @@ impl LiveSession {
         );
 
         async {
-            let config = self.config_snapshot()?;
+            let config = self.config_snapshot();
 
             let (cancel_tx, mut cancel_rx) = watch::channel(false);
             *self.active_cancel.lock().await = Some(cancel_tx);
@@ -2936,7 +3003,7 @@ impl LiveSession {
     }
 
     async fn apply_settings_now(&self, emit_event: bool) -> Result<(), ApiError> {
-        let config = self.config_snapshot()?;
+        let config = self.config_snapshot();
         let settings = self.settings.lock().await.clone();
 
         if settings.workspace_root.trim().is_empty() {
@@ -3157,6 +3224,14 @@ impl LiveSession {
 
     async fn emit_event(&self, event: api::Event) -> Result<(), ApiError> {
         append_event(&self.events_api_path, &event).await?;
+        let ring_size = self.events_ring_size.load(Ordering::SeqCst);
+        if ring_size > 0 {
+            let mut ring = self.events_ring.lock().await;
+            ring.push_back(event.clone());
+            while ring.len() > ring_size {
+                ring.pop_front();
+            }
+        }
         {
             let mut st = self.status.lock().await;
             st.last_event_id = st.last_event_id.max(event.event_id);
@@ -3278,187 +3353,4 @@ async fn build_preamble(
         builder = builder.add_skills(filtered);
     }
     builder.build()
-}
-
-fn is_wsl() -> bool {
-    if std::env::var_os("WSL_INTEROP").is_some() || std::env::var_os("WSL_DISTRO_NAME").is_some() {
-        return true;
-    }
-    std::fs::read_to_string("/proc/version")
-        .ok()
-        .map(|v| v.to_lowercase())
-        .is_some_and(|v| v.contains("microsoft") || v.contains("wsl"))
-}
-
-async fn wslpath_to_windows_path(path: &Path) -> Option<String> {
-    let out = Command::new("wslpath")
-        .arg("-w")
-        .arg(path)
-        .output()
-        .await
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
-fn wsl_unc_path(path: &Path) -> Option<String> {
-    let distro = std::env::var("WSL_DISTRO_NAME").ok()?;
-    let distro = distro.trim();
-    if distro.is_empty() {
-        return None;
-    }
-    let raw = path.to_string_lossy();
-    let win = raw.replace('/', "\\");
-    Some(format!("\\\\wsl$\\{distro}{win}"))
-}
-
-fn spawn_detached(program: &str, args: &[String]) -> Result<(), std::io::Error> {
-    let mut cmd = Command::new(program);
-    cmd.args(args);
-    cmd.spawn().map(|_| ())
-}
-
-async fn open_external(root: &Path, target: api::OpenWorkspaceTarget) -> Result<(), ApiError> {
-    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let meta = tokio::fs::metadata(&canonical)
-        .await
-        .map_err(|_| ApiError::not_found("path not found"))?;
-    if !meta.is_dir() {
-        return Err(ApiError::invalid_argument("path must be a directory"));
-    }
-
-    let path = canonical.display().to_string();
-    match target {
-        api::OpenWorkspaceTarget::Vscode => spawn_detached("code", &[path]).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                ApiError::invalid_argument("VS Code CLI `code` not found in PATH")
-            } else {
-                ApiError::internal_error(err)
-            }
-        }),
-        api::OpenWorkspaceTarget::FileManager => {
-            let (program, args): (&str, Vec<String>) = if is_wsl() {
-                let win_path = wslpath_to_windows_path(&canonical)
-                    .await
-                    .or_else(|| wsl_unc_path(&canonical))
-                    .unwrap_or(path);
-                ("explorer.exe", vec![win_path])
-            } else if std::env::consts::OS == "windows" {
-                ("explorer.exe", vec![path])
-            } else if std::env::consts::OS == "macos" {
-                ("open", vec![path])
-            } else {
-                ("xdg-open", vec![path])
-            };
-            spawn_detached(program, &args).map_err(|err| {
-                if err.kind() == std::io::ErrorKind::NotFound {
-                    ApiError::invalid_argument(format!("file manager launcher not found: {program}"))
-                } else {
-                    ApiError::internal_error(err)
-                }
-            })
-        }
-        api::OpenWorkspaceTarget::Terminal => {
-            if is_wsl() {
-                let distro = std::env::var("WSL_DISTRO_NAME")
-                    .ok()
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty());
-                let mut wt_args: Vec<String> = vec!["wsl.exe".to_string()];
-                if let Some(distro) = distro.clone() {
-                    wt_args.push("-d".to_string());
-                    wt_args.push(distro);
-                }
-                wt_args.push("--cd".to_string());
-                wt_args.push(path.clone());
-
-                match spawn_detached("wt.exe", &wt_args) {
-                    Ok(()) => return Ok(()),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        // fall through
-                    }
-                    Err(err) => return Err(ApiError::internal_error(err)),
-                }
-
-                let mut cmd_args: Vec<String> = vec![
-                    "/c".to_string(),
-                    "start".to_string(),
-                    "".to_string(),
-                    "wsl.exe".to_string(),
-                ];
-                if let Some(distro) = distro {
-                    cmd_args.push("-d".to_string());
-                    cmd_args.push(distro);
-                }
-                cmd_args.push("--cd".to_string());
-                cmd_args.push(path);
-                return spawn_detached("cmd.exe", &cmd_args).map_err(|err| {
-                    if err.kind() == std::io::ErrorKind::NotFound {
-                        ApiError::invalid_argument("terminal launcher not found: wt.exe/cmd.exe")
-                    } else {
-                        ApiError::internal_error(err)
-                    }
-                });
-            }
-
-            if std::env::consts::OS == "windows" {
-                let wt_args: Vec<String> = vec!["-d".to_string(), path.clone()];
-                match spawn_detached("wt.exe", &wt_args) {
-                    Ok(()) => return Ok(()),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        // fall through
-                    }
-                    Err(err) => return Err(ApiError::internal_error(err)),
-                }
-
-                let cmd_args: Vec<String> = vec![
-                    "/c".to_string(),
-                    "start".to_string(),
-                    "".to_string(),
-                    "cmd.exe".to_string(),
-                    "/K".to_string(),
-                    format!("cd /d {path}"),
-                ];
-                return spawn_detached("cmd.exe", &cmd_args).map_err(ApiError::internal_error);
-            }
-
-            if std::env::consts::OS == "macos" {
-                let args: Vec<String> = vec!["-a".to_string(), "Terminal".to_string(), path];
-                return spawn_detached("open", &args).map_err(|err| {
-                    if err.kind() == std::io::ErrorKind::NotFound {
-                        ApiError::invalid_argument("terminal launcher not found: open")
-                    } else {
-                        ApiError::internal_error(err)
-                    }
-                });
-            }
-
-            let candidates: [(&str, &[&str]); 4] = [
-                ("x-terminal-emulator", &["--working-directory"]),
-                ("gnome-terminal", &["--working-directory"]),
-                ("xfce4-terminal", &["--working-directory"]),
-                ("konsole", &["--workdir"]),
-            ];
-            for (program, prefix) in candidates {
-                let mut args = prefix.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-                args.push(path.clone());
-                match spawn_detached(program, &args) {
-                    Ok(()) => return Ok(()),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(err) => return Err(ApiError::internal_error(err)),
-                }
-            }
-
-            Err(ApiError::invalid_argument(
-                "terminal launcher not found (tried x-terminal-emulator/gnome-terminal/xfce4-terminal/konsole)",
-            ))
-        }
-    }
 }

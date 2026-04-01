@@ -938,6 +938,9 @@ export default function App() {
   const seenMermaidAlertKeysRef = useRef<Set<string>>(new Set());
 
   const wsRef = useRef<WebSocket | null>(null);
+  const wsReconnectAttemptRef = useRef(0);
+  const wsReconnectTimerRef = useRef<number | null>(null);
+  const lastEventIdRef = useRef(0);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1182,13 +1185,37 @@ export default function App() {
       assistantStartedAtRef.current = null;
       nextThinkingDurationMsRef.current = null;
 
-      connectWs(sessionId, s.status.last_event_id);
+      lastEventIdRef.current = s.status.last_event_id ?? 0;
+      wsReconnectAttemptRef.current = 0;
+      clearWsReconnectTimer();
+      connectWs(sessionId, lastEventIdRef.current);
     } catch (err) {
       handleApiError(err);
     }
   }
 
+  function clearWsReconnectTimer() {
+    if (wsReconnectTimerRef.current != null) {
+      window.clearTimeout(wsReconnectTimerRef.current);
+      wsReconnectTimerRef.current = null;
+    }
+  }
+
+  function scheduleWsReconnect(sessionId: string) {
+    if (wsReconnectTimerRef.current != null) return;
+    const attempt = wsReconnectAttemptRef.current;
+    const delay = Math.min(10_000, 250 * Math.pow(2, attempt));
+    wsReconnectAttemptRef.current = Math.min(attempt + 1, 10);
+
+    wsReconnectTimerRef.current = window.setTimeout(() => {
+      wsReconnectTimerRef.current = null;
+      if (selectedIdRef.current !== sessionId) return;
+      connectWs(sessionId, lastEventIdRef.current);
+    }, delay);
+  }
+
   function connectWs(sessionId: string, afterEventId: number) {
+    clearWsReconnectTimer();
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -1200,6 +1227,9 @@ export default function App() {
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
+    ws.onopen = () => {
+      wsReconnectAttemptRef.current = 0;
+    };
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data as string);
@@ -1213,12 +1243,29 @@ export default function App() {
       // eslint-disable-next-line no-console
       console.error("ws error");
     };
+    ws.onclose = () => {
+      if (wsRef.current !== ws) return;
+      wsRef.current = null;
+      scheduleWsReconnect(sessionId);
+    };
   }
 
   async function handleEvent(ev: any) {
     const type = ev?.type ?? ev?.event_type;
     if (!type) return;
+    const eventId = ev?.event_id;
+    if (typeof eventId === "number" && Number.isFinite(eventId)) {
+      lastEventIdRef.current = Math.max(lastEventIdRef.current, eventId);
+    }
     const now = monotonicNowMs();
+
+    if (type === "events_lagged") {
+      const sid = selectedIdRef.current;
+      if (sid) {
+        await fetchSession(sid);
+      }
+      return;
+    }
 
     if (type === "step_start") {
       thinkingStartedAtRef.current = now;
@@ -2234,6 +2281,9 @@ export default function App() {
         wsRef.current.close();
         wsRef.current = null;
       }
+      clearWsReconnectTimer();
+      wsReconnectAttemptRef.current = 0;
+      lastEventIdRef.current = 0;
       setToolDurationsMs({});
       setAssistantDurationsMs({});
       setThinkingDurationsMs({});
