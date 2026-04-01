@@ -590,112 +590,32 @@ impl ServerState {
         session_id: &SessionId,
         req: api::ForkSessionRequest,
     ) -> Result<api::ForkSessionResponse, ApiError> {
-        let assistant_message_id = req
-            .assistant_message_id
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| ApiError::invalid_argument("assistant_message_id must be a number"))?;
-        if assistant_message_id == 0 {
-            return Err(ApiError::invalid_argument("assistant_message_id must be >= 1"));
-        }
-
         let config = self.config_snapshot()?;
         let source = self.store.load(session_id).await.map_err(map_session_err)?;
         let settings = load_settings_for_meta(&self.store, &source.meta, config.as_ref()).await?;
 
-        let mut found = false;
-        let mut is_message = false;
-        let mut messages: Vec<(u64, CoreMessage)> = Vec::new();
+        let message_id = req
+            .message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
 
-        let path = self.store.events_path(session_id);
-        let file = tokio::fs::File::open(&path)
-            .await
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    ApiError::not_found("session not found")
-                } else {
-                    ApiError::internal_error(e)
-                }
-            })?;
-        let mut reader = tokio::io::BufReader::new(file);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let n = reader
-                .read_line(&mut line)
-                .await
-                .map_err(ApiError::internal_error)?;
-            if n == 0 {
-                break;
+        let initial_messages = if let Some(message_id) = message_id {
+            let message_id = message_id
+                .parse::<u64>()
+                .map_err(|_| ApiError::invalid_argument("message_id must be a number"))?;
+            if message_id == 0 {
+                return Err(ApiError::invalid_argument("message_id must be >= 1"));
             }
-            let raw = line.trim();
-            if raw.is_empty() {
-                continue;
-            }
-            let parsed: SessionEventLine = match serde_json::from_str(raw) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if parsed.seq > assistant_message_id {
-                continue;
-            }
-            if parsed.seq == assistant_message_id {
-                found = true;
-                is_message = matches!(parsed.event, SessionEvent::Message { .. });
-            }
-            if let SessionEvent::Message { message } = parsed.event {
-                messages.push((parsed.seq, message));
-            }
-        }
-
-        if !found {
-            return Err(ApiError::new(
-                StatusCode::NOT_FOUND,
-                ApiErrorCode::NotFound,
-                "message not found",
-            ));
-        }
-        if !is_message {
-            return Err(ApiError::invalid_argument(
-                "assistant_message_id must refer to a message",
-            ));
-        }
-
-        messages.sort_by_key(|(seq, _,)| *seq);
-        let assistant_index = messages
-            .iter()
-            .position(|(seq, _)| *seq == assistant_message_id)
-            .ok_or_else(|| ApiError::not_found("message not found"))?;
-        if !matches!(messages[assistant_index].1, CoreMessage::Assistant { .. }) {
-            return Err(ApiError::invalid_argument(
-                "assistant_message_id must refer to an assistant message",
-            ));
-        }
-
-        let mut user_index: Option<usize> = None;
-        let mut user_text: Option<String> = None;
-        for idx in (0..assistant_index).rev() {
-            if let CoreMessage::User { content } = &messages[idx].1 {
-                user_index = Some(idx);
-                user_text = Some(content.first_text().unwrap_or("").to_string());
-                break;
-            }
-        }
-        let Some(user_index) = user_index else {
-            return Err(ApiError::invalid_argument("cannot fork before the first user message"));
+            let idx = source
+                .message_ids
+                .iter()
+                .position(|id| *id == message_id)
+                .ok_or_else(|| ApiError::not_found("message not found"))?;
+            source.messages[..=idx].to_vec()
+        } else {
+            source.messages.clone()
         };
-        let user_text = user_text.unwrap_or_default();
-        if user_text.trim().is_empty() {
-            return Err(ApiError::invalid_argument(
-                "cannot fork: the preceding user message is empty",
-            ));
-        }
-
-        let initial_messages = messages
-            .into_iter()
-            .take(user_index)
-            .map(|(_, msg)| msg)
-            .collect::<Vec<_>>();
 
         if settings.workspace_root.trim().is_empty() {
             return Err(ApiError::invalid_argument("workspace_root must not be empty"));
@@ -746,20 +666,8 @@ impl ServerState {
             .await
             .insert(live.id().to_string(), live.clone());
 
-        let run = live
-            .enqueue_run(
-                &self.runs_dir,
-                api::RunCreateRequest {
-                    input: api::RunInput::Text { text: user_text },
-                    overrides: None,
-                    auto_resume: true,
-                },
-            )
-            .await?;
-
         Ok(api::ForkSessionResponse {
             session: live.snapshot().await?,
-            run,
         })
     }
 

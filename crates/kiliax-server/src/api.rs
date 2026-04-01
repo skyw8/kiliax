@@ -405,13 +405,13 @@ pub struct ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForkSessionRequest {
-    pub assistant_message_id: String,
+    #[serde(default)]
+    pub message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForkSessionResponse {
     pub session: Session,
-    pub run: Run,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

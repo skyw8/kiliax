@@ -352,7 +352,7 @@ async fn fork_session_inherits_prompt_cache_key() {
         .fork_session(
             source.id(),
             crate::api::ForkSessionRequest {
-                assistant_message_id: assistant_message_id.clone(),
+                message_id: Some(assistant_message_id.clone()),
             },
         )
         .await

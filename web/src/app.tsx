@@ -757,6 +757,58 @@ function MessageRow({
   );
 }
 
+function SessionItemRow({
+  summary,
+  active,
+  pinned,
+  onSelect,
+  onOpenMenu,
+}: {
+  summary: SessionSummary;
+  active: boolean;
+  pinned: boolean;
+  onSelect: () => void;
+  onOpenMenu: (sessionId: string, anchor: DOMRect) => void;
+}) {
+  const badge = statusBadge(summary);
+  return (
+    <div
+      className={[
+        "group flex items-start gap-1 rounded-md px-2 py-2",
+        active ? "bg-white shadow-sm" : "hover:bg-white/70",
+      ].join(" ")}
+    >
+      <button onClick={onSelect} className="min-w-0 flex-1 text-left">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex items-center gap-1 text-sm text-zinc-900">
+            {pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" /> : null}
+            <div className="truncate">{summary.title || summary.id}</div>
+          </div>
+          <Badge variant={badge.variant}>{badge.label}</Badge>
+        </div>
+        <div className="mt-1 truncate text-xs text-zinc-500">
+          {displayModelId(summary.settings.model_id)}
+        </div>
+      </button>
+
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8"
+        aria-label="Session actions"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+          onOpenMenu(summary.id, rect);
+        }}
+      >
+        <MoreHorizontal className="h-4 w-4 text-zinc-500" />
+      </Button>
+    </div>
+  );
+}
+
 function EmptyState() {
   return (
     <div className="flex h-full w-full items-center justify-center">
@@ -1075,6 +1127,13 @@ export default function App() {
 
   function selectSession(sessionId: string) {
     navigate(hrefToSession(sessionId));
+  }
+
+  function openSessionMenuAt(sessionId: string, anchor: DOMRect) {
+    setSessionMenu((prev) => {
+      if (prev?.sessionId === sessionId) return null;
+      return { sessionId, x: anchor.right, y: anchor.bottom };
+    });
   }
 
   function updateIsAtBottom() {
@@ -1967,10 +2026,9 @@ export default function App() {
     }
   }
 
-  async function forkSessionFromAssistant(assistantMessageId: string) {
-    if (!selectedId) return;
+  async function forkSessionCopy(sessionId: string, messageId?: string) {
     try {
-      const res: any = await api.forkSession(selectedId, assistantMessageId);
+      const res: any = await api.forkSession(sessionId, messageId);
       const newId = res?.session?.id;
       if (typeof newId !== "string" || !newId.trim()) {
         throw new Error("Invalid fork response");
@@ -1980,6 +2038,11 @@ export default function App() {
     } catch (err) {
       handleApiError(err);
     }
+  }
+
+  async function forkSessionFromAssistant(assistantMessageId: string) {
+    if (!selectedId) return;
+    await forkSessionCopy(selectedId, assistantMessageId);
   }
 
   useEffect(() => {
@@ -2384,36 +2447,25 @@ export default function App() {
                               </Button>
                             </div>
 
-                            {expanded ? (
-                              <div className="mt-1 space-y-1 pl-5">
-                                {g.sessions.map((s) => {
-                                  const badge = statusBadge(s);
-                                  const active = s.id === selectedId;
-                                  const pinned = pinnedSessionIds.includes(s.id);
-                                  return (
-                                    <button
-                                      key={s.id}
-                                      onClick={() => selectSession(s.id)}
-                                      className={[
-                                        "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-xs",
-                                        active
-                                          ? "bg-white shadow-sm"
-                                          : "hover:bg-white/70",
-                                      ].join(" ")}
-                                    >
-                                      <div className="min-w-0 flex items-center gap-1 text-zinc-800">
-                                        {pinned ? (
-                                          <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
-                                        ) : null}
-                                        <div className="truncate">{s.title || s.id}</div>
-                                      </div>
-                                      <Badge variant={badge.variant}>{badge.label}</Badge>
-                                    </button>
-                                  );
-                                })}
-                                {!g.sessions.length ? (
-                                  <div className="px-2 py-2 text-xs text-zinc-500">
-                                    No sessions
+	                            {expanded ? (
+	                              <div className="mt-1 space-y-1 pl-5">
+	                                {g.sessions.map((s) => {
+	                                  const active = s.id === selectedId;
+	                                  const pinned = pinnedSessionIds.includes(s.id);
+	                                  return (
+	                                    <SessionItemRow
+	                                      key={s.id}
+	                                      summary={s}
+	                                      active={active}
+	                                      pinned={pinned}
+	                                      onSelect={() => selectSession(s.id)}
+	                                      onOpenMenu={openSessionMenuAt}
+	                                    />
+	                                  );
+	                                })}
+	                                {!g.sessions.length ? (
+	                                  <div className="px-2 py-2 text-xs text-zinc-500">
+	                                    No sessions
                                   </div>
                                 ) : null}
                               </div>
@@ -2464,58 +2516,20 @@ export default function App() {
                 {sessionsPaneOpen ? (
                   <div className="min-h-0 flex-1 overflow-auto px-1">
                     <div className="space-y-1">
-                      {visibleSessions.map((s) => {
-                        const badge = statusBadge(s);
-                        const active = s.id === selectedId;
-                        const pinned = pinnedSessionIds.includes(s.id);
-                        return (
-                          <div
-                            key={s.id}
-                            className={[
-                              "group flex items-start gap-1 rounded-md px-2 py-2",
-                              active ? "bg-white shadow-sm" : "hover:bg-white/70",
-                            ].join(" ")}
-                          >
-                            <button
-                              onClick={() => selectSession(s.id)}
-                              className="min-w-0 flex-1 text-left"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="min-w-0 flex items-center gap-1 text-sm text-zinc-900">
-                                  {pinned ? (
-                                    <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
-                                  ) : null}
-                                  <div className="truncate">{s.title || s.id}</div>
-                                </div>
-                                <Badge variant={badge.variant}>{badge.label}</Badge>
-                              </div>
-                              <div className="mt-1 truncate text-xs text-zinc-500">
-                                {displayModelId(s.settings.model_id)}
-                              </div>
-                            </button>
-
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              aria-label="Session actions"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                const rect = (
-                                  e.currentTarget as HTMLButtonElement
-                                ).getBoundingClientRect();
-                                setSessionMenu((prev) => {
-                                  if (prev?.sessionId === s.id) return null;
-                                  return { sessionId: s.id, x: rect.right, y: rect.bottom };
-                                });
-                              }}
-                            >
-                              <MoreHorizontal className="h-4 w-4 text-zinc-500" />
-                            </Button>
-                          </div>
-                        );
-                      })}
+	                      {visibleSessions.map((s) => {
+	                        const active = s.id === selectedId;
+	                        const pinned = pinnedSessionIds.includes(s.id);
+	                        return (
+	                          <SessionItemRow
+	                            key={s.id}
+	                            summary={s}
+	                            active={active}
+	                            pinned={pinned}
+	                            onSelect={() => selectSession(s.id)}
+	                            onOpenMenu={openSessionMenuAt}
+	                          />
+	                        );
+	                      })}
 
                       {canLoadMoreSessions ? (
                         <div className="px-2 py-2">
@@ -3560,6 +3574,17 @@ export default function App() {
           style={{ left: sessionMenu.x, top: sessionMenu.y }}
           className="fixed z-50 mt-1 w-44 -translate-x-full rounded-md border border-zinc-200 bg-white p-1 shadow-lg"
         >
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
+            onClick={() => {
+              const id = sessionMenu.sessionId;
+              setSessionMenu(null);
+              forkSessionCopy(id);
+            }}
+          >
+            <GitFork className="h-4 w-4 text-violet-600" />
+            Fork
+          </button>
           <button
             className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
             onClick={() => {

@@ -165,10 +165,13 @@ export const api = {
   listGlobalSkills(): Promise<SkillListResponse> {
     return apiFetch<SkillListResponse>("/v1/skills");
   },
-  forkSession(sessionId: string, assistantMessageId: string): Promise<any> {
+  forkSession(sessionId: string, messageId?: string): Promise<any> {
+    const body: any = {};
+    const trimmed = (messageId ?? "").trim();
+    if (trimmed) body.message_id = trimmed;
     return apiFetch(`/v1/sessions/${sessionId}/fork`, {
       method: "POST",
-      body: JSON.stringify({ assistant_message_id: assistantMessageId }),
+      body: JSON.stringify(body),
     });
   },
   editUserMessage(sessionId: string, userMessageId: string, content: string): Promise<any> {
