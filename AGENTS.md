@@ -35,7 +35,7 @@ minimal
 - Ratatui UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
 - App state + render pipeline (condensed tool results + per-call token usage): `crates/kiliax-cli/src/app.rs`
 - Terminal init + viewport backend: `crates/kiliax-cli/src/terminal.rs`
-- Server daemon control (`kiliax server ...`): `crates/kiliax-cli/src/daemon.rs`
+- Server daemon control (`kiliax server ...`) + Windows detached spawn: `crates/kiliax-cli/src/daemon.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
