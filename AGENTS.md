@@ -42,7 +42,7 @@ minimal
 - Server runner (invoked by `kiliax server run`): `crates/kiliax-server/src/runner.rs`
 - Router + handlers + auth/access log + WS/SSE events + OpenAPI endpoints: `crates/kiliax-server/src/http/`
 - App state (ArcSwap config) + session lifecycle + run queue + events log + limits: `crates/kiliax-server/src/state.rs`
-- Infra (path validation + open workspace hooks + Windows external path normalization): `crates/kiliax-server/src/infra.rs`
+- Infra (path validation + open workspace hooks + Windows external path/VS Code launcher normalization): `crates/kiliax-server/src/infra.rs`
 - REST schema (+ OpenAPI schemas): `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
 - OpenAPI metadata (servers/security/tags): `crates/kiliax-server/src/openapi.rs`
 

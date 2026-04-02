@@ -147,6 +147,88 @@ fn external_display_path(path: &Path) -> String {
     }
 }
 
+#[cfg(windows)]
+fn windows_find_vscode_exe() -> Option<PathBuf> {
+    fn env_path(name: &str) -> Option<PathBuf> {
+        std::env::var_os(name)
+            .and_then(|v| if v.is_empty() { None } else { Some(v) })
+            .map(PathBuf::from)
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(local) = env_path("LOCALAPPDATA") {
+        candidates.push(local.join("Programs").join("Microsoft VS Code").join("Code.exe"));
+        candidates.push(
+            local.join("Programs")
+                .join("Microsoft VS Code Insiders")
+                .join("Code - Insiders.exe"),
+        );
+    }
+    if let Some(pf) = env_path("ProgramFiles") {
+        candidates.push(pf.join("Microsoft VS Code").join("Code.exe"));
+        candidates.push(
+            pf.join("Microsoft VS Code Insiders")
+                .join("Code - Insiders.exe"),
+        );
+    }
+    if let Some(pf86) = env_path("ProgramFiles(x86)") {
+        candidates.push(pf86.join("Microsoft VS Code").join("Code.exe"));
+        candidates.push(
+            pf86.join("Microsoft VS Code Insiders")
+                .join("Code - Insiders.exe"),
+        );
+    }
+
+    for p in candidates {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn windows_find_vscode_exe() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(windows)]
+fn windows_percent_encode_path(input: &str) -> String {
+    fn hex_digit(n: u8) -> char {
+        match n {
+            0..=9 => (b'0' + n) as char,
+            10..=15 => (b'A' + (n - 10)) as char,
+            _ => '?',
+        }
+    }
+
+    let mut out = String::with_capacity(input.len());
+    for &b in input.as_bytes() {
+        match b {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            | b'/'
+            | b':' => out.push(b as char),
+            other => {
+                out.push('%');
+                out.push(hex_digit(other >> 4));
+                out.push(hex_digit(other & 0x0f));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn windows_percent_encode_path(input: &str) -> String {
+    input.to_string()
+}
+
 fn spawn_detached(program: &str, args: &[String]) -> Result<(), std::io::Error> {
     let mut cmd = Command::new(program);
     cmd.args(args);
@@ -164,13 +246,42 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
 
     let path = external_display_path(&canonical);
     match target {
-        api::OpenWorkspaceTarget::Vscode => spawn_detached("code", &[path]).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                ApiError::invalid_argument("VS Code CLI `code` not found in PATH")
+        api::OpenWorkspaceTarget::Vscode => {
+            if std::env::consts::OS == "windows" {
+                match spawn_detached("code", &[path.clone()]) {
+                    Ok(()) => Ok(()),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        if let Some(exe) = windows_find_vscode_exe() {
+                            let program = exe.display().to_string();
+                            return spawn_detached(&program, &[path]).map_err(ApiError::internal_error);
+                        }
+
+                        let url_path = windows_percent_encode_path(&path.replace('\\', "/"));
+                        let url = format!("vscode://file/{url_path}");
+                        let args: Vec<String> = vec![
+                            "/c".to_string(),
+                            "start".to_string(),
+                            "".to_string(),
+                            url,
+                        ];
+                        spawn_detached("cmd.exe", &args).map_err(|_| {
+                            ApiError::invalid_argument(
+                                "VS Code not found (install `code` on PATH or reinstall VS Code)",
+                            )
+                        })
+                    }
+                    Err(err) => Err(ApiError::internal_error(err)),
+                }
             } else {
-                ApiError::internal_error(err)
+                spawn_detached("code", &[path]).map_err(|err| {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        ApiError::invalid_argument("VS Code CLI `code` not found in PATH")
+                    } else {
+                        ApiError::internal_error(err)
+                    }
+                })
             }
-        }),
+        }
         api::OpenWorkspaceTarget::FileManager => {
             let (program, args): (&str, Vec<String>) = if is_wsl() {
                 let win_path = wslpath_to_windows_path(&canonical)
