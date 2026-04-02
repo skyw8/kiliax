@@ -1080,57 +1080,47 @@ impl ServerState {
         patch: api::SessionSettingsPatch,
     ) -> Result<api::Session, ApiError> {
         let live = self.ensure_live(session_id).await?;
-
-        if let Some(model_id) = patch.model_id.as_deref() {
-            live.validate_settings_patch(&patch).await?;
-            self.sync_default_model(model_id).await?;
-        }
-
         live.patch_settings(patch).await?;
         live.snapshot().await
     }
 
-    async fn sync_default_model(&self, model_id: &str) -> Result<(), ApiError> {
-        let model_id = model_id.trim();
-        if model_id.is_empty() {
-            return Err(ApiError::invalid_argument("model id must not be empty"));
-        }
-
+    pub async fn save_session_defaults(
+        &self,
+        session_id: &SessionId,
+        req: api::SessionSaveDefaultsRequest,
+    ) -> Result<(), ApiError> {
+        let live = self.ensure_live(session_id).await?;
+        let settings = live.settings.lock().await.clone();
         let current = self.config_snapshot();
-        current.resolve_model(model_id).map_err(|e| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                ApiErrorCode::ModelNotSupported,
-                e.to_string(),
-            )
-        })?;
+        let mut next = current.as_ref().clone();
 
-        let base_yaml = match tokio::fs::read_to_string(&self.config_path).await {
-            Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                serde_yaml::to_string(current.as_ref()).map_err(ApiError::internal_error)?
+        if req.model {
+            current.resolve_model(&settings.model_id).map_err(|e| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    ApiErrorCode::ModelNotSupported,
+                    e.to_string(),
+                )
+            })?;
+            next.default_model = Some(settings.model_id.clone());
+        }
+
+        if req.mcp {
+            let by_id: HashMap<&str, bool> = settings
+                .mcp
+                .servers
+                .iter()
+                .map(|server| (server.id.as_str(), server.enable))
+                .collect();
+            for server in &mut next.mcp.servers {
+                if let Some(enable) = by_id.get(server.name.as_str()) {
+                    server.enable = *enable;
+                }
             }
-            Err(err) => return Err(ApiError::internal_error(err)),
-        };
-
-        let updated_yaml = update_default_model_yaml(&base_yaml, model_id);
-        if updated_yaml == base_yaml && current.default_model.as_deref() == Some(model_id) {
-            return Ok(());
         }
 
-        let next = kiliax_core::config::load_from_str(&updated_yaml)
-            .map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-
-        if updated_yaml != base_yaml {
-            write_text_atomic(&self.config_path, &updated_yaml).await?;
-        }
-
-        self.config.store(Arc::new(next.clone()));
-
-        self.tools_for_caps
-            .set_config(next)
-            .map_err(ApiError::internal_error)?;
-
+        let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
+        let _ = self.update_config(api::ConfigUpdateRequest { yaml }).await?;
         Ok(())
     }
 
@@ -1451,15 +1441,9 @@ fn normalize_settings(
     }
     settings.extra_workspace_roots = extras;
 
-    settings.mcp.servers = config
-        .mcp
-        .servers
-        .iter()
-        .map(|s| api::McpServerSetting {
-            id: s.name.clone(),
-            enable: s.enable,
-        })
-        .collect();
+    let mut mcp_servers = settings.mcp.servers.clone();
+    merge_mcp_settings(&mut mcp_servers, &[], config, true)?;
+    settings.mcp.servers = mcp_servers;
     Ok(())
 }
 
@@ -1919,45 +1903,6 @@ async fn write_text_atomic(path: &Path, text: &str) -> Result<(), ApiError> {
     }
 }
 
-fn update_default_model_yaml(text: &str, model_id: &str) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    let mut replaced = false;
-
-    for raw in text.lines() {
-        let line = raw.trim_end_matches('\r');
-        let trimmed = line.trim_start();
-
-        if !replaced && !trimmed.starts_with('#') && trimmed.starts_with("default_model:") {
-            let indent_len = line.len().saturating_sub(trimmed.len());
-            let indent = &line[..indent_len];
-            lines.push(format!("{indent}default_model: {model_id}"));
-            replaced = true;
-            continue;
-        }
-
-        lines.push(line.to_string());
-    }
-
-    if !replaced {
-        let mut insert_at = 0usize;
-        while insert_at < lines.len() {
-            let t = lines[insert_at].trim();
-            if t.is_empty() || t.starts_with('#') {
-                insert_at += 1;
-                continue;
-            }
-            break;
-        }
-        lines.insert(insert_at, format!("default_model: {model_id}"));
-    }
-
-    let mut out = lines.join("\n");
-    if text.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
-
 async fn write_run_file(dir: &Path, run: &api::Run) -> Result<(), ApiError> {
     tokio::fs::create_dir_all(dir)
         .await
@@ -2336,27 +2281,6 @@ impl LiveSession {
             .cloned()
             .collect::<Vec<_>>();
         Some(out)
-    }
-
-    async fn validate_settings_patch(
-        &self,
-        patch: &api::SessionSettingsPatch,
-    ) -> Result<(), ApiError> {
-        let config = self.config_snapshot();
-        let meta = { self.session.lock().await.meta.clone() };
-        let mut settings = self.settings.lock().await.clone();
-        let mut patch = patch.clone();
-        if let Some(roots) = patch.extra_workspace_roots.take() {
-            let workspace_root = PathBuf::from(settings.workspace_root.trim());
-            patch.extra_workspace_roots = Some(validate_client_extra_workspace_roots(
-                &roots,
-                &workspace_root,
-            )?);
-        }
-
-        apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
-        normalize_settings(&mut settings, &meta, config.as_ref())?;
-        Ok(())
     }
 
     pub async fn patch_settings(&self, patch: api::SessionSettingsPatch) -> Result<(), ApiError> {

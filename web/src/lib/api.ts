@@ -14,6 +14,7 @@ import type {
   RunCreateRequest,
   Session,
   SessionListResponse,
+  SessionSaveDefaultsRequest,
   SkillEnableSetting,
   SkillListResponse,
 } from "@/lib/types";
@@ -101,6 +102,12 @@ export const api = {
     return apiFetch<Session>(`/v1/sessions/${sessionId}/settings`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+    });
+  },
+  saveSessionDefaults(sessionId: string, req: SessionSaveDefaultsRequest): Promise<void> {
+    return apiFetch<void>(`/v1/sessions/${sessionId}/settings/save-defaults`, {
+      method: "POST",
+      body: JSON.stringify(req),
     });
   },
   getMessages(sessionId: string, limit = 200): Promise<MessageListResponse> {

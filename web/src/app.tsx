@@ -884,10 +884,12 @@ export default function App() {
   const [skillsSaving, setSkillsSaving] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [mcpSaving, setMcpSaving] = useState(false);
+  const [mcpDefaultsSaving, setMcpDefaultsSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"providers" | "agents" | "yaml">("providers");
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [modelDefaultsSaving, setModelDefaultsSaving] = useState(false);
 
   const [settingsProvidersDefaultModel, setSettingsProvidersDefaultModel] = useState("");
   const [settingsProviders, setSettingsProviders] = useState<ProviderDraft[]>([]);
@@ -1814,7 +1816,11 @@ export default function App() {
   }
 
   async function openMcp() {
-    await refreshCapabilities();
+    if (selectedId) {
+      await fetchSession(selectedId);
+    } else {
+      await refreshCapabilities();
+    }
     setMcpOpen(true);
   }
 
@@ -2064,6 +2070,29 @@ export default function App() {
       await refreshSessions();
     } catch (err) {
       handleApiError(err);
+    }
+  }
+
+  async function saveSelectedSessionDefaults(
+    req: { model: boolean; mcp: boolean },
+    onSaving: (saving: boolean) => void,
+    message: string,
+  ) {
+    if (!selectedId) return;
+    onSaving(true);
+    try {
+      await api.saveSessionDefaults(selectedId, req);
+      await refreshAfterConfigChange();
+      pushAlert({
+        id: newAlertId("defaults"),
+        title: "Saved",
+        message,
+        autoCloseMs: 3000,
+      });
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      onSaving(false);
     }
   }
 
@@ -2700,6 +2729,21 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={modelDefaultsSaving}
+                  onClick={() =>
+                    saveSelectedSessionDefaults(
+                      { model: true, mcp: false },
+                      setModelDefaultsSaving,
+                      "Saved current session model as the default.",
+                    )
+                  }
+                >
+                  Save model default
+                </Button>
 
                 <div className="flex max-w-[420px] items-center gap-2 rounded-md px-2 py-1">
                   <span className="text-xs text-zinc-600">workspace</span>
@@ -3595,10 +3639,10 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>MCP</DialogTitle>
-            <DialogDescription>Global MCP servers (kiliax.yaml)</DialogDescription>
+            <DialogDescription>Current session MCP servers</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            {(capabilities?.mcp_servers ?? []).map((s) => (
+            {(session?.mcp_status ?? capabilities?.mcp_servers ?? []).map((s) => (
               <label
                 key={s.id}
                 className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2"
@@ -3613,13 +3657,15 @@ export default function App() {
                 <input
                   type="checkbox"
                   checked={s.enable}
-                  disabled={mcpSaving}
+                  disabled={mcpSaving || !session}
                   onChange={async (e) => {
+                    if (!session) return;
                     const next = e.target.checked;
                     setMcpSaving(true);
                     try {
-                      await api.patchConfigMcp({ servers: [{ id: s.id, enable: next }] });
-                      await refreshCapabilities();
+                      await patchSession({
+                        mcp: { servers: [{ id: s.id, enable: next }] },
+                      });
                     } catch (err) {
                       handleApiError(err);
                     } finally {
@@ -3629,7 +3675,23 @@ export default function App() {
                 />
               </label>
             ))}
-            {!capabilities?.mcp_servers.length ? (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!session || mcpDefaultsSaving}
+                onClick={() =>
+                  saveSelectedSessionDefaults(
+                    { model: false, mcp: true },
+                    setMcpDefaultsSaving,
+                    "Saved current session MCP enablement as the default.",
+                  )
+                }
+              >
+                Save MCP defaults
+              </Button>
+            </div>
+            {!(session?.mcp_status ?? capabilities?.mcp_servers)?.length ? (
               <div className="text-center text-sm text-zinc-500">No MCP servers</div>
             ) : null}
           </div>

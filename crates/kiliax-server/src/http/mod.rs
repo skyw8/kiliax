@@ -81,6 +81,7 @@ pub fn build_app(state: Arc<ServerState>) -> Router {
         .routes(routes!(fork_session))
         .routes(routes!(open_workspace))
         .routes(routes!(patch_settings))
+        .routes(routes!(save_session_defaults))
         .routes(routes!(get_messages))
         .routes(routes!(list_skills))
         .routes(routes!(create_run))
@@ -854,6 +855,30 @@ async fn patch_settings(
         serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.patch_session_settings(&id, patch).await?;
     Ok(Json(out))
+}
+
+#[utoipa::path(
+    post,
+    path = "/sessions/{session_id}/settings/save-defaults",
+    tags = ["Sessions"],
+    params(
+        ("session_id" = String, Path, description = "Session id.")
+    ),
+    request_body = crate::api::SessionSaveDefaultsRequest,
+    responses(
+        (status = 204),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
+async fn save_session_defaults(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+    Json(req): Json<crate::api::SessionSaveDefaultsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id =
+        SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    state.save_session_defaults(&id, req).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(serde::Deserialize)]

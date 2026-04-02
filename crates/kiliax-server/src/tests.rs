@@ -1205,7 +1205,7 @@ async fn patch_settings_persists_and_emits_event() {
 }
 
 #[tokio::test]
-async fn patch_settings_model_updates_config_default_model_for_new_sessions() {
+async fn patch_settings_model_stays_session_local() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;
 
@@ -1235,13 +1235,138 @@ async fn patch_settings_model_updates_config_default_model_for_new_sessions() {
         Some("test/new-model")
     );
 
-    let config_path = dir.path().join("kiliax.yaml");
-    let config_text = tokio::fs::read_to_string(&config_path)
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config/providers"))
         .await
-        .expect("kiliax.yaml");
-    assert!(
-        config_text.contains("default_model: test/new-model"),
-        "config default_model not updated: {config_text}"
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("default_model").and_then(|v| v.as_str()),
+        Some("test/test-model")
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("model_id"))
+            .and_then(|v| v.as_str()),
+        Some("test/test-model")
+    );
+}
+
+#[tokio::test]
+async fn save_session_defaults_updates_model_and_mcp_defaults() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let yaml = r#"
+default_model: test/test-model
+providers:
+  test:
+    base_url: http://127.0.0.1:1
+    models:
+      - test-model
+      - new-model
+mcp:
+  servers:
+    - name: demo
+      enable: false
+      command: true
+      args: []
+"#;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PUT,
+            "/v1/config",
+            serde_json::json!({ "yaml": yaml }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, _body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::POST, "/v1/sessions"))
+        .await
+        .expect("oneshot");
+    let (_status, body) = read_json(resp).await;
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            &format!("/v1/sessions/{session_id}/settings"),
+            serde_json::json!({
+                "model_id": "test/new-model",
+                "mcp": { "servers": [{ "id": "demo", "enable": true }] }
+            }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("model_id"))
+            .and_then(|v| v.as_str()),
+        Some("test/new-model")
+    );
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("mcp"))
+            .and_then(|m| m.get("servers"))
+            .and_then(|servers| servers.as_array())
+            .and_then(|servers| servers.first())
+            .and_then(|server| server.get("enable"))
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/settings/save-defaults"),
+            serde_json::json!({ "model": true, "mcp": true }),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("config")
+            .and_then(|cfg| cfg.get("default_model"))
+            .and_then(|v| v.as_str()),
+        Some("test/new-model")
+    );
+    assert_eq!(
+        body.get("config")
+            .and_then(|cfg| cfg.get("mcp"))
+            .and_then(|mcp| mcp.get("servers"))
+            .and_then(|servers| servers.as_array())
+            .and_then(|servers| servers.first())
+            .and_then(|server| server.get("enable"))
+            .and_then(|v| v.as_bool()),
+        Some(true)
     );
 
     let resp = app
@@ -1256,6 +1381,16 @@ async fn patch_settings_model_updates_config_default_model_for_new_sessions() {
             .and_then(|s| s.get("model_id"))
             .and_then(|v| v.as_str()),
         Some("test/new-model")
+    );
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("mcp"))
+            .and_then(|m| m.get("servers"))
+            .and_then(|servers| servers.as_array())
+            .and_then(|servers| servers.first())
+            .and_then(|server| server.get("enable"))
+            .and_then(|v| v.as_bool()),
+        Some(true)
     );
 }
 

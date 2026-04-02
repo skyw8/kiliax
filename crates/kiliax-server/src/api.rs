@@ -126,6 +126,13 @@ pub struct SessionSettingsPatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSaveDefaultsRequest {
+    pub model: bool,
+    pub mcp: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct McpServersPatch {
     #[serde(default)]
     pub servers: Option<Vec<McpServerSetting>>,

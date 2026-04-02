@@ -24,6 +24,11 @@ export interface SessionSettings {
   mcp: McpServers;
 }
 
+export interface SessionSaveDefaultsRequest {
+  model: boolean;
+  mcp: boolean;
+}
+
 export interface SessionStatus {
   run_state: SessionRunState;
   active_run_id: string | null;
