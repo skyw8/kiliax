@@ -861,6 +861,8 @@ export default function App() {
   const [assistantDurationsMs, setAssistantDurationsMs] = useState<Record<string, number>>({});
   const [thinkingDurationsMs, setThinkingDurationsMs] = useState<Record<string, number>>({});
   const [clockNowMs, setClockNowMs] = useState<number>(() => monotonicNowMs());
+  const sessionsRefreshAtRef = useRef(0);
+  const sessionsRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const toolStartsRef = useRef<Record<string, { name: string; startedAt: number }>>({});
   const thinkingStartedAtRef = useRef<number | null>(null);
   const assistantStartedAtRef = useRef<number | null>(null);
@@ -1131,10 +1133,25 @@ export default function App() {
     try {
       const list = await api.listSessions();
       setSessions(list.items);
+      sessionsRefreshAtRef.current = monotonicNowMs();
       setAuthError(null);
     } catch (err) {
       handleApiError(err);
     }
+  }
+
+  async function refreshSessionsIfStale(minIntervalMs = 1500) {
+    const now = monotonicNowMs();
+    if (now - sessionsRefreshAtRef.current < minIntervalMs) return;
+    if (sessionsRefreshInFlightRef.current) {
+      await sessionsRefreshInFlightRef.current;
+      return;
+    }
+    const promise = refreshSessions().finally(() => {
+      sessionsRefreshInFlightRef.current = null;
+    });
+    sessionsRefreshInFlightRef.current = promise;
+    await promise;
   }
 
   function selectSession(sessionId: string) {
@@ -1273,6 +1290,7 @@ export default function App() {
       thinkingStartedAtRef.current = now;
       assistantStartedAtRef.current = null;
       nextThinkingDurationMsRef.current = null;
+      void refreshSessionsIfStale();
       return;
     }
 
@@ -1321,6 +1339,7 @@ export default function App() {
           { id: callId, name: String(call.name), arguments: String(call.arguments ?? "") },
         ],
       }));
+      void refreshSessionsIfStale();
       return;
     }
 
@@ -1337,6 +1356,7 @@ export default function App() {
         });
       }
       setMessages((m) => [...m, msg as Message]);
+      void refreshSessionsIfStale();
       return;
     }
 
@@ -1367,6 +1387,7 @@ export default function App() {
       setStream({ thinking: "", assistant: "", assistantStarted: false, toolCalls: [] });
       assistantStartedAtRef.current = null;
       nextThinkingDurationMsRef.current = null;
+      void refreshSessionsIfStale();
       return;
     }
 
@@ -1374,6 +1395,7 @@ export default function App() {
       if (selectedId) {
         await fetchSession(selectedId);
       }
+      await refreshSessionsIfStale(0);
       return;
     }
 
@@ -1381,6 +1403,7 @@ export default function App() {
       if (selectedId) {
         await fetchSession(selectedId);
       }
+      await refreshSessionsIfStale(0);
       return;
     }
 
@@ -1411,6 +1434,7 @@ export default function App() {
       if (selectedId) {
         await fetchSession(selectedId);
       }
+      await refreshSessionsIfStale(0);
       return;
     }
   }
@@ -2163,7 +2187,7 @@ export default function App() {
     init();
     const t = window.setInterval(() => {
       refreshSessions();
-    }, 1000);
+    }, 10_000);
     return () => {
       cancelled = true;
       window.clearInterval(t);

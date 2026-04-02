@@ -26,7 +26,7 @@ minimal
 - Config + model routing: `crates/kiliax-core/src/config.rs`
 - OpenAI-compatible client (streaming/tool-calls/usage): `crates/kiliax-core/src/llm.rs`
 - Prompt assembly: `crates/kiliax-core/src/prompt.rs`
-- Agent runtime loop + tool scheduling barriers: `crates/kiliax-core/src/runtime.rs`
+- Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
 - Session store + snapshots + events + session-scoped MCP overrides: `crates/kiliax-core/src/session.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery): `crates/kiliax-core/src/tools/`
 
@@ -41,7 +41,7 @@ minimal
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/session default actions: `crates/kiliax-server/src/http/`
-- State (config/session lifecycle/run queue/events/limits/default persistence): `crates/kiliax-server/src/state.rs`
+- State (config/session lifecycle/run queue/durable-vs-ephemeral events/default persistence): `crates/kiliax-server/src/state.rs`
 - Infra (path validation/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes message `usage` and session default writes): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
@@ -52,7 +52,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI (WS streaming/session fork/edit/regenerate/usage/session vs default settings): `web/src/app.tsx`
+- Main UI (WS streaming/session fork/edit/regenerate/usage/session vs default settings/sidebar refresh): `web/src/app.tsx`
 - API client + explicit session default persistence: `web/src/lib/api.ts`
 - Types (includes message `usage` and session default writes): `web/src/lib/types.ts`
 

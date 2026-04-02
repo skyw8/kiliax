@@ -1120,7 +1120,9 @@ impl ServerState {
         }
 
         let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
-        let _ = self.update_config(api::ConfigUpdateRequest { yaml }).await?;
+        let _ = self
+            .update_config(api::ConfigUpdateRequest { yaml })
+            .await?;
         Ok(())
     }
 
@@ -2011,6 +2013,12 @@ pub struct LiveSession {
 #[derive(Debug, Clone)]
 struct QueuedRun {
     run: api::Run,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventPersistence {
+    Durable,
+    Ephemeral,
 }
 
 impl LiveSession {
@@ -3099,7 +3107,7 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantThinkingDelta { delta } => {
-                self.emit_event(api::Event {
+                self.emit_ephemeral_event(api::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -3110,7 +3118,7 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantDelta { delta } => {
-                self.emit_event(api::Event {
+                self.emit_ephemeral_event(api::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -3197,7 +3205,23 @@ impl LiveSession {
     }
 
     async fn emit_event(&self, event: api::Event) -> Result<(), ApiError> {
-        append_event(&self.events_api_path, &event).await?;
+        self.emit_event_with_persistence(event, EventPersistence::Durable)
+            .await
+    }
+
+    async fn emit_ephemeral_event(&self, event: api::Event) -> Result<(), ApiError> {
+        self.emit_event_with_persistence(event, EventPersistence::Ephemeral)
+            .await
+    }
+
+    async fn emit_event_with_persistence(
+        &self,
+        event: api::Event,
+        persistence: EventPersistence,
+    ) -> Result<(), ApiError> {
+        if persistence == EventPersistence::Durable {
+            append_event(&self.events_api_path, &event).await?;
+        }
         let ring_size = self.events_ring_size.load(Ordering::SeqCst);
         if ring_size > 0 {
             let mut ring = self.events_ring.lock().await;
@@ -3325,4 +3349,108 @@ async fn build_preamble(
         builder = builder.add_skills(filtered);
     }
     builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kiliax_core::config::ProviderConfig;
+    use kiliax_core::llm::{Message as CoreMessage, UserMessageContent};
+    use tempfile::TempDir;
+
+    fn test_config() -> Config {
+        let mut cfg = Config::default();
+        cfg.default_model = Some("test/test-model".to_string());
+        cfg.providers.insert(
+            "test".to_string(),
+            ProviderConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                api_key: None,
+                models: vec!["test-model".to_string()],
+            },
+        );
+        cfg
+    }
+
+    #[tokio::test]
+    async fn streaming_events_stay_in_memory_until_message_is_finalized() {
+        let dir = TempDir::new().expect("tempdir");
+        let workspace_root = dir.path().to_path_buf();
+        let server = ServerState::new_for_tests(
+            workspace_root.clone(),
+            workspace_root.join("kiliax.yaml"),
+            test_config(),
+            None,
+        )
+        .await
+        .expect("server");
+
+        let session = server
+            .store
+            .create(
+                "general",
+                Some("test/test-model".to_string()),
+                None,
+                Some(workspace_root.display().to_string()),
+                Vec::new(),
+                vec![CoreMessage::User {
+                    content: UserMessageContent::Text("hello".to_string()),
+                }],
+            )
+            .await
+            .expect("session");
+        let settings = default_settings(server.config_snapshot().as_ref(), Some(&session.meta))
+            .expect("settings");
+        let tools = ToolEngine::new(
+            &workspace_root,
+            config_with_mcp_overrides(server.config_snapshot().as_ref(), &settings.mcp.servers)
+                .expect("tool config"),
+        );
+        let live = LiveSession::from_state(&server, session, settings, tools, false)
+            .await
+            .expect("live session");
+
+        live.emit_ephemeral_event(api::Event {
+            event_id: live.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: live.session_id.to_string(),
+            run_id: None,
+            event_type: "assistant_delta".to_string(),
+            data: serde_json::json!({ "delta": "Hello" }),
+        })
+        .await
+        .expect("ephemeral event");
+
+        let path = session_events_api_path(&server.store, live.id());
+        assert!(
+            tokio::fs::metadata(&path).await.is_err(),
+            "ephemeral events should not be persisted"
+        );
+
+        let backlog = live.backlog_after(0, 10).await.expect("ring backlog");
+        assert_eq!(backlog.len(), 1);
+        assert_eq!(backlog[0].event_type, "assistant_delta");
+
+        live.emit_event(api::Event {
+            event_id: live.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: live.session_id.to_string(),
+            run_id: None,
+            event_type: "assistant_message".to_string(),
+            data: serde_json::json!({ "message": { "id": "1", "role": "assistant", "content": "Hello" } }),
+        })
+        .await
+        .expect("durable event");
+
+        let logged = read_events_after(&path, 0, 10)
+            .await
+            .expect("logged events");
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].event_type, "assistant_message");
+
+        let backlog = live.backlog_after(0, 10).await.expect("ring backlog");
+        assert_eq!(backlog.len(), 2);
+        assert_eq!(backlog[0].event_type, "assistant_delta");
+        assert_eq!(backlog[1].event_type, "assistant_message");
+    }
 }

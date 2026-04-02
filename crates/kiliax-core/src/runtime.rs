@@ -931,6 +931,7 @@ async fn drive_stream_step(
     let mut tool_calls: BTreeMap<u32, ToolCallBuf> = BTreeMap::new();
     let mut finish_reason = None;
     let mut last_usage = None;
+    let mut assistant_body_started = false;
 
     loop {
         let item = tokio::select! {
@@ -953,7 +954,7 @@ async fn drive_stream_step(
             ..
         } = chunk;
 
-        if let Some(delta) = thinking_delta {
+        if let Some(delta) = thinking_delta.filter(|_| !assistant_body_started) {
             assistant_reasoning.push_str(&delta);
             if tx
                 .send(Ok(AgentEvent::AssistantThinkingDelta { delta }))
@@ -965,6 +966,7 @@ async fn drive_stream_step(
         }
 
         if let Some(delta) = content_delta {
+            assistant_body_started = true;
             assistant_content.push_str(&delta);
             if tx
                 .send(Ok(AgentEvent::AssistantDelta { delta }))
@@ -1285,7 +1287,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn drive_stream_step_forwards_thinking_deltas_in_order() {
+    async fn drive_stream_step_stops_forwarding_thinking_after_body_starts() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
 
         let chunks = vec![
@@ -1330,7 +1332,6 @@ mod tests {
             vec![
                 ("thinking", "t1".to_string()),
                 ("content", "Hello ".to_string()),
-                ("thinking", "t2".to_string()),
                 ("content", "world".to_string()),
             ]
         );
