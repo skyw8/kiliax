@@ -377,9 +377,12 @@ impl McpHub {
         );
 
         let res: Result<String, ToolError> = async {
-            let map = self.servers.lock().await;
-            let server = map
+            let server = self
+                .servers
+                .lock()
+                .await
                 .get(server_name)
+                .cloned()
                 .ok_or_else(|| ToolError::UnknownTool(exposed_name.to_string()))?;
 
             let result = server

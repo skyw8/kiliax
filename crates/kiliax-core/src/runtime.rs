@@ -1385,4 +1385,34 @@ mod tests {
         assert_eq!(tool_calls[0].name, "unknown");
         assert_eq!(tool_calls[0].arguments, "{\"x\":1}");
     }
+
+    #[test]
+    fn group_tool_calls_treats_apply_patch_as_barrier() {
+        let tool_calls = vec![
+            ToolCall {
+                id: "read".to_string(),
+                name: crate::tools::builtin::TOOL_READ_FILE.to_string(),
+                arguments: "{}".to_string(),
+            },
+            ToolCall {
+                id: "patch".to_string(),
+                name: crate::tools::builtin::TOOL_APPLY_PATCH.to_string(),
+                arguments: "{}".to_string(),
+            },
+            ToolCall {
+                id: "grep".to_string(),
+                name: crate::tools::builtin::TOOL_GREP_FILES.to_string(),
+                arguments: "{}".to_string(),
+            },
+        ];
+
+        let groups = group_tool_calls(&tool_calls);
+
+        assert!(matches!(groups[0], ToolCallGroup::Parallel(calls) if calls.len() == 1));
+        assert!(matches!(
+            groups[1],
+            ToolCallGroup::Exclusive(call) if call.name == crate::tools::builtin::TOOL_APPLY_PATCH
+        ));
+        assert!(matches!(groups[2], ToolCallGroup::Parallel(calls) if calls.len() == 1));
+    }
 }

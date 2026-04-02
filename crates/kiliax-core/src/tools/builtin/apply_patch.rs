@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -71,21 +73,53 @@ pub(super) async fn execute(
     let ops = parse_patch(&args.patch)
         .map_err(|e| ToolError::InvalidCommand(format!("invalid patch: {e}")))?;
 
+    let (planned_paths, out_files) = plan_patch(workspace_root, extra_workspace_roots, ops).await?;
+    apply_planned_paths(&planned_paths).await?;
+
+    let out = ApplyPatchOutput {
+        ok: true,
+        files: out_files,
+    };
+    Ok(serde_json::to_string(&out).unwrap_or_else(|_| "ok".to_string()))
+}
+
+#[derive(Debug, Clone)]
+struct PlannedPathState {
+    abs: PathBuf,
+    initial: Option<String>,
+    current: Option<String>,
+}
+
+impl PlannedPathState {
+    fn changed(&self) -> bool {
+        self.initial != self.current
+    }
+}
+
+async fn plan_patch(
+    workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
+    ops: Vec<PatchOp>,
+) -> Result<(BTreeMap<String, PlannedPathState>, Vec<PatchedFile>), ToolError> {
+    let mut planned_paths = BTreeMap::new();
     let mut out_files = Vec::new();
 
     for op in ops {
         match op {
             PatchOp::AddFile { path, content } => {
-                let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &path)?;
-                if abs.exists() {
+                let state = ensure_planned_path(
+                    workspace_root,
+                    extra_workspace_roots,
+                    &mut planned_paths,
+                    &path,
+                )
+                .await?;
+                if state.current.is_some() {
                     return Err(ToolError::InvalidCommand(format!(
                         "add file failed: {path} already exists"
                     )));
                 }
-                if let Some(parent) = abs.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
-                tokio::fs::write(&abs, &content).await?;
+                state.current = Some(content.clone());
                 let diff = small_unified_diff("", &content, &path);
                 out_files.push(PatchedFile {
                     action: "add".to_string(),
@@ -97,9 +131,17 @@ pub(super) async fn execute(
                 });
             }
             PatchOp::DeleteFile { path } => {
-                let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &path)?;
-                let old = tokio::fs::read_to_string(&abs).await.unwrap_or_default();
-                tokio::fs::remove_file(&abs).await?;
+                let state = ensure_planned_path(
+                    workspace_root,
+                    extra_workspace_roots,
+                    &mut planned_paths,
+                    &path,
+                )
+                .await?;
+                let old = state.current.clone().ok_or_else(|| {
+                    ToolError::InvalidCommand(format!("delete file failed: {path} does not exist"))
+                })?;
+                state.current = None;
                 let diff = small_unified_diff(&old, "", &path);
                 out_files.push(PatchedFile {
                     action: "delete".to_string(),
@@ -115,22 +157,55 @@ pub(super) async fn execute(
                 move_to,
                 hunks,
             } => {
-                let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &path)?;
-                let old = tokio::fs::read_to_string(&abs).await?;
+                let old = ensure_planned_path(
+                    workspace_root,
+                    extra_workspace_roots,
+                    &mut planned_paths,
+                    &path,
+                )
+                .await?
+                .current
+                .clone()
+                .ok_or_else(|| {
+                    ToolError::InvalidCommand(format!("patch failed: {path} does not exist"))
+                })?;
                 let new = apply_update_hunks(&old, &hunks)
                     .map_err(|e| ToolError::InvalidCommand(format!("patch failed: {e}")))?;
 
-                tokio::fs::write(&abs, &new).await?;
                 let mut final_path = path.clone();
-
                 if let Some(dest) = move_to.clone() {
-                    let dest_abs =
-                        resolve_workspace_path(workspace_root, extra_workspace_roots, &dest)?;
-                    if let Some(parent) = dest_abs.parent() {
-                        tokio::fs::create_dir_all(parent).await?;
+                    if dest != path {
+                        let dest_exists = ensure_planned_path(
+                            workspace_root,
+                            extra_workspace_roots,
+                            &mut planned_paths,
+                            &dest,
+                        )
+                        .await?
+                        .current
+                        .is_some();
+                        if dest_exists {
+                            return Err(ToolError::InvalidCommand(format!(
+                                "move failed: {dest} already exists"
+                            )));
+                        }
                     }
-                    tokio::fs::rename(&abs, &dest_abs).await?;
+                    planned_paths
+                        .get_mut(&path)
+                        .expect("source path prepared")
+                        .current = None;
+                    ensure_planned_path(
+                        workspace_root,
+                        extra_workspace_roots,
+                        &mut planned_paths,
+                        &dest,
+                    )
+                    .await?
+                    .current = Some(new.clone());
                     final_path = dest;
+                } else {
+                    planned_paths.get_mut(&path).expect("path prepared").current =
+                        Some(new.clone());
                 }
 
                 let diff = small_unified_diff(&old, &new, &final_path);
@@ -146,11 +221,94 @@ pub(super) async fn execute(
         }
     }
 
-    let out = ApplyPatchOutput {
-        ok: true,
-        files: out_files,
-    };
-    Ok(serde_json::to_string(&out).unwrap_or_else(|_| "ok".to_string()))
+    Ok((planned_paths, out_files))
+}
+
+async fn ensure_planned_path<'a>(
+    workspace_root: &Path,
+    extra_workspace_roots: &[PathBuf],
+    planned_paths: &'a mut BTreeMap<String, PlannedPathState>,
+    path: &str,
+) -> Result<&'a mut PlannedPathState, ToolError> {
+    if !planned_paths.contains_key(path) {
+        let abs = resolve_workspace_path(workspace_root, extra_workspace_roots, path)?;
+        let initial = read_optional_text(&abs).await?;
+        planned_paths.insert(
+            path.to_string(),
+            PlannedPathState {
+                abs,
+                initial: initial.clone(),
+                current: initial,
+            },
+        );
+    }
+    Ok(planned_paths.get_mut(path).expect("path inserted"))
+}
+
+async fn read_optional_text(path: &Path) -> Result<Option<String>, ToolError> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn apply_planned_paths(
+    planned_paths: &BTreeMap<String, PlannedPathState>,
+) -> Result<(), ToolError> {
+    let changed: Vec<&PlannedPathState> = planned_paths
+        .values()
+        .filter(|state| state.changed())
+        .collect();
+    let mut applied_count = 0usize;
+
+    for state in &changed {
+        let result = match &state.current {
+            Some(content) => write_path_content(&state.abs, content).await,
+            None => remove_path_if_exists(&state.abs).await,
+        };
+
+        if let Err(err) = result {
+            let mut rollback_states = changed[..applied_count].to_vec();
+            rollback_states.push(*state);
+            rollback_paths(&rollback_states).await;
+            return Err(err.into());
+        }
+
+        applied_count += 1;
+    }
+
+    Ok(())
+}
+
+async fn write_path_content(path: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(path, content).await
+}
+
+async fn remove_path_if_exists(path: &Path) -> std::io::Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+async fn rollback_paths(applied: &[&PlannedPathState]) {
+    for state in applied.iter().rev() {
+        let restore = match &state.initial {
+            Some(content) => write_path_content(&state.abs, content).await,
+            None => remove_path_if_exists(&state.abs).await,
+        };
+        if let Err(err) = restore {
+            tracing::warn!(
+                path = %state.abs.display(),
+                "apply_patch rollback failed: {err}"
+            );
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -599,6 +757,8 @@ fn diff_hunks(ops: &[DiffOp<'_>], change_indices: &[usize], context: usize) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::ToolCall;
+    use crate::tools::ShellPermissions;
 
     #[test]
     fn apply_update_hunks_replaces_block() {
@@ -631,5 +791,36 @@ mod tests {
 ";
         let ops = parse_patch(patch).unwrap();
         assert_eq!(ops.len(), 3);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_does_not_write_when_later_patch_op_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let perms = Permissions {
+            file_read: true,
+            file_write: true,
+            shell: ShellPermissions::DenyAll,
+        };
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: TOOL_APPLY_PATCH.to_string(),
+            arguments: serde_json::json!({
+                "patch": "\
+*** Begin Patch
+*** Add File: created.txt
++hello
+*** Update File: missing.txt
+@@
++world
+*** End Patch
+"
+            })
+            .to_string(),
+        };
+
+        let err = execute(tmp.path(), &[], &perms, &call).await.unwrap_err();
+
+        assert!(matches!(err, ToolError::InvalidCommand(_)));
+        assert!(!tmp.path().join("created.txt").exists());
     }
 }

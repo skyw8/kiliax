@@ -30,11 +30,11 @@ pub fn tool_parallelism(tool_name: &str) -> ToolParallelism {
         | builtin::TOOL_VIEW_IMAGE
         | builtin::TOOL_WEB_SEARCH
         | builtin::TOOL_SHELL_COMMAND
-        | builtin::TOOL_WRITE_STDIN
-        | builtin::TOOL_APPLY_PATCH => ToolParallelism::Parallel,
+        | builtin::TOOL_WRITE_STDIN => ToolParallelism::Parallel,
         builtin::TOOL_UPDATE_PLAN | builtin::TOOL_WRITE_FILE | builtin::TOOL_EDIT_FILE => {
             ToolParallelism::Exclusive
         }
+        builtin::TOOL_APPLY_PATCH => ToolParallelism::Exclusive,
         _ => ToolParallelism::Exclusive,
     }
 }
