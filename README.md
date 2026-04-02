@@ -114,7 +114,6 @@ echo -n "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 | tr -d '\n'
 
 ## References
 
-This project is inspired by and built in the spirit of the following open-source AI coding agents:
-
+- **[Zilliax](https://hearthstone.blizzard.com/en-us/cards/49184-zilliax?set=wild&textFilte)** - Unity. Precision. Perfection.
 - **[OpenAI Codex CLI](https://github.com/openai/codex)** - OpenAI's official Rust-based terminal coding agent
 - **[OpenCode](https://opencode.ai/)** - Open-source, model-agnostic CLI coding agent supporting 75+ LLM providers
