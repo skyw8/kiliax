@@ -48,34 +48,6 @@ fn connect_host_for_bind_host(bind_host: &str) -> &str {
     }
 }
 
-fn server_executable() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("failed to resolve current executable path")?;
-    let dir = exe
-        .parent()
-        .context("current executable missing parent dir")?;
-    let suffix = if cfg!(windows) { ".exe" } else { "" };
-    let sibling = dir.join(format!("kiliax-server{suffix}"));
-    if sibling.exists() {
-        Ok(sibling)
-    } else {
-        Ok(PathBuf::from(format!("kiliax-server{suffix}")))
-    }
-}
-
-fn repo_manifest_from_current_exe() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    for ancestor in exe.ancestors() {
-        if ancestor.file_name().is_some_and(|n| n == "target") {
-            let root = ancestor.parent()?;
-            let manifest = root.join("Cargo.toml");
-            if manifest.is_file() {
-                return Some(manifest);
-            }
-        }
-    }
-    None
-}
-
 fn port_is_free(host: &str, port: u16) -> bool {
     std::net::TcpListener::bind((host, port)).is_ok()
 }
@@ -281,7 +253,7 @@ pub async fn ensure_running(
                 should_start_new = true;
             } else {
                 anyhow::bail!(
-                    "kiliax-server is reachable at {}:{}, but cannot be restarted (token mismatch?)",
+                    "kiliax server is reachable at {}:{}, but cannot be restarted (token mismatch?)",
                     parsed.host,
                     parsed.port
                 );
@@ -344,7 +316,7 @@ pub async fn ensure_running(
 
         if desired_port.is_some() {
             if !port_is_free(&desired_bind_host, port) {
-                anyhow::bail!("server.port {port} is in use and no reachable kiliax-server is listening there");
+                anyhow::bail!("server.port {port} is in use and no reachable kiliax server is listening there");
             }
         } else {
             let mut found = None;
@@ -354,7 +326,7 @@ pub async fn ensure_running(
                     break;
                 }
             }
-            port = found.context("no free port found for kiliax-server")?;
+            port = found.context("no free port found for kiliax server")?;
         }
     }
 
@@ -381,35 +353,15 @@ pub async fn ensure_running(
     server_args.push("--token".to_string());
     server_args.push(token.clone());
 
-    let repo_manifest = repo_manifest_from_current_exe();
-    let mut cmd = if let Some(manifest) = repo_manifest.clone() {
-        let mut cmd = Command::new("cargo");
-        cmd.arg("run")
-            .arg("-p")
-            .arg("kiliax-server")
-            .arg("--manifest-path")
-            .arg(&manifest)
-            .arg("--")
-            .args(&server_args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log_file))
-            .stderr(Stdio::from(log_file_err))
-            .current_dir(
-                manifest
-                    .parent()
-                    .context("manifest path missing parent dir")?,
-            );
-        cmd
-    } else {
-        let server_exe = server_executable()?;
-        let mut cmd = Command::new(server_exe);
-        cmd.args(&server_args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log_file))
-            .stderr(Stdio::from(log_file_err))
-            .current_dir(workspace_root);
-        cmd
-    };
+    let exe = std::env::current_exe().context("failed to resolve current executable path")?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("server")
+        .arg("run")
+        .args(&server_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_file_err))
+        .current_dir(workspace_root);
 
     #[cfg(unix)]
     {
@@ -424,56 +376,9 @@ pub async fn ensure_running(
         }
     }
 
-    let child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let Some(manifest) = repo_manifest else {
-                return Err(anyhow::Error::new(err).context("kiliax-server not found (install it, or run from repo with cargo)"));
-            };
-            let mut cmd = Command::new("cargo");
-            cmd.arg("run")
-                .arg("-p")
-                .arg("kiliax-server")
-                .arg("--manifest-path")
-                .arg(&manifest)
-                .arg("--")
-                .args(&server_args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&log_file_path)?,
-                ))
-                .stderr(Stdio::from(
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&log_file_path)?,
-                ))
-                .current_dir(
-                    manifest
-                        .parent()
-                        .context("manifest path missing parent dir")?,
-                );
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                unsafe {
-                    cmd.pre_exec(|| {
-                        if libc::setsid() == -1 {
-                            return Err(std::io::Error::last_os_error());
-                        }
-                        Ok(())
-                    });
-                }
-            }
-
-            cmd.spawn().context("failed to spawn kiliax-server via cargo")?
-        }
-        Err(err) => return Err(anyhow::Error::new(err).context("failed to spawn kiliax-server")),
-    };
+    let child = cmd
+        .spawn()
+        .context("failed to spawn `kiliax server run`")?;
     let state = DaemonState {
         host: desired_host,
         port,
@@ -522,10 +427,10 @@ pub async fn stop() -> Result<StopOutcome> {
             Ok(StopOutcome::Stopped)
         }
         Ok(resp) if resp.status() == reqwest::StatusCode::UNAUTHORIZED => {
-            anyhow::bail!("unauthorized to stop kiliax-server (token mismatch?)");
+            anyhow::bail!("unauthorized to stop kiliax server (token mismatch?)");
         }
         Ok(resp) => {
-            anyhow::bail!("failed to stop kiliax-server: HTTP {}", resp.status());
+            anyhow::bail!("failed to stop kiliax server: HTTP {}", resp.status());
         }
         Err(_) => {
             let grace_ms = STARTUP_GRACE_PERIOD.as_millis() as u64;

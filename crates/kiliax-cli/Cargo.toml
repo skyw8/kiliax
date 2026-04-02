@@ -6,6 +6,7 @@ version.workspace = true
 [dependencies]
 kiliax-core = { path = "../kiliax-core" }
 kiliax-otel = { path = "../kiliax-otel" }
+kiliax-server = { path = "../kiliax-server" }
 anyhow = "1"
 arboard = { version = "3", features = ["image-data"] }
 crossterm = { version = "0.28", features = ["bracketed-paste", "event-stream"] }

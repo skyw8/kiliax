@@ -47,7 +47,7 @@ cargo build --release -p kiliax
 ## usage
 session control server
 
-Manage the optional background `kiliax-server` (REST + SSE/WS) with:
+Manage the optional background server (REST + SSE/WS + Web UI) with:
 
 ```bash
 # tui
@@ -63,14 +63,20 @@ kiliax server restart
 ## build&run
 
 ```bash
+# tui
 cargo run -p kiliax
+
+# web
+cd web
+bun install&bun run build
+
 cargo run -p kiliax -- server start
 # http://127.0.0.1:8123/docs
 curl http://127.0.0.1:8123/v1/openapi.yaml > openapi.yaml
 
+
 cd workspace 
 cargo run -p kiliax --manifest-path=../Cargo.toml
-cargo run -p kiliax --manifest-path=../Cargo.toml -- server start
 ```
 
 demo example

@@ -39,7 +39,7 @@ minimal
 
 ### crates/kiliax-server (HTTP control plane)
 
-- Server entrypoint + config load + graceful shutdown: `crates/kiliax-server/src/main.rs`
+- Server runner (invoked by `kiliax server run`): `crates/kiliax-server/src/runner.rs`
 - Router + handlers + auth/access log + WS/SSE events + OpenAPI endpoints: `crates/kiliax-server/src/http/`
 - App state (ArcSwap config) + session lifecycle + run queue + events log + limits: `crates/kiliax-server/src/state.rs`
 - Infra (path validation + open workspace hooks): `crates/kiliax-server/src/infra.rs`

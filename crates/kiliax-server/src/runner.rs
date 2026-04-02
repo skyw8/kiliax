@@ -2,73 +2,90 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use kiliax_server::state::ServerState;
+use anyhow::Context as _;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+use crate::state::ServerState;
 
-    let mut host: Option<String> = None;
-    let mut port: Option<u16> = None;
-    let mut workspace_root: Option<PathBuf> = None;
-    let mut config_path: Option<PathBuf> = None;
-    let mut token: Option<String> = None;
+#[derive(Debug, Clone, Default)]
+pub struct ServerRunOptions {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub workspace_root: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
+    pub token: Option<String>,
+}
+
+pub fn parse_run_args(args: &[String]) -> ServerRunOptions {
+    let mut out = ServerRunOptions::default();
 
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--host" => {
                 if let Some(v) = iter.next() {
-                    host = Some(v.to_string());
+                    out.host = Some(v.to_string());
                 }
             }
             "--port" => {
                 if let Some(v) = iter.next() {
-                    port = v.parse().ok();
+                    out.port = v.parse().ok();
                 }
             }
             "--workspace-root" => {
                 if let Some(v) = iter.next() {
-                    workspace_root = Some(PathBuf::from(v));
+                    out.workspace_root = Some(PathBuf::from(v));
                 }
             }
             "--config" => {
                 if let Some(v) = iter.next() {
-                    config_path = Some(PathBuf::from(v));
+                    out.config_path = Some(PathBuf::from(v));
                 }
             }
             "--token" => {
                 if let Some(v) = iter.next() {
-                    token = Some(v.to_string());
+                    out.token = Some(v.to_string());
                 }
-            }
-            "-h" | "--help" => {
-                print_help();
-                return Ok(());
             }
             _ => {}
         }
     }
 
-    let workspace_root = workspace_root.unwrap_or(std::env::current_dir()?);
-    let loaded = if let Some(path) = config_path.clone() {
+    out
+}
+
+pub fn print_run_help() {
+    println!("kiliax server run");
+    println!("  --host <ip>             (default: 127.0.0.1)");
+    println!("  --port <port>           (default: 8123)");
+    println!("  --workspace-root <dir>  (default: cwd)");
+    println!("  --config <path>         (default: auto-detect kiliax.yaml)");
+    println!("  --token <token>         (required bearer/web auth)");
+}
+
+pub async fn run_server(opts: ServerRunOptions) -> anyhow::Result<()> {
+    let workspace_root = opts
+        .workspace_root
+        .unwrap_or(std::env::current_dir().context("current_dir")?);
+
+    let loaded = if let Some(path) = opts.config_path.clone() {
         kiliax_core::config::load_from_path(path)?
     } else {
         kiliax_core::config::load()?
     };
-    let config_path = config_path.unwrap_or(loaded.path.clone());
+    let config_path = opts.config_path.unwrap_or(loaded.path.clone());
 
-    let host = host
+    let host = opts
+        .host
         .or_else(|| loaded.config.server.host.clone())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = port.or(loaded.config.server.port).unwrap_or(8123);
-    let token = token.or_else(|| loaded.config.server.token.clone());
+    let port = opts.port.or(loaded.config.server.port).unwrap_or(8123);
+    let token = opts.token.or_else(|| loaded.config.server.token.clone());
     let token = token
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "kiliax-server requires a token (set server.token in kiliax.yaml or pass --token)"
+                "kiliax server requires a token (set server.token in kiliax.yaml or pass --token)"
             )
         })?;
 
@@ -90,10 +107,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let shutdown = state.shutdown.clone();
-    let app = kiliax_server::build_app(state);
+    let app = crate::build_app(state);
 
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
-    tracing::info!("kiliax-server listening on http://{addr}");
+    tracing::info!("kiliax server listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
@@ -101,15 +118,7 @@ async fn main() -> anyhow::Result<()> {
             shutdown.notified().await;
         })
         .await?;
-    Ok(())
-}
 
-fn print_help() {
-    println!("kiliax-server");
-    println!("  --host <ip>             (default: 127.0.0.1)");
-    println!("  --port <port>           (default: 8123)");
-    println!("  --workspace-root <dir>  (default: cwd)");
-    println!("  --config <path>         (default: auto-detect kiliax.yaml)");
-    println!("  --token <token>         (required bearer/web auth)");
+    Ok(())
 }
 

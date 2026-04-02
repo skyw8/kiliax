@@ -183,6 +183,10 @@ async fn serve_web(State(state): State<Arc<ServerState>>, req: axum::extract::Re
         return StatusCode::NOT_FOUND.into_response();
     }
 
+    if crate::web::embedded::ENABLED {
+        return serve_web_embedded(req.uri().path());
+    }
+
     let Some(dist_dir) = find_web_dist_dir(&state.workspace_root) else {
         let hint = r#"<!doctype html>
 <html>
@@ -197,12 +201,12 @@ async fn serve_web(State(state): State<Arc<ServerState>>, req: axum::extract::Re
     </style>
   </head>
   <body>
-    <h2>kiliax-web is not built</h2>
-    <p>Build the frontend first:</p>
+    <h2>kiliax-web is not available</h2>
+    <p>Build the frontend first (dev mode):</p>
     <pre>cd web
 bun install
 bun run build</pre>
-    <p>Then refresh this page.</p>
+    <p>Then restart the server and refresh.</p>
   </body>
 </html>
 "#;
@@ -242,6 +246,60 @@ bun run build</pre>
             resp
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+fn serve_web_embedded(path: &str) -> Response {
+    let (bytes, served_path) = if path == "/" || path.is_empty() {
+        (crate::web::embedded::index_html(), "/index.html")
+    } else if let Some(bytes) = crate::web::embedded::get(path) {
+        (bytes, path)
+    } else {
+        (crate::web::embedded::index_html(), "/index.html")
+    };
+
+    let cache_control = if served_path.starts_with("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else if served_path.ends_with(".html") {
+        "no-cache"
+    } else {
+        "public, max-age=3600"
+    };
+
+    let content_type = content_type_for_path(served_path);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        .header(axum::http::header::CACHE_CONTROL, cache_control)
+        .body(axum::body::Body::from(axum::body::Bytes::from_static(bytes)))
+        .unwrap_or_else(|_| StatusCode::OK.into_response())
+}
+
+fn content_type_for_path(path: &str) -> &'static str {
+    if path.ends_with(".html") {
+        "text/html; charset=utf-8"
+    } else if path.ends_with(".js") {
+        "text/javascript; charset=utf-8"
+    } else if path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else if path.ends_with(".ico") {
+        "image/x-icon"
+    } else if path.ends_with(".json") {
+        "application/json; charset=utf-8"
+    } else if path.ends_with(".woff2") {
+        "font/woff2"
+    } else if path.ends_with(".map") {
+        "application/json; charset=utf-8"
+    } else {
+        "application/octet-stream"
     }
 }
 

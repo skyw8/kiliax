@@ -148,22 +148,30 @@ async fn main() -> Result<()> {
                     &loaded.config.server,
                 )
                 .await?;
-                println!("kiliax-server: {}:{}", state.host, state.port);
+                println!("kiliax server: {}:{}", state.host, state.port);
                 println!(
                     "kiliax-web: http://{}:{}/?token={}",
                     state.host, state.port, state.token
                 );
             }
+            Some("run") => {
+                if args.iter().any(|a| a == "-h" || a == "--help") {
+                    kiliax_server::runner::print_run_help();
+                    return Ok(());
+                }
+                let opts = kiliax_server::runner::parse_run_args(&args[2..]);
+                kiliax_server::runner::run_server(opts).await?;
+            }
             Some("stop") => {
                 match daemon::stop().await? {
                     daemon::StopOutcome::NotRunning => {
-                        println!("kiliax-server not running (no ~/.kiliax/server.json)");
+                        println!("kiliax server not running (no ~/.kiliax/server.json)");
                     }
                     daemon::StopOutcome::Stopped => {
-                        println!("kiliax-server stopped");
+                        println!("kiliax server stopped");
                     }
                     daemon::StopOutcome::NotReachable => {
-                        println!("kiliax-server not reachable (removed stale ~/.kiliax/server.json)");
+                        println!("kiliax server not reachable (removed stale ~/.kiliax/server.json)");
                     }
                 }
             }
@@ -178,7 +186,7 @@ async fn main() -> Result<()> {
                     &loaded.config.server,
                 )
                 .await?;
-                println!("kiliax-server: {}:{}", state.host, state.port);
+                println!("kiliax server: {}:{}", state.host, state.port);
                 println!(
                     "kiliax-web: http://{}:{}/?token={}",
                     state.host, state.port, state.token
