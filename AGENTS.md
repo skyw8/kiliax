@@ -22,29 +22,29 @@ minimal
 
 ### crates/kiliax-core (core library)
 
-- Agent profiles + tool permissions: `crates/kiliax-core/src/agents/`
+- Agents + tool permissions: `crates/kiliax-core/src/agents/`
 - Config + model routing: `crates/kiliax-core/src/config.rs`
-- OpenAI-compatible client + streaming/tool-calls + `prompt_cache_key` + per-call token `usage` capture: `crates/kiliax-core/src/llm.rs`
-- Prompt assembly (model/agent/tools/skills/project + env last): `crates/kiliax-core/src/prompt.rs`
-- Agent runtime (tool loop, parallel tool calls, streaming events, attach `usage` to assistant messages): `crates/kiliax-core/src/runtime.rs`
-- Session store (`meta.json`/`snapshot.json`/`events.jsonl`) + message edit/truncate + snapshot self-heal + `prompt_cache_key` + persisted message `usage`: `crates/kiliax-core/src/session.rs`
-- Tool engine + builtin tools + MCP + skills discovery (stable ordering): `crates/kiliax-core/src/tools/`
+- OpenAI-compatible client (streaming/tool-calls/usage): `crates/kiliax-core/src/llm.rs`
+- Prompt assembly: `crates/kiliax-core/src/prompt.rs`
+- Agent runtime loop: `crates/kiliax-core/src/runtime.rs`
+- Session store + snapshots + events + usage: `crates/kiliax-core/src/session.rs`
+- Tools (builtin/MCP/skills discovery): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-cli (TUI)
 
-- Ratatui UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
-- App state + render pipeline (condensed tool results + per-call token usage): `crates/kiliax-cli/src/app.rs`
-- Terminal init + viewport backend: `crates/kiliax-cli/src/terminal.rs`
-- Server daemon control (`kiliax server ...`) + Windows detached spawn: `crates/kiliax-cli/src/daemon.rs`
+- UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
+- App state + render pipeline: `crates/kiliax-cli/src/app.rs`
+- Terminal init + backend: `crates/kiliax-cli/src/terminal.rs`
+- Server daemon control: `crates/kiliax-cli/src/daemon.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
-- Server runner (invoked by `kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- Router + handlers + auth/access log + WS/SSE events + OpenAPI endpoints: `crates/kiliax-server/src/http/`
-- App state (ArcSwap config) + session lifecycle + run queue + events log + limits: `crates/kiliax-server/src/state.rs`
-- Infra (path validation + open workspace hooks + Windows external path/VS Code/terminal launcher normalization): `crates/kiliax-server/src/infra.rs`
-- REST schema (+ OpenAPI schemas): `crates/kiliax-server/src/api.rs` (includes global `config.providers.*` / `config.runtime.*` / `config.skills.*` + message `usage`)
-- OpenAPI metadata (servers/security/tags): `crates/kiliax-server/src/openapi.rs`
+- Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
+- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI: `crates/kiliax-server/src/http/`
+- State (config/session lifecycle/run queue/events/limits): `crates/kiliax-server/src/state.rs`
+- Infra (path validation/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
+- REST/OpenAPI schemas (includes message `usage`): `crates/kiliax-server/src/api.rs`
+- OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 
 ### crates/kiliax-otel (OpenTelemetry)
 
@@ -52,7 +52,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI + WS streaming + session fork + message edit/regenerate (via runs) + per-call token usage display + folder picker dialogs (`FolderPicker`, `FolderPickerDialog`) + settings (providers/models/api-key + agent max steps + raw YAML): `web/src/app.tsx`
+- Main UI (WS streaming/session fork/edit/regenerate/usage/settings): `web/src/app.tsx`
 - API client: `web/src/lib/api.ts`
 - Types (includes message `usage`): `web/src/lib/types.ts`
 
