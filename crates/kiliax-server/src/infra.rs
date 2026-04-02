@@ -129,6 +129,24 @@ fn wsl_unc_path(path: &Path) -> Option<String> {
     Some(format!("\\\\wsl$\\{distro}{win}"))
 }
 
+fn external_display_path(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        let s = path.display().to_string();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+        s
+    }
+    #[cfg(not(windows))]
+    {
+        path.display().to_string()
+    }
+}
+
 fn spawn_detached(program: &str, args: &[String]) -> Result<(), std::io::Error> {
     let mut cmd = Command::new(program);
     cmd.args(args);
@@ -144,7 +162,7 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
         return Err(ApiError::invalid_argument("path must be a directory"));
     }
 
-    let path = canonical.display().to_string();
+    let path = external_display_path(&canonical);
     match target {
         api::OpenWorkspaceTarget::Vscode => spawn_detached("code", &[path]).map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
@@ -234,7 +252,7 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
                     "".to_string(),
                     "cmd.exe".to_string(),
                     "/K".to_string(),
-                    format!("cd /d {path}"),
+                    format!("pushd \"{path}\""),
                 ];
                 return spawn_detached("cmd.exe", &cmd_args).map_err(ApiError::internal_error);
             }
@@ -272,4 +290,3 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
         }
     }
 }
-
