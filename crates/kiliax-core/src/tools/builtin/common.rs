@@ -23,12 +23,9 @@ pub(super) fn resolve_workspace_path(
     let mut allowed_roots = Vec::new();
     allowed_roots.push(workspace_root.to_path_buf());
     allowed_roots.extend(extra_workspace_roots.iter().cloned());
-    resolve_path_under_roots(
-        workspace_root,
-        path,
-        &allowed_roots,
-        || "path must be within workspace roots".to_string(),
-    )
+    resolve_path_under_roots(workspace_root, path, &allowed_roots, || {
+        "path must be within workspace roots".to_string()
+    })
 }
 
 pub(super) fn resolve_read_path(
@@ -41,12 +38,9 @@ pub(super) fn resolve_read_path(
     allowed_roots.extend(extra_workspace_roots.iter().cloned());
     allowed_roots.extend(crate::tools::skills::skill_roots(workspace_root));
 
-    resolve_path_under_roots(
-        workspace_root,
-        path,
-        &allowed_roots,
-        || "path must be within workspace roots or skills roots".to_string(),
-    )
+    resolve_path_under_roots(workspace_root, path, &allowed_roots, || {
+        "path must be within workspace roots or skills roots".to_string()
+    })
 }
 
 fn resolve_path_under_roots(
@@ -83,7 +77,8 @@ fn resolve_path_under_roots(
     let check_path = if std::fs::symlink_metadata(&candidate).is_ok() {
         std::fs::canonicalize(&candidate)?
     } else {
-        let ancestor = nearest_existing_ancestor(&candidate).unwrap_or_else(|| base_root.to_path_buf());
+        let ancestor =
+            nearest_existing_ancestor(&candidate).unwrap_or_else(|| base_root.to_path_buf());
         std::fs::canonicalize(&ancestor)?
     };
 

@@ -594,7 +594,6 @@ impl FileSessionStore {
         }
         Ok(snapshot)
     }
-
 }
 
 fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u64) {
@@ -617,7 +616,10 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
             state.message_ids.push(seq);
             state.meta.message_count = state.messages.len();
         }
-        SessionEvent::MessageEdit { message_id, message } => {
+        SessionEvent::MessageEdit {
+            message_id,
+            message,
+        } => {
             if let Some(idx) = state.message_ids.iter().position(|id| *id == message_id) {
                 state.messages[idx] = message.clone();
                 if idx == 0 {
@@ -832,9 +834,10 @@ mod tests {
 
         let loaded = store.load(state.id()).await.unwrap();
         assert_eq!(loaded.messages.len(), loaded.message_ids.len());
-        assert!(
-            !loaded.messages.iter().any(|m| matches!(m, Message::System { content } if content == "CORRUPT"))
-        );
+        assert!(!loaded
+            .messages
+            .iter()
+            .any(|m| matches!(m, Message::System { content } if content == "CORRUPT")));
         let user_idx = loaded
             .message_ids
             .iter()

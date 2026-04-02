@@ -55,27 +55,58 @@ pub async fn execute(
 ) -> Result<String, ToolError> {
     match call.name.as_str() {
         TOOL_READ_FILE => {
-            read_file::execute(workspace_root, extra_workspace_roots, perms, file_tracker, call)
-                .await
+            read_file::execute(
+                workspace_root,
+                extra_workspace_roots,
+                perms,
+                file_tracker,
+                call,
+            )
+            .await
         }
-        TOOL_LIST_DIR => list_dir::execute(workspace_root, extra_workspace_roots, perms, call).await,
+        TOOL_LIST_DIR => {
+            list_dir::execute(workspace_root, extra_workspace_roots, perms, call).await
+        }
         TOOL_GREP_FILES => {
             grep_files::execute(workspace_root, extra_workspace_roots, perms, call).await
         }
-        TOOL_VIEW_IMAGE => view_image::execute(workspace_root, extra_workspace_roots, perms, call).await,
+        TOOL_VIEW_IMAGE => {
+            view_image::execute(workspace_root, extra_workspace_roots, perms, call).await
+        }
         TOOL_SHELL_COMMAND => {
-            shell::execute_shell_command(workspace_root, extra_workspace_roots, perms, shell_sessions, call).await
+            shell::execute_shell_command(
+                workspace_root,
+                extra_workspace_roots,
+                perms,
+                shell_sessions,
+                call,
+            )
+            .await
         }
         TOOL_WRITE_STDIN => shell::execute_write_stdin(perms, shell_sessions, call).await,
         TOOL_WRITE_FILE => {
-            write_file::execute(workspace_root, extra_workspace_roots, perms, file_tracker, call)
-                .await
+            write_file::execute(
+                workspace_root,
+                extra_workspace_roots,
+                perms,
+                file_tracker,
+                call,
+            )
+            .await
         }
         TOOL_EDIT_FILE => {
-            edit_file::execute(workspace_root, extra_workspace_roots, perms, file_tracker, call)
-                .await
+            edit_file::execute(
+                workspace_root,
+                extra_workspace_roots,
+                perms,
+                file_tracker,
+                call,
+            )
+            .await
         }
-        TOOL_APPLY_PATCH => apply_patch::execute(workspace_root, extra_workspace_roots, perms, call).await,
+        TOOL_APPLY_PATCH => {
+            apply_patch::execute(workspace_root, extra_workspace_roots, perms, call).await
+        }
         TOOL_UPDATE_PLAN => update_plan::execute(call),
         TOOL_WEB_SEARCH => web_search::execute(config, call).await,
         other => Err(ToolError::UnknownTool(other.to_string())),

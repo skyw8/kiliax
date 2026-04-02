@@ -1018,8 +1018,7 @@ impl App {
                         session_id = %self.session.id(),
                         error = %text,
                     );
-                    self.pending_history_lines
-                        .extend(render_error_lines(&text));
+                    self.pending_history_lines.extend(render_error_lines(&text));
                 }
             }
             crate::slash_command::SlashCommand::Model => {
@@ -1027,8 +1026,10 @@ impl App {
             }
             crate::slash_command::SlashCommand::Dir => {
                 if args.trim().is_empty() {
-                    self.pending_history_lines
-                        .extend(render_dir_list_lines(&self.workspace_root, &self.extra_workspace_roots));
+                    self.pending_history_lines.extend(render_dir_list_lines(
+                        &self.workspace_root,
+                        &self.extra_workspace_roots,
+                    ));
                     return Ok(());
                 }
                 if let Err(err) = self.add_extra_workspace_root(args.trim()).await {
@@ -1038,8 +1039,7 @@ impl App {
                         session_id = %self.session.id(),
                         error = %text,
                     );
-                    self.pending_history_lines
-                        .extend(render_error_lines(&text));
+                    self.pending_history_lines.extend(render_error_lines(&text));
                 }
             }
             crate::slash_command::SlashCommand::Agent => {
@@ -1057,8 +1057,7 @@ impl App {
                         session_id = %self.session.id(),
                         error = %text,
                     );
-                    self.pending_history_lines
-                        .extend(render_error_lines(&text));
+                    self.pending_history_lines.extend(render_error_lines(&text));
                 }
             }
             crate::slash_command::SlashCommand::Mcp => {
@@ -1086,7 +1085,8 @@ impl App {
 
         let candidate = validate_extra_workspace_root(input)?;
 
-        let main = std::fs::canonicalize(&self.workspace_root).unwrap_or_else(|_| self.workspace_root.clone());
+        let main = std::fs::canonicalize(&self.workspace_root)
+            .unwrap_or_else(|_| self.workspace_root.clone());
         if candidate == main {
             self.pending_history_lines.push(Line::from(vec![
                 Span::from("• ").dim(),
@@ -1391,8 +1391,7 @@ impl App {
                 session_id = %self.session.id(),
                 error = %text,
             );
-            self.pending_history_lines
-                .extend(render_error_lines(&text));
+            self.pending_history_lines.extend(render_error_lines(&text));
         }
         Ok(())
     }
@@ -1405,8 +1404,7 @@ impl App {
                 session_id = %self.session.id(),
                 error = %text,
             );
-            self.pending_history_lines
-                .extend(render_error_lines(&text));
+            self.pending_history_lines.extend(render_error_lines(&text));
         }
         Ok(())
     }
@@ -1687,10 +1685,7 @@ impl App {
                     .record_message(&mut self.session, message.clone())
                     .await?;
 
-                if let Message::Assistant {
-                    content, usage, ..
-                } = message
-                {
+                if let Message::Assistant { content, usage, .. } = message {
                     self.close_thinking_stream();
 
                     let content = content.unwrap_or_default();
@@ -2726,7 +2721,10 @@ fn summarize_shell_script_command(script: &str) -> String {
         .map(|s| s.as_str())
         .filter(|s| !is_setup_shell_segment(s))
         .collect();
-    let selected = real_segments.first().copied().unwrap_or_else(|| segments[0].as_str());
+    let selected = real_segments
+        .first()
+        .copied()
+        .unwrap_or_else(|| segments[0].as_str());
 
     let stages = split_shell_pipeline(selected);
     let mut rendered = Vec::new();
@@ -3286,10 +3284,7 @@ mod tests {
                 .to_string(),
         ];
         let out = summarize_shell_command_argv(&argv);
-        assert_eq!(
-            out,
-            "rg -n shell_command crates/kiliax-cli/src | head -n 5"
-        );
+        assert_eq!(out, "rg -n shell_command crates/kiliax-cli/src | head -n 5");
     }
 
     #[test]
@@ -3443,7 +3438,8 @@ mod tests {
 
     #[test]
     fn update_mcp_server_enable_yaml_matches_unquoted_name_with_hash() {
-        let input = "mcp:\n  servers:\n    - name: context#7\n      enable: true\n      command: npx\n";
+        let input =
+            "mcp:\n  servers:\n    - name: context#7\n      enable: true\n      command: npx\n";
         let out = update_mcp_server_enable_yaml(input, "context#7", false).unwrap();
         assert!(out.contains("- name: context#7\n      enable: false\n      command: npx"));
     }

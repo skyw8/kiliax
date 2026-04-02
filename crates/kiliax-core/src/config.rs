@@ -267,7 +267,11 @@ pub struct OtelCaptureConfig {
     #[serde(default)]
     pub mode: OtelCaptureMode,
 
-    #[serde(default = "default_capture_max_bytes", alias = "maxBytes", alias = "max-bytes")]
+    #[serde(
+        default = "default_capture_max_bytes",
+        alias = "maxBytes",
+        alias = "max-bytes"
+    )]
     pub max_bytes: usize,
 
     #[serde(

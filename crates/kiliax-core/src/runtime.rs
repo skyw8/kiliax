@@ -820,8 +820,7 @@ fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
                 tool_calls,
                 usage,
             } if !tool_calls.is_empty() => {
-                let expected_ids: Vec<String> =
-                    tool_calls.iter().map(|c| c.id.clone()).collect();
+                let expected_ids: Vec<String> = tool_calls.iter().map(|c| c.id.clone()).collect();
                 out.push(Message::Assistant {
                     content,
                     reasoning_content,
@@ -1166,10 +1165,7 @@ mod tests {
             messages.get(2),
             Some(Message::Tool { tool_call_id, .. }) if tool_call_id == "b"
         ));
-        assert!(matches!(
-            messages.get(3),
-            Some(Message::User { .. })
-        ));
+        assert!(matches!(messages.get(3), Some(Message::User { .. })));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1243,15 +1239,14 @@ mod tests {
     async fn drive_stream_step_attaches_usage_from_final_chunk() {
         let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
 
-        let usage = serde_json::from_value::<async_openai::types::CompletionUsage>(
-            serde_json::json!({
+        let usage =
+            serde_json::from_value::<async_openai::types::CompletionUsage>(serde_json::json!({
                 "prompt_tokens": 19,
                 "completion_tokens": 21,
                 "total_tokens": 40,
                 "prompt_tokens_details": { "cached_tokens": 10 }
-            }),
-        )
-        .unwrap();
+            }))
+            .unwrap();
 
         let chunks = vec![
             Ok(ChatStreamChunk {

@@ -8,8 +8,10 @@ use crate::tools::{Permissions, ToolError};
 use super::common::{parse_args, resolve_workspace_path};
 use super::TOOL_APPLY_PATCH;
 
-const DESCRIPTION: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools/apply_patch.md"));
+const DESCRIPTION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/tools/apply_patch.md"
+));
 
 pub fn apply_patch_tool_definition() -> ToolDefinition {
     ToolDefinition {
@@ -122,7 +124,8 @@ pub(super) async fn execute(
                 let mut final_path = path.clone();
 
                 if let Some(dest) = move_to.clone() {
-                    let dest_abs = resolve_workspace_path(workspace_root, extra_workspace_roots, &dest)?;
+                    let dest_abs =
+                        resolve_workspace_path(workspace_root, extra_workspace_roots, &dest)?;
                     if let Some(parent) = dest_abs.parent() {
                         tokio::fs::create_dir_all(parent).await?;
                     }

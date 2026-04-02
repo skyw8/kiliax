@@ -33,7 +33,11 @@ impl FileAccessTracker {
         Ok(())
     }
 
-    pub async fn assert_read_unchanged(&self, path: &Path, tool_name: &str) -> Result<(), ToolError> {
+    pub async fn assert_read_unchanged(
+        &self,
+        path: &Path,
+        tool_name: &str,
+    ) -> Result<(), ToolError> {
         let canonical = tokio::fs::canonicalize(path).await?;
         let meta = tokio::fs::metadata(&canonical).await?;
         let current = FileStamp::from_meta(&meta);
@@ -69,4 +73,3 @@ impl FileStamp {
 fn system_time_nanos(t: SystemTime) -> Option<u128> {
     t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_nanos())
 }
-

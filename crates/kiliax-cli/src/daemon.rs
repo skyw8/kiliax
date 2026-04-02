@@ -95,7 +95,8 @@ async fn ping_web(state: &DaemonState) -> bool {
     let Ok(mut url) = Url::parse(&format!("{}/", state.url_base())) else {
         return false;
     };
-    url.query_pairs_mut().append_pair("token", state.token.trim());
+    url.query_pairs_mut()
+        .append_pair("token", state.token.trim());
 
     let client = reqwest::Client::new();
     match client.get(url).timeout(PING_TIMEOUT_FAST).send().await {
@@ -221,7 +222,8 @@ pub async fn ensure_running(
                 if let Some(info) = fetch_admin_info(&check).await {
                     let desired_root = workspace_root.display().to_string();
                     let desired_config_path = config_path.display().to_string();
-                    identity_ok = info.workspace_root == desired_root && info.config_path == desired_config_path;
+                    identity_ok = info.workspace_root == desired_root
+                        && info.config_path == desired_config_path;
                 }
             }
 
@@ -234,11 +236,12 @@ pub async fn ensure_running(
                 parsed.token = token.clone();
                 let text = serde_json::to_string_pretty(&parsed)
                     .context("failed to serialize server state")?;
-                tokio::fs::write(&state_file, text)
-                    .await
-                    .with_context(|| {
-                        format!("failed to write server state file: {}", state_file.display())
-                    })?;
+                tokio::fs::write(&state_file, text).await.with_context(|| {
+                    format!(
+                        "failed to write server state file: {}",
+                        state_file.display()
+                    )
+                })?;
                 return Ok(parsed);
             }
 
@@ -295,22 +298,29 @@ pub async fn ensure_running(
                 if let Some(info) = fetch_admin_info(&candidate).await {
                     let desired_root = workspace_root.display().to_string();
                     let desired_config_path = config_path.display().to_string();
-                    identity_ok = info.workspace_root == desired_root && info.config_path == desired_config_path;
+                    identity_ok = info.workspace_root == desired_root
+                        && info.config_path == desired_config_path;
                 }
             }
 
             if web_ok && token_required && identity_ok {
-                let text = serde_json::to_string_pretty(&candidate).context("failed to serialize server state")?;
-                tokio::fs::write(&state_file, text)
-                    .await
-                    .with_context(|| format!("failed to write server state file: {}", state_file.display()))?;
+                let text = serde_json::to_string_pretty(&candidate)
+                    .context("failed to serialize server state")?;
+                tokio::fs::write(&state_file, text).await.with_context(|| {
+                    format!(
+                        "failed to write server state file: {}",
+                        state_file.display()
+                    )
+                })?;
                 return Ok(candidate);
             }
 
             if try_stop_http(&candidate).await {
                 let _ = wait_for_port_to_free(&desired_bind_host, port).await;
             } else if desired_port.is_some() {
-                anyhow::bail!("server.port {port} is in use and no web UI is reachable at that address");
+                anyhow::bail!(
+                    "server.port {port} is in use and no web UI is reachable at that address"
+                );
             }
         }
 
@@ -335,7 +345,12 @@ pub async fn ensure_running(
         .create(true)
         .append(true)
         .open(&log_file_path)
-        .with_context(|| format!("failed to open server log file: {}", log_file_path.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to open server log file: {}",
+                log_file_path.display()
+            )
+        })?;
     let log_file_err = log_file
         .try_clone()
         .context("failed to clone server log file handle")?;
@@ -385,9 +400,7 @@ pub async fn ensure_running(
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     }
 
-    let child = cmd
-        .spawn()
-        .context("failed to spawn `kiliax server run`")?;
+    let child = cmd.spawn().context("failed to spawn `kiliax server run`")?;
     let state = DaemonState {
         host: desired_host,
         port,
@@ -397,9 +410,12 @@ pub async fn ensure_running(
     };
 
     let text = serde_json::to_string_pretty(&state).context("failed to serialize server state")?;
-    tokio::fs::write(&state_file, text)
-        .await
-        .with_context(|| format!("failed to write server state file: {}", state_file.display()))?;
+    tokio::fs::write(&state_file, text).await.with_context(|| {
+        format!(
+            "failed to write server state file: {}",
+            state_file.display()
+        )
+    })?;
 
     Ok(state)
 }
@@ -415,7 +431,9 @@ pub async fn stop() -> Result<StopOutcome> {
     let state_file = state_path()?;
     let text = match tokio::fs::read_to_string(&state_file).await {
         Ok(t) => t,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(StopOutcome::NotRunning),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(StopOutcome::NotRunning)
+        }
         Err(err) => return Err(err.into()),
     };
     let state: DaemonState = serde_json::from_str(&text).context("invalid server.json")?;
@@ -463,6 +481,8 @@ mod tests {
     fn token_is_hex() {
         let token = generate_token_hex(32).expect("token");
         assert_eq!(token.len(), 64);
-        assert!(token.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(token
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 }

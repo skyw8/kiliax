@@ -190,10 +190,7 @@ fn model_prompt_for(model_id: Option<&str>) -> Option<&'static str> {
     None
 }
 
-fn render_environment_prompt(
-    workspace_root: Option<&Path>,
-    model_id: Option<&str>,
-) -> String {
+fn render_environment_prompt(workspace_root: Option<&Path>, model_id: Option<&str>) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if let Some(root) = workspace_root {
@@ -456,7 +453,9 @@ mod tests {
 
         let env_idx = msgs
             .iter()
-            .position(|m| matches!(m, Message::System { content } if content.contains(ENV_OPEN_TAG)))
+            .position(
+                |m| matches!(m, Message::System { content } if content.contains(ENV_OPEN_TAG)),
+            )
             .unwrap();
         let last_system_idx = msgs
             .iter()
@@ -466,7 +465,9 @@ mod tests {
 
         let tools_idx = msgs
             .iter()
-            .position(|m| matches!(m, Message::System { content } if content.contains("# Tool Use")))
+            .position(
+                |m| matches!(m, Message::System { content } if content.contains("# Tool Use")),
+            )
             .unwrap();
         assert!(tools_idx < env_idx);
 

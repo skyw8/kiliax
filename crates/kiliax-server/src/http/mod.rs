@@ -16,7 +16,7 @@ use tower::ServiceExt as _;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::Span;
-use utoipa_axum::{routes, router::OpenApiRouter};
+use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::error::{ApiError, ApiErrorCode};
@@ -98,8 +98,9 @@ pub fn build_app(state: Arc<ServerState>) -> Router {
     let openapi = crate::openapi::ApiDoc::openapi().nest("/v1", v1_openapi);
     let openapi = Arc::new(openapi);
 
-    let swagger: Router<Arc<ServerState>> =
-        SwaggerUi::new("/docs").url("/v1/openapi.json", (*openapi).clone()).into();
+    let swagger: Router<Arc<ServerState>> = SwaggerUi::new("/docs")
+        .url("/v1/openapi.json", (*openapi).clone())
+        .into();
 
     let openapi_yaml: Router<Arc<ServerState>> = Router::new()
         .route("/v1/openapi.yaml", get(get_openapi_yaml))
@@ -271,7 +272,9 @@ fn serve_web_embedded(path: &str) -> Response {
         .status(StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, content_type)
         .header(axum::http::header::CACHE_CONTROL, cache_control)
-        .body(axum::body::Body::from(axum::body::Bytes::from_static(bytes)))
+        .body(axum::body::Body::from(axum::body::Bytes::from_static(
+            bytes,
+        )))
         .unwrap_or_else(|_| StatusCode::OK.into_response())
 }
 
@@ -524,10 +527,12 @@ async fn create_session(
     headers: HeaderMap,
     payload: Option<Json<crate::api::SessionCreateRequest>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let req = payload.map(|v| v.0).unwrap_or(crate::api::SessionCreateRequest {
-        title: None,
-        settings: None,
-    });
+    let req = payload
+        .map(|v| v.0)
+        .unwrap_or(crate::api::SessionCreateRequest {
+            title: None,
+            settings: None,
+        });
     let out = state.create_session(idem_key(&headers), req).await?;
     Ok((StatusCode::CREATED, Json(out)))
 }
@@ -845,8 +850,8 @@ async fn patch_settings(
             "workspace_root is immutable (set it when creating the session)",
         ));
     }
-    let patch: crate::api::SessionSettingsPatch = serde_json::from_value(body)
-        .map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let patch: crate::api::SessionSettingsPatch =
+        serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.patch_session_settings(&id, patch).await?;
     Ok(Json(out))
 }
@@ -945,8 +950,8 @@ async fn create_run(
 ) -> Result<impl IntoResponse, ApiError> {
     let id =
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-    let req: crate::api::RunCreateRequest = serde_json::from_value(body)
-        .map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let req: crate::api::RunCreateRequest =
+        serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.create_run(&id, idem_key(&headers), req).await?;
     Ok((StatusCode::CREATED, Json(out)))
 }
@@ -1016,7 +1021,9 @@ async fn get_capabilities(
         (status = "default", body = crate::error::ApiErrorResponse)
     )
 )]
-async fn get_admin_info(State(state): State<Arc<ServerState>>) -> Result<impl IntoResponse, ApiError> {
+async fn get_admin_info(
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(crate::api::AdminInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         workspace_root: state.workspace_root.display().to_string(),
@@ -1112,8 +1119,11 @@ async fn stream_events_sse(
     let rx = live.subscribe_events();
     let shutdown = state.shutdown.clone();
 
-    let backlog_stream =
-        stream::iter(backlog.into_iter().map(|e| Ok::<_, std::convert::Infallible>(e)));
+    let backlog_stream = stream::iter(
+        backlog
+            .into_iter()
+            .map(|e| Ok::<_, std::convert::Infallible>(e)),
+    );
     let live_stream = stream::unfold(
         LiveSseState {
             rx,

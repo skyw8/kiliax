@@ -409,14 +409,11 @@ impl LlmClient {
             inject_prompt_cache_fields(&mut body, self.prompt_cache_key.as_deref());
             if self.route.provider.eq_ignore_ascii_case("openai") {
                 if let Some(obj) = body.as_object_mut() {
-                    let stream_options = obj.entry("stream_options".to_string()).or_insert_with(
-                        || serde_json::Value::Object(serde_json::Map::new()),
-                    );
+                    let stream_options = obj
+                        .entry("stream_options".to_string())
+                        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
                     if let Some(opts) = stream_options.as_object_mut() {
-                        opts.insert(
-                            "include_usage".to_string(),
-                            serde_json::Value::Bool(true),
-                        );
+                        opts.insert("include_usage".to_string(), serde_json::Value::Bool(true));
                     }
                 }
             }
@@ -506,9 +503,9 @@ impl LlmClient {
                                         }
                                         Ok(chunk)
                                     }
-                                    Err(err) => Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(
-                                        err,
-                                    ))),
+                                    Err(err) => {
+                                        Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(err)))
+                                    }
                                 };
 
                                 if tx.send(response).is_err() {
@@ -646,9 +643,9 @@ impl LlmClient {
             return Err(err);
         }
 
-        Ok(Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(
-            rx,
-        )))
+        Ok(Box::pin(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+        ))
     }
 }
 

@@ -104,7 +104,11 @@ impl ApiError {
     }
 
     pub fn invalid_argument(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, ApiErrorCode::InvalidArgument, message)
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidArgument,
+            message,
+        )
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {

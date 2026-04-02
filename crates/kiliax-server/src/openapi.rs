@@ -34,12 +34,10 @@ struct ServerAddon;
 
 impl Modify for ServerAddon {
     fn modify(&self, openapi: &mut openapi::OpenApi) {
-        openapi.servers = Some(vec![
-            openapi::server::ServerBuilder::new()
-                .url("http://127.0.0.1:8123")
-                .description(Some("Local-only default"))
-                .build(),
-        ]);
+        openapi.servers = Some(vec![openapi::server::ServerBuilder::new()
+            .url("http://127.0.0.1:8123")
+            .description(Some("Local-only default"))
+            .build()]);
     }
 }
 
@@ -47,7 +45,9 @@ struct SecurityAddon;
 
 impl Modify for SecurityAddon {
     fn modify(&self, openapi: &mut openapi::OpenApi) {
-        let components = openapi.components.get_or_insert_with(openapi::Components::new);
+        let components = openapi
+            .components
+            .get_or_insert_with(openapi::Components::new);
         components.add_security_scheme(
             "bearerAuth",
             SecurityScheme::Http(

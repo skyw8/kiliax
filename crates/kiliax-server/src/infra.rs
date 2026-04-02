@@ -27,7 +27,9 @@ fn expand_tilde(path: &str) -> Result<PathBuf, ApiError> {
 pub(crate) fn validate_client_workspace_root(input: &str) -> Result<PathBuf, ApiError> {
     let candidate = expand_tilde(input)?;
     if !candidate.is_absolute() {
-        return Err(ApiError::invalid_argument("workspace_root must be an absolute path"));
+        return Err(ApiError::invalid_argument(
+            "workspace_root must be an absolute path",
+        ));
     }
     for c in candidate.components() {
         if matches!(c, std::path::Component::ParentDir) {
@@ -157,9 +159,15 @@ fn windows_find_vscode_exe() -> Option<PathBuf> {
 
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(local) = env_path("LOCALAPPDATA") {
-        candidates.push(local.join("Programs").join("Microsoft VS Code").join("Code.exe"));
         candidates.push(
-            local.join("Programs")
+            local
+                .join("Programs")
+                .join("Microsoft VS Code")
+                .join("Code.exe"),
+        );
+        candidates.push(
+            local
+                .join("Programs")
                 .join("Microsoft VS Code Insiders")
                 .join("Code - Insiders.exe"),
         );
@@ -205,15 +213,9 @@ fn windows_percent_encode_path(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for &b in input.as_bytes() {
         match b {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'.'
-            | b'_'
-            | b'~'
-            | b'/'
-            | b':' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                out.push(b as char)
+            }
             other => {
                 out.push('%');
                 out.push(hex_digit(other >> 4));
@@ -235,7 +237,27 @@ fn spawn_detached(program: &str, args: &[String]) -> Result<(), std::io::Error> 
     cmd.spawn().map(|_| ())
 }
 
-pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget) -> Result<(), ApiError> {
+fn windows_cmd_start_in_dir_args(
+    path: &str,
+    program: &str,
+    program_args: &[String],
+) -> Vec<String> {
+    let mut args = vec![
+        "/c".to_string(),
+        "start".to_string(),
+        "".to_string(),
+        "/D".to_string(),
+        path.to_string(),
+        program.to_string(),
+    ];
+    args.extend(program_args.iter().cloned());
+    args
+}
+
+pub(crate) async fn open_external(
+    root: &Path,
+    target: api::OpenWorkspaceTarget,
+) -> Result<(), ApiError> {
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let meta = tokio::fs::metadata(&canonical)
         .await
@@ -253,17 +275,14 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                         if let Some(exe) = windows_find_vscode_exe() {
                             let program = exe.display().to_string();
-                            return spawn_detached(&program, &[path]).map_err(ApiError::internal_error);
+                            return spawn_detached(&program, &[path])
+                                .map_err(ApiError::internal_error);
                         }
 
                         let url_path = windows_percent_encode_path(&path.replace('\\', "/"));
                         let url = format!("vscode://file/{url_path}");
-                        let args: Vec<String> = vec![
-                            "/c".to_string(),
-                            "start".to_string(),
-                            "".to_string(),
-                            url,
-                        ];
+                        let args: Vec<String> =
+                            vec!["/c".to_string(), "start".to_string(), "".to_string(), url];
                         spawn_detached("cmd.exe", &args).map_err(|_| {
                             ApiError::invalid_argument(
                                 "VS Code not found (install `code` on PATH or reinstall VS Code)",
@@ -298,7 +317,9 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
             };
             spawn_detached(program, &args).map_err(|err| {
                 if err.kind() == std::io::ErrorKind::NotFound {
-                    ApiError::invalid_argument(format!("file manager launcher not found: {program}"))
+                    ApiError::invalid_argument(format!(
+                        "file manager launcher not found: {program}"
+                    ))
                 } else {
                     ApiError::internal_error(err)
                 }
@@ -357,14 +378,7 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
                     Err(err) => return Err(ApiError::internal_error(err)),
                 }
 
-                let cmd_args: Vec<String> = vec![
-                    "/c".to_string(),
-                    "start".to_string(),
-                    "".to_string(),
-                    "cmd.exe".to_string(),
-                    "/K".to_string(),
-                    format!("pushd \"{path}\""),
-                ];
+                let cmd_args = windows_cmd_start_in_dir_args(&path, "cmd.exe", &[]);
                 return spawn_detached("cmd.exe", &cmd_args).map_err(ApiError::internal_error);
             }
 
@@ -399,5 +413,31 @@ pub(crate) async fn open_external(root: &Path, target: api::OpenWorkspaceTarget)
                 "terminal launcher not found (tried x-terminal-emulator/gnome-terminal/xfce4-terminal/konsole)",
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::windows_cmd_start_in_dir_args;
+
+    #[test]
+    fn windows_cmd_start_in_dir_args_sets_working_directory_without_pushd() {
+        let args = windows_cmd_start_in_dir_args(
+            r#"D:\github code\kiliax\target\release"#,
+            "cmd.exe",
+            &[],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "/c".to_string(),
+                "start".to_string(),
+                "".to_string(),
+                "/D".to_string(),
+                r#"D:\github code\kiliax\target\release"#.to_string(),
+                "cmd.exe".to_string(),
+            ]
+        );
     }
 }

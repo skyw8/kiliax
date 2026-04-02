@@ -78,4 +78,3 @@ pub fn builtin_tool_id_by_name(name: &str) -> Option<BuiltinToolId> {
 pub fn builtin_tool_definition_by_name(name: &str) -> Option<ToolDefinition> {
     builtin_tool_id_by_name(name).map(BuiltinToolId::definition)
 }
-

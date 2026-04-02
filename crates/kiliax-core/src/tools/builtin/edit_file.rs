@@ -8,8 +8,10 @@ use crate::tools::{Permissions, ToolError};
 use super::common::{parse_args, resolve_workspace_path};
 use super::{FileAccessTracker, TOOL_EDIT_FILE};
 
-const DESCRIPTION: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools/edit_file.md"));
+const DESCRIPTION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/tools/edit_file.md"
+));
 
 pub fn edit_file_tool_definition() -> ToolDefinition {
     ToolDefinition {
@@ -79,7 +81,9 @@ pub(super) async fn execute(
         )));
     }
 
-    file_tracker.assert_read_unchanged(&abs, TOOL_EDIT_FILE).await?;
+    file_tracker
+        .assert_read_unchanged(&abs, TOOL_EDIT_FILE)
+        .await?;
 
     let content_old = tokio::fs::read_to_string(&abs).await?;
     let match_count = content_old.match_indices(&args.old_string).count();

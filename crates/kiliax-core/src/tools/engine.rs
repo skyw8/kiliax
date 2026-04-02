@@ -400,7 +400,13 @@ impl ToolEngine {
 
             let res: Result<(String, Message), ToolError> = async {
                 let extra = self.extra_workspace_roots();
-                builtin::execute_view_image_with_attachment(&self.workspace_root, extra.as_slice(), perms, call).await
+                builtin::execute_view_image_with_attachment(
+                    &self.workspace_root,
+                    extra.as_slice(),
+                    perms,
+                    call,
+                )
+                .await
             }
             .instrument(span.clone())
             .await;

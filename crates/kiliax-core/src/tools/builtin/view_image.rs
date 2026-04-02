@@ -51,9 +51,11 @@ pub(super) async fn execute(
     perms: &Permissions,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
-    Ok(execute_with_attachment(workspace_root, extra_workspace_roots, perms, call)
-        .await?
-        .0)
+    Ok(
+        execute_with_attachment(workspace_root, extra_workspace_roots, perms, call)
+            .await?
+            .0,
+    )
 }
 
 pub(crate) async fn execute_with_attachment(

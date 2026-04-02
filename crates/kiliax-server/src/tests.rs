@@ -191,7 +191,11 @@ async fn web_serves_dist_and_spa_fallback() {
 
     let resp = app
         .clone()
-        .oneshot(req_empty_with_headers(Method::GET, "/some/deep/link", &[cookie]))
+        .oneshot(req_empty_with_headers(
+            Method::GET,
+            "/some/deep/link",
+            &[cookie],
+        ))
         .await
         .expect("oneshot");
     let (status, body) = read_text(resp).await;
@@ -200,7 +204,11 @@ async fn web_serves_dist_and_spa_fallback() {
 
     let resp = app
         .clone()
-        .oneshot(req_empty_with_headers(Method::GET, "/assets/hello.txt", &[cookie]))
+        .oneshot(req_empty_with_headers(
+            Method::GET,
+            "/assets/hello.txt",
+            &[cookie],
+        ))
         .await
         .expect("oneshot");
     let (status, body) = read_text(resp).await;
@@ -321,7 +329,11 @@ async fn messages_include_usage_when_present() {
         .expect("record message");
 
     let uri = format!("/v1/sessions/{}/messages?limit=10", session.id());
-    let resp = app.clone().oneshot(req_empty(Method::GET, &uri)).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, &uri))
+        .await
+        .unwrap();
     let (status, body) = read_json(resp).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
@@ -335,7 +347,10 @@ async fn messages_include_usage_when_present() {
         .expect("assistant message");
     let usage = assistant.get("usage").expect("usage");
 
-    assert_eq!(usage.get("prompt_tokens").and_then(|v| v.as_u64()), Some(19));
+    assert_eq!(
+        usage.get("prompt_tokens").and_then(|v| v.as_u64()),
+        Some(19)
+    );
     assert_eq!(
         usage.get("completion_tokens").and_then(|v| v.as_u64()),
         Some(21)
@@ -376,7 +391,10 @@ async fn create_session_accepts_empty_body_and_persists_settings() {
         .await
         .expect("settings.json");
     let parsed: serde_json::Value = serde_json::from_str(&settings_text).expect("settings json");
-    assert_eq!(parsed.get("model_id").and_then(|v| v.as_str()), Some("test/test-model"));
+    assert_eq!(
+        parsed.get("model_id").and_then(|v| v.as_str()),
+        Some("test/test-model")
+    );
 }
 
 #[tokio::test]
@@ -384,9 +402,10 @@ async fn fork_session_inherits_prompt_cache_key() {
     let dir = TempDir::new().expect("tempdir");
     let workspace_root = dir.path().to_path_buf();
     let config_path = workspace_root.join("kiliax.yaml");
-    let state = ServerState::new_for_tests(workspace_root.clone(), config_path, test_config(), None)
-        .await
-        .expect("new_for_tests");
+    let state =
+        ServerState::new_for_tests(workspace_root.clone(), config_path, test_config(), None)
+            .await
+            .expect("new_for_tests");
 
     let store = state.store.clone();
     let mut source = store
@@ -460,7 +479,11 @@ async fn idempotency_key_makes_create_session_idempotent() {
         .expect("oneshot");
     let (status1, body1) = read_json(resp1).await;
     assert_eq!(status1, StatusCode::CREATED);
-    let id1 = body1.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+    let id1 = body1
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_string();
 
     let resp2 = app
         .clone()
@@ -474,7 +497,11 @@ async fn idempotency_key_makes_create_session_idempotent() {
         .expect("oneshot");
     let (status2, body2) = read_json(resp2).await;
     assert_eq!(status2, StatusCode::CREATED);
-    let id2 = body2.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+    let id2 = body2
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_string();
 
     assert_eq!(id1, id2);
 }
@@ -565,7 +592,10 @@ async fn list_sessions_shows_persisted_after_restart() {
         .expect("oneshot");
     let (status, body) = read_json(resp).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.get("items").and_then(|v| v.as_array()).unwrap().len(), 0);
+    assert_eq!(
+        body.get("items").and_then(|v| v.as_array()).unwrap().len(),
+        0
+    );
 
     let resp = app2
         .clone()
@@ -576,16 +606,20 @@ async fn list_sessions_shows_persisted_after_restart() {
     assert_eq!(status, StatusCode::OK);
 
     let items = body.get("items").and_then(|v| v.as_array()).unwrap();
-    let found = items.iter().find(|it| it.get("id").and_then(|v| v.as_str()) == Some(&session_id));
+    let found = items
+        .iter()
+        .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(&session_id));
     let found = found.expect("session listed");
     assert_eq!(
-        found.get("status")
+        found
+            .get("status")
             .and_then(|s| s.get("run_state"))
             .and_then(|v| v.as_str()),
         Some("idle")
     );
     assert!(
-        found.get("status")
+        found
+            .get("status")
             .and_then(|s| s.get("session_state"))
             .is_none(),
         "session_state should not be part of the public API"
@@ -614,7 +648,10 @@ async fn create_run_auto_resumes_session_into_live_only_list() {
         .expect("oneshot");
     let (status, body) = read_json(resp).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.get("items").and_then(|v| v.as_array()).unwrap().len(), 0);
+    assert_eq!(
+        body.get("items").and_then(|v| v.as_array()).unwrap().len(),
+        0
+    );
 
     let resp = app2
         .clone()
@@ -637,7 +674,9 @@ async fn create_run_auto_resumes_session_into_live_only_list() {
     assert_eq!(status, StatusCode::OK);
     let items = body.get("items").and_then(|v| v.as_array()).unwrap();
     assert!(
-        items.iter().any(|it| it.get("id").and_then(|v| v.as_str()) == Some(&session_id)),
+        items
+            .iter()
+            .any(|it| it.get("id").and_then(|v| v.as_str()) == Some(&session_id)),
         "expected session to be loaded into live list after create_run"
     );
 }
@@ -1079,7 +1118,10 @@ async fn cancel_queued_run_marks_cancelled_and_emits_event() {
         .expect("oneshot");
     let (status, body) = read_json(resp).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.get("state").and_then(|v| v.as_str()), Some("cancelled"));
+    assert_eq!(
+        body.get("state").and_then(|v| v.as_str()),
+        Some("cancelled")
+    );
 
     let resp = app
         .clone()
@@ -1093,7 +1135,9 @@ async fn cancel_queued_run_marks_cancelled_and_emits_event() {
     assert_eq!(status, StatusCode::OK);
     let items = body.get("items").and_then(|v| v.as_array()).unwrap();
     assert!(
-        items.iter().any(|ev| ev.get("type").and_then(|v| v.as_str()) == Some("run_cancelled")),
+        items
+            .iter()
+            .any(|ev| ev.get("type").and_then(|v| v.as_str()) == Some("run_cancelled")),
         "events missing run_cancelled: {items:?}"
     );
 }
@@ -1277,9 +1321,7 @@ async fn auth_middleware_enforces_bearer_token() {
 }
 
 fn allowed_home_kiliax_dir() -> std::path::PathBuf {
-    dirs::home_dir()
-        .expect("home_dir")
-        .join(".kiliax")
+    dirs::home_dir().expect("home_dir").join(".kiliax")
 }
 
 fn unique_allowed_workspace_root(prefix: &str) -> std::path::PathBuf {
@@ -1320,10 +1362,7 @@ async fn create_session_sets_workspace_root_and_updated_at() {
         "workspace_root not under ~/.kiliax/workspace: {ws}"
     );
 
-    let dir_name = ws_path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or("");
+    let dir_name = ws_path.file_name().and_then(|v| v.to_str()).unwrap_or("");
     assert!(
         dir_name.starts_with("tmp_"),
         "workspace_root dir must start with tmp_: {ws}"
@@ -1340,7 +1379,10 @@ async fn create_session_sets_workspace_root_and_updated_at() {
         "workspace_root suffix must include YYYYMMDDT prefix: {ws}"
     );
 
-    let updated_at = body.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+    let updated_at = body
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     assert!(!updated_at.trim().is_empty(), "updated_at missing: {body}");
 }
 
@@ -1417,7 +1459,9 @@ async fn list_skills_returns_workspace_skills() {
     assert_eq!(status, StatusCode::OK);
     let items = body.get("items").and_then(|v| v.as_array()).unwrap();
     assert!(
-        items.iter().any(|it| it.get("id").and_then(|v| v.as_str()) == Some("demo_skill")),
+        items
+            .iter()
+            .any(|it| it.get("id").and_then(|v| v.as_str()) == Some("demo_skill")),
         "missing demo_skill: {items:?}"
     );
 
@@ -1449,7 +1493,9 @@ async fn list_global_skills_returns_workspace_skills() {
     assert_eq!(status, StatusCode::OK);
     let items = body.get("items").and_then(|v| v.as_array()).unwrap();
     assert!(
-        items.iter().any(|it| it.get("id").and_then(|v| v.as_str()) == Some("demo_skill")),
+        items
+            .iter()
+            .any(|it| it.get("id").and_then(|v| v.as_str()) == Some("demo_skill")),
         "missing demo_skill: {items:?}"
     );
 }
@@ -1492,7 +1538,10 @@ mcp:
 
     let resp = app
         .clone()
-        .oneshot(req_empty(Method::GET, &format!("/v1/sessions/{session_id}")))
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}"),
+        ))
         .await
         .expect("oneshot");
     let (status, body) = read_json(resp).await;
@@ -1604,9 +1653,7 @@ async fn patch_config_providers_sets_api_key_without_echo() {
         .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("test"))
         .expect("missing provider test");
     assert_eq!(
-        test_provider
-            .get("api_key_set")
-            .and_then(|v| v.as_bool()),
+        test_provider.get("api_key_set").and_then(|v| v.as_bool()),
         Some(true),
         "expected api_key_set: true, got: {body}"
     );
@@ -1652,7 +1699,8 @@ async fn patch_config_runtime_updates_max_steps() {
         Some(16)
     );
     assert_eq!(
-        body.get("agents_general_max_steps").and_then(|v| v.as_u64()),
+        body.get("agents_general_max_steps")
+            .and_then(|v| v.as_u64()),
         None
     );
 
@@ -1693,7 +1741,9 @@ async fn list_sessions_last_outcome_reflects_meta_finish_or_error() {
     let mut meta: serde_json::Value = serde_json::from_str(&meta_text).expect("meta json");
     meta["last_finish_reason"] = serde_json::Value::String("done".to_string());
     let meta_text = serde_json::to_string_pretty(&meta).expect("meta serialize");
-    tokio::fs::write(&meta_path, meta_text).await.expect("meta write");
+    tokio::fs::write(&meta_path, meta_text)
+        .await
+        .expect("meta write");
 
     let app2 = build_test_app(&dir, None).await;
     let resp = app2
@@ -1718,7 +1768,9 @@ async fn list_sessions_last_outcome_reflects_meta_finish_or_error() {
     let mut meta: serde_json::Value = serde_json::from_str(&meta_text).expect("meta json");
     meta["last_error"] = serde_json::Value::String("boom".to_string());
     let meta_text = serde_json::to_string_pretty(&meta).expect("meta serialize");
-    tokio::fs::write(&meta_path, meta_text).await.expect("meta write");
+    tokio::fs::write(&meta_path, meta_text)
+        .await
+        .expect("meta write");
 
     let app3 = build_test_app(&dir, None).await;
     let resp = app3

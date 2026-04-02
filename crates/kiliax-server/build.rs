@@ -4,7 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
 
     let dist_dir = std::env::var("KILIAX_WEB_DIST_DIR")
@@ -64,11 +65,7 @@ fn main() {
         let rel = rel.replace('\\', "/");
         let ident = format!("FILE_{i}");
         let path = format!("{}/web-dist/{}", out_dir.display(), rel);
-        writeln!(
-            f,
-            "static {ident}: &[u8] = include_bytes!({path:?});"
-        )
-        .unwrap();
+        writeln!(f, "static {ident}: &[u8] = include_bytes!({path:?});").unwrap();
     }
 }
 

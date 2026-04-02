@@ -41,15 +41,15 @@ impl ToolPolicy {
     pub fn denial_message(&self, tool_name: &str) -> Option<&'static str> {
         match self.file_edit_tools {
             FileEditTools::ApplyPatch => match tool_name {
-                TOOL_WRITE_FILE | TOOL_EDIT_FILE => Some(
-                    "tool is disabled for this model; use apply_patch to edit files",
-                ),
+                TOOL_WRITE_FILE | TOOL_EDIT_FILE => {
+                    Some("tool is disabled for this model; use apply_patch to edit files")
+                }
                 _ => None,
             },
             FileEditTools::WriteEdit => match tool_name {
-                TOOL_APPLY_PATCH => Some(
-                    "tool is disabled for this model; use write_file/edit_file to edit files",
-                ),
+                TOOL_APPLY_PATCH => {
+                    Some("tool is disabled for this model; use write_file/edit_file to edit files")
+                }
                 _ => None,
             },
         }
@@ -57,7 +57,9 @@ impl ToolPolicy {
 
     pub fn allows_builtin(&self, tool: BuiltinToolId) -> bool {
         match self.file_edit_tools {
-            FileEditTools::ApplyPatch => !matches!(tool, BuiltinToolId::WriteFile | BuiltinToolId::EditFile),
+            FileEditTools::ApplyPatch => {
+                !matches!(tool, BuiltinToolId::WriteFile | BuiltinToolId::EditFile)
+            }
             FileEditTools::WriteEdit => tool != BuiltinToolId::ApplyPatch,
         }
     }
@@ -86,4 +88,3 @@ fn is_gpt5_family(model_id: &str) -> bool {
     let model = model.to_ascii_lowercase();
     model.starts_with("gpt-5")
 }
-

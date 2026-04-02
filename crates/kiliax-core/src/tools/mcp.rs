@@ -13,8 +13,8 @@ use tracing::Instrument;
 
 use crate::config::McpServerConfig;
 use crate::llm::ToolDefinition;
-use crate::tools::ToolError;
 use crate::telemetry;
+use crate::tools::ToolError;
 
 const MCP_PREFIX: &str = "mcp__";
 const MCP_SEP: &str = "__";

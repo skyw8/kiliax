@@ -124,12 +124,7 @@ pub fn init() -> anyhow::Result<(TerminalGuard, TerminalState)> {
     let full_size = terminal.backend_mut().refresh_full_size()?;
     let (_, cursor_y) = crossterm::cursor::position().unwrap_or((0, 0));
     let viewport_y = cursor_y.min(full_size.height.saturating_sub(1));
-    let viewport = Rect::new(
-        0,
-        viewport_y,
-        full_size.width,
-        1,
-    );
+    let viewport = Rect::new(0, viewport_y, full_size.width, 1);
     terminal.backend_mut().set_viewport(viewport);
     terminal.clear()?;
 

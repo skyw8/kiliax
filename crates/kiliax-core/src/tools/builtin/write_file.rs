@@ -9,8 +9,10 @@ use crate::tools::{Permissions, ToolError};
 use super::common::{parse_args, resolve_workspace_path};
 use super::{FileAccessTracker, TOOL_WRITE_FILE};
 
-const DESCRIPTION: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/tools/write_file.md"));
+const DESCRIPTION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/tools/write_file.md"
+));
 
 pub fn write_file_tool_definition() -> ToolDefinition {
     ToolDefinition {

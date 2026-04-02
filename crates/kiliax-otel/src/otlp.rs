@@ -111,7 +111,10 @@ fn build_http_client_inner(
     if let Some(path) = tls.ca_cert.as_ref() {
         let pem = read_bytes(path)?;
         let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
-            config_error(format!("failed to parse certificate {}: {error}", path.display()))
+            config_error(format!(
+                "failed to parse certificate {}: {error}",
+                path.display()
+            ))
         })?;
         builder = builder
             .tls_built_in_root_certs(false)
@@ -153,7 +156,10 @@ pub(crate) fn build_async_http_client(
         if let Some(path) = tls.ca_cert.as_ref() {
             let pem = read_bytes(path)?;
             let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
-                config_error(format!("failed to parse certificate {}: {error}", path.display()))
+                config_error(format!(
+                    "failed to parse certificate {}: {error}",
+                    path.display()
+                ))
             })?;
             builder = builder
                 .tls_built_in_root_certs(false)

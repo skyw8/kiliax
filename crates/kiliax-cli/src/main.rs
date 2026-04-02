@@ -142,12 +142,9 @@ async fn main() -> Result<()> {
                 let Some(loaded) = load_or_init_config()? else {
                     return Ok(());
                 };
-                let state = daemon::ensure_running(
-                    &workspace_root,
-                    &loaded.path,
-                    &loaded.config.server,
-                )
-                .await?;
+                let state =
+                    daemon::ensure_running(&workspace_root, &loaded.path, &loaded.config.server)
+                        .await?;
                 println!("kiliax server: {}:{}", state.host, state.port);
                 println!(
                     "kiliax-web: http://{}:{}/?token={}",
@@ -162,30 +159,25 @@ async fn main() -> Result<()> {
                 let opts = kiliax_server::runner::parse_run_args(&args[2..]);
                 kiliax_server::runner::run_server(opts).await?;
             }
-            Some("stop") => {
-                match daemon::stop().await? {
-                    daemon::StopOutcome::NotRunning => {
-                        println!("kiliax server not running (no ~/.kiliax/server.json)");
-                    }
-                    daemon::StopOutcome::Stopped => {
-                        println!("kiliax server stopped");
-                    }
-                    daemon::StopOutcome::NotReachable => {
-                        println!("kiliax server not reachable (removed stale ~/.kiliax/server.json)");
-                    }
+            Some("stop") => match daemon::stop().await? {
+                daemon::StopOutcome::NotRunning => {
+                    println!("kiliax server not running (no ~/.kiliax/server.json)");
                 }
-            }
+                daemon::StopOutcome::Stopped => {
+                    println!("kiliax server stopped");
+                }
+                daemon::StopOutcome::NotReachable => {
+                    println!("kiliax server not reachable (removed stale ~/.kiliax/server.json)");
+                }
+            },
             Some("restart") => {
                 let _ = daemon::stop().await?;
                 let Some(loaded) = load_or_init_config()? else {
                     return Ok(());
                 };
-                let state = daemon::ensure_running(
-                    &workspace_root,
-                    &loaded.path,
-                    &loaded.config.server,
-                )
-                .await?;
+                let state =
+                    daemon::ensure_running(&workspace_root, &loaded.path, &loaded.config.server)
+                        .await?;
                 println!("kiliax server: {}:{}", state.host, state.port);
                 println!(
                     "kiliax-web: http://{}:{}/?token={}",

@@ -116,8 +116,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 pub mod spans {
-    use opentelemetry::{Key, KeyValue, Value};
     use opentelemetry::trace::TraceContextExt as _;
+    use opentelemetry::{Key, KeyValue, Value};
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
     pub fn trace_id_hex(span: &tracing::Span) -> Option<String> {
@@ -134,10 +134,7 @@ pub mod spans {
         trace_id_hex(&tracing::Span::current())
     }
 
-    pub fn set_attributes(
-        span: &tracing::Span,
-        attributes: impl IntoIterator<Item = KeyValue>,
-    ) {
+    pub fn set_attributes(span: &tracing::Span, attributes: impl IntoIterator<Item = KeyValue>) {
         let ctx = span.context();
         let otel_span = ctx.span();
         if !otel_span.span_context().is_valid() {
@@ -162,9 +159,9 @@ pub mod metrics {
     use std::sync::OnceLock;
     use std::time::Duration;
 
-    use opentelemetry::KeyValue;
     use opentelemetry::global;
     use opentelemetry::metrics::{Counter, Histogram};
+    use opentelemetry::KeyValue;
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("kiliax")

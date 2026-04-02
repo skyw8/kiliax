@@ -6,39 +6,39 @@ use std::time::Duration;
 
 use gethostname::gethostname;
 use kiliax_core::config::{OtelCaptureMode, OtelConfig, OtelOtlpProtocol};
-use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::propagation::TextMapPropagator as _;
 use opentelemetry::trace::TraceContextExt as _;
 use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::KeyValue;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
+use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_otlp::LogExporter;
-use opentelemetry_otlp::OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
-use opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT;
-use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TRACES_TIMEOUT;
 use opentelemetry_otlp::Protocol;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
-use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
-use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
-use opentelemetry_sdk::Resource;
+use opentelemetry_otlp::OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
+use opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT;
+use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TRACES_TIMEOUT;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::PeriodicReader;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::runtime;
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor as TokioBatchSpanProcessor;
 use opentelemetry_sdk::trace::BatchSpanProcessor;
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor as TokioBatchSpanProcessor;
+use opentelemetry_sdk::Resource;
 use opentelemetry_semantic_conventions as semconv;
-use tracing_subscriber::Layer;
+use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
-use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+use tracing_subscriber::Layer;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalLogs {
@@ -153,9 +153,9 @@ fn file_writer(path: &Path) -> anyhow::Result<MakeLockedFileWriter> {
         .create(true)
         .append(true)
         .open(path)?;
-    Ok(MakeLockedFileWriter(LockedFileWriter(Arc::new(Mutex::new(
-        file,
-    )))))
+    Ok(MakeLockedFileWriter(LockedFileWriter(Arc::new(
+        Mutex::new(file),
+    ))))
 }
 
 pub fn init(
@@ -165,7 +165,9 @@ pub fn init(
     local_logs: LocalLogs,
 ) -> anyhow::Result<OtelGuard> {
     // Update capture behavior in `kiliax-core` early (even if exporter disabled).
-    kiliax_core::telemetry::set_capture_config(cfg.otel.enabled.then_some(cfg.otel.capture.clone()));
+    kiliax_core::telemetry::set_capture_config(
+        cfg.otel.enabled.then_some(cfg.otel.capture.clone()),
+    );
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -224,36 +226,34 @@ pub fn init(
                 .try_init()
                 .ok();
         }
-        LocalLogs::File { path } => {
-            match file_writer(&path) {
-                Ok(writer) => {
-                    let fmt_layer = tracing_subscriber::fmt::layer()
-                        .with_writer(writer)
-                        .with_ansi(false);
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(provider.tracing_layer(service_name))
-                        .with(provider.logger_layer())
-                        .with(fmt_layer)
-                        .try_init()
-                        .ok();
-                }
-                Err(err) => {
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(provider.tracing_layer(service_name))
-                        .with(provider.logger_layer())
-                        .try_init()
-                        .ok();
-                    tracing::warn!(
-                        target: "kiliax_otel",
-                        event = "local_log_file_failed",
-                        path = %path.display(),
-                        error = %err,
-                    );
-                }
+        LocalLogs::File { path } => match file_writer(&path) {
+            Ok(writer) => {
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .with_writer(writer)
+                    .with_ansi(false);
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(provider.tracing_layer(service_name))
+                    .with(provider.logger_layer())
+                    .with(fmt_layer)
+                    .try_init()
+                    .ok();
             }
-        }
+            Err(err) => {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(provider.tracing_layer(service_name))
+                    .with(provider.logger_layer())
+                    .try_init()
+                    .ok();
+                tracing::warn!(
+                    target: "kiliax_otel",
+                    event = "local_log_file_failed",
+                    path = %path.display(),
+                    error = %err,
+                );
+            }
+        },
     }
 
     if matches!(cfg.otel.capture.mode, OtelCaptureMode::Full) {
@@ -339,10 +339,7 @@ fn make_resource(cfg: &OtelConfig, service_name: &str, service_version: &str) ->
             semconv::attribute::SERVICE_VERSION,
             service_version.to_string(),
         ),
-        KeyValue::new(
-            "deployment.environment.name",
-            cfg.environment.clone(),
-        ),
+        KeyValue::new("deployment.environment.name", cfg.environment.clone()),
     ];
 
     let host = gethostname();
@@ -371,7 +368,10 @@ fn endpoint_for_signal(base: &str, signal: &str) -> String {
     format!("{base}/v1/{signal}")
 }
 
-fn build_logger_provider(cfg: &OtelConfig, resource: &Resource) -> anyhow::Result<SdkLoggerProvider> {
+fn build_logger_provider(
+    cfg: &OtelConfig,
+    resource: &Resource,
+) -> anyhow::Result<SdkLoggerProvider> {
     let mut builder = SdkLoggerProvider::builder().with_resource(resource.clone());
 
     match cfg.otlp.protocol {

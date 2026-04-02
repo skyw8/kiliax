@@ -113,12 +113,14 @@ pub async fn run_server(opts: ServerRunOptions) -> anyhow::Result<()> {
     tracing::info!("kiliax server listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(async move {
-            shutdown.notified().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown.notified().await;
+    })
+    .await?;
 
     Ok(())
 }
-
