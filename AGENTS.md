@@ -27,23 +27,23 @@ minimal
 - OpenAI-compatible client (streaming/tool-calls/usage): `crates/kiliax-core/src/llm.rs`
 - Prompt assembly: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop: `crates/kiliax-core/src/runtime.rs`
-- Session store + snapshots + events + usage: `crates/kiliax-core/src/session.rs`
+- Session store + snapshots + events + session-scoped MCP overrides: `crates/kiliax-core/src/session.rs`
 - Tools (builtin/MCP/skills discovery): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-cli (TUI)
 
-- UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
-- App state + render pipeline: `crates/kiliax-cli/src/app.rs`
+- UI + event loop + slash commands + session bootstrap: `crates/kiliax-cli/src/main.rs`
+- App state + render pipeline + session-local settings changes: `crates/kiliax-cli/src/app.rs`
 - Terminal init + backend: `crates/kiliax-cli/src/terminal.rs`
 - Server daemon control: `crates/kiliax-cli/src/daemon.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI: `crates/kiliax-server/src/http/`
-- State (config/session lifecycle/run queue/events/limits): `crates/kiliax-server/src/state.rs`
+- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/session default actions: `crates/kiliax-server/src/http/`
+- State (config/session lifecycle/run queue/events/limits/default persistence): `crates/kiliax-server/src/state.rs`
 - Infra (path validation/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
-- REST/OpenAPI schemas (includes message `usage`): `crates/kiliax-server/src/api.rs`
+- REST/OpenAPI schemas (includes message `usage` and session default writes): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 
 ### crates/kiliax-otel (OpenTelemetry)
@@ -52,9 +52,9 @@ minimal
 
 ### web (React UI)
 
-- Main UI (WS streaming/session fork/edit/regenerate/usage/settings): `web/src/app.tsx`
-- API client: `web/src/lib/api.ts`
-- Types (includes message `usage`): `web/src/lib/types.ts`
+- Main UI (WS streaming/session fork/edit/regenerate/usage/session vs default settings): `web/src/app.tsx`
+- API client + explicit session default persistence: `web/src/lib/api.ts`
+- Types (includes message `usage` and session default writes): `web/src/lib/types.ts`
 
 ## constraints
 **All UI languages default to English, including any prompts, outputs, etc.**

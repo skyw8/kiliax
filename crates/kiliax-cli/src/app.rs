@@ -14,9 +14,10 @@ use serde::Deserialize;
 
 use kiliax_core::{
     agents::AgentProfile,
+    config::Config,
     llm::{Message, TokenUsage, UserContentPart, UserMessageContent},
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions},
-    session::{FileSessionStore, SessionState},
+    session::{FileSessionStore, SessionMcpServerSetting, SessionState},
 };
 
 use crate::clipboard_paste;
@@ -32,6 +33,35 @@ pub enum AppAction {
     Submitted(String),
     ModelPicked(String),
     McpToggled { server: String, enable: bool },
+}
+
+fn session_mcp_servers_from_config(config: &Config) -> Vec<SessionMcpServerSetting> {
+    config
+        .mcp
+        .servers
+        .iter()
+        .map(|server| SessionMcpServerSetting {
+            id: server.name.clone(),
+            enable: server.enable,
+        })
+        .collect()
+}
+
+fn config_with_session_mcp_overrides(
+    base: &Config,
+    overrides: &[SessionMcpServerSetting],
+) -> Config {
+    let mut config = base.clone();
+    let enabled_by_id: HashMap<&str, bool> = overrides
+        .iter()
+        .map(|server| (server.id.as_str(), server.enable))
+        .collect();
+    for server in &mut config.mcp.servers {
+        if let Some(enable) = enabled_by_id.get(server.name.as_str()) {
+            server.enable = *enable;
+        }
+    }
+    config
 }
 
 impl Default for AppAction {
@@ -521,6 +551,18 @@ impl App {
             pending_images: Vec::new(),
             queued_submissions: VecDeque::new(),
         }
+    }
+
+    fn session_mcp_servers(&self) -> Vec<SessionMcpServerSetting> {
+        if self.session.meta.mcp_servers.is_empty() {
+            session_mcp_servers_from_config(&self.config)
+        } else {
+            self.session.meta.mcp_servers.clone()
+        }
+    }
+
+    fn session_config(&self) -> Config {
+        config_with_session_mcp_overrides(&self.config, &self.session_mcp_servers())
     }
 
     pub fn has_user_messages(&self) -> bool {
@@ -1432,27 +1474,17 @@ impl App {
         let prev_runtime = self.runtime.clone();
         let prev_model_id = self.model_id.clone();
         let prev_options = self.options.clone();
-        let prev_config = self.config.clone();
         let prev_session = self.session.clone();
         let prev_messages = self.messages.clone();
 
-        let original = tokio::fs::read_to_string(&self.config_path).await?;
-        let updated = update_default_model_yaml(&original, &model_id);
-        let wrote = updated != original;
-        if updated != original {
-            tokio::fs::write(&self.config_path, &updated).await?;
-        }
-
         let res: Result<()> = async {
-            let loaded = kiliax_core::config::load_from_path(self.config_path.clone())
-                .map_err(|e| anyhow::anyhow!(e))?;
-            self.config = loaded.config;
-
-            let llm = kiliax_core::llm::LlmClient::from_config(&self.config, Some(&model_id))?
+            self.config.resolve_model(&model_id)?;
+            let session_config = self.session_config();
+            let llm = kiliax_core::llm::LlmClient::from_config(&session_config, Some(&model_id))?
                 .with_prompt_cache_key(self.session.meta.prompt_cache_key.clone());
             let tools = self.runtime.tools().clone();
             tools
-                .set_config(self.config.clone())
+                .set_config(session_config)
                 .map_err(|e| anyhow::anyhow!(e))?;
             self.runtime = AgentRuntime::new(llm, tools);
             self.model_id = self.runtime.llm().route().model_id();
@@ -1489,24 +1521,18 @@ impl App {
                 session_id = %self.session.id(),
                 from = %prev,
                 to = %self.model_id(),
-                wrote_config = wrote,
-                config_path = %self.config_path.display(),
             );
             Ok(())
         }
         .await;
 
         if let Err(err) = res {
-            if wrote {
-                let _ = tokio::fs::write(&self.config_path, &original).await;
-            }
             self.runtime = prev_runtime;
             self.model_id = prev_model_id;
             self.options = prev_options;
-            self.config = prev_config;
-            let _ = self.runtime.tools().set_config(self.config.clone());
             self.session = prev_session;
             self.messages = prev_messages;
+            let _ = self.runtime.tools().set_config(self.session_config());
             return Err(err);
         }
 
@@ -1525,25 +1551,48 @@ impl App {
             anyhow::bail!("unknown mcp server: {server:?}");
         }
 
-        let prev_config = self.config.clone();
         let prev_session = self.session.clone();
         let prev_messages = self.messages.clone();
-
-        let original = tokio::fs::read_to_string(&self.config_path).await?;
-        let updated = update_mcp_server_enable_yaml(&original, &server, enable)?;
-        let wrote = updated != original;
-        if wrote {
-            tokio::fs::write(&self.config_path, &updated).await?;
+        let mut next_servers = self.session_mcp_servers();
+        let current = next_servers
+            .iter()
+            .find(|entry| entry.id == server)
+            .map(|entry| entry.enable)
+            .unwrap_or_else(|| {
+                self.config
+                    .mcp
+                    .servers
+                    .iter()
+                    .find(|entry| entry.name == server)
+                    .is_some_and(|entry| entry.enable)
+            });
+        if current == enable {
+            let action = if enable { "enabled" } else { "disabled" };
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("mcp").bold(),
+                Span::from(": ").dim(),
+                Span::from(server).dim(),
+                Span::from(" ").dim(),
+                Span::from(action).dim(),
+            ]));
+            return Ok(());
+        }
+        if let Some(entry) = next_servers.iter_mut().find(|entry| entry.id == server) {
+            entry.enable = enable;
+        } else {
+            next_servers.push(SessionMcpServerSetting {
+                id: server.clone(),
+                enable,
+            });
         }
 
         let res: Result<()> = async {
-            let loaded = kiliax_core::config::load_from_path(self.config_path.clone())
-                .map_err(|e| anyhow::anyhow!(e))?;
-            self.config = loaded.config;
-
+            self.session.meta.mcp_servers = next_servers;
+            let session_config = self.session_config();
             let tools = self.runtime.tools().clone();
             tools
-                .set_config(self.config.clone())
+                .set_config(session_config)
                 .map_err(|e| anyhow::anyhow!(e))?;
 
             let statuses = tools.mcp_status().await;
@@ -1581,20 +1630,15 @@ impl App {
                 session_id = %self.session.id(),
                 server = %server,
                 enable,
-                config_path = %self.config_path.display(),
             );
             Ok(())
         }
         .await;
 
         if let Err(err) = res {
-            if wrote {
-                let _ = tokio::fs::write(&self.config_path, &original).await;
-            }
-            self.config = prev_config;
-            let _ = self.runtime.tools().set_config(self.config.clone());
             self.session = prev_session;
             self.messages = prev_messages;
+            let _ = self.runtime.tools().set_config(self.session_config());
             return Err(err);
         }
 
@@ -1976,220 +2020,6 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-fn update_default_model_yaml(text: &str, model_id: &str) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    let mut replaced = false;
-
-    for raw in text.lines() {
-        let line = raw.trim_end_matches('\r');
-        let trimmed = line.trim_start();
-
-        if !replaced && !trimmed.starts_with('#') && trimmed.starts_with("default_model:") {
-            let indent_len = line.len().saturating_sub(trimmed.len());
-            let indent = &line[..indent_len];
-            lines.push(format!("{indent}default_model: {model_id}"));
-            replaced = true;
-            continue;
-        }
-
-        lines.push(line.to_string());
-    }
-
-    if !replaced {
-        let mut insert_at = 0usize;
-        while insert_at < lines.len() {
-            let t = lines[insert_at].trim();
-            if t.is_empty() || t.starts_with('#') {
-                insert_at += 1;
-                continue;
-            }
-            break;
-        }
-        lines.insert(insert_at, format!("default_model: {model_id}"));
-    }
-
-    let mut out = lines.join("\n");
-    if text.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
-
-fn update_mcp_server_enable_yaml(text: &str, server_name: &str, enable: bool) -> Result<String> {
-    let server_name = server_name.trim();
-    if server_name.is_empty() {
-        anyhow::bail!("mcp server name must not be empty");
-    }
-
-    let enable_value = if enable { "true" } else { "false" };
-    let mut lines: Vec<String> = text
-        .lines()
-        .map(|raw| raw.trim_end_matches('\r').to_string())
-        .collect();
-
-    let mut start_idx: Option<usize> = None;
-    let mut item_indent: usize = 0;
-
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        let indent = line.len().saturating_sub(trimmed.len());
-        let Some(rest) = trimmed.strip_prefix('-') else {
-            continue;
-        };
-        let rest = rest.trim_start();
-        let Some(rest) = rest.strip_prefix("name:") else {
-            continue;
-        };
-        let raw_value = match yaml_comment_hash_pos(rest) {
-            Some(pos) => &rest[..pos],
-            None => rest,
-        };
-        let value = parse_yaml_scalar_string(raw_value);
-        if value == server_name {
-            start_idx = Some(idx);
-            item_indent = indent;
-            break;
-        }
-    }
-
-    let Some(start) = start_idx else {
-        anyhow::bail!("mcp server not found in config file: {server_name:?}");
-    };
-
-    let mut end = lines.len();
-    for idx in (start + 1)..lines.len() {
-        let line = &lines[idx];
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let indent = line.len().saturating_sub(trimmed.len());
-        if indent < item_indent || (indent == item_indent && trimmed.starts_with('-')) {
-            end = idx;
-            break;
-        }
-    }
-
-    let mut replaced = false;
-    for idx in (start + 1)..end {
-        let line = &lines[idx];
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        if !trimmed.starts_with("enable:") && !trimmed.starts_with("enabled:") {
-            continue;
-        }
-
-        let indent_len = line.len().saturating_sub(trimmed.len());
-        let indent = &line[..indent_len];
-
-        let comment = comment_start(line).map(|pos| line[pos..].to_string());
-
-        let mut updated = format!("{indent}enable: {enable_value}");
-        if let Some(c) = comment {
-            updated.push_str(&c);
-        }
-        lines[idx] = updated;
-        replaced = true;
-        break;
-    }
-
-    if !replaced {
-        let field_indent = " ".repeat(item_indent.saturating_add(2));
-        lines.insert(start + 1, format!("{field_indent}enable: {enable_value}"));
-    }
-
-    let mut out = lines.join("\n");
-    if text.ends_with('\n') {
-        out.push('\n');
-    }
-    Ok(out)
-}
-
-fn parse_yaml_scalar_string(raw: &str) -> String {
-    let raw = raw.trim();
-    if raw.len() >= 2 {
-        let bytes = raw.as_bytes();
-        let first = bytes[0] as char;
-        let last = bytes[raw.len() - 1] as char;
-        if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
-            return raw[1..raw.len().saturating_sub(1)].to_string();
-        }
-    }
-    raw.to_string()
-}
-
-fn yaml_comment_hash_pos(line: &str) -> Option<usize> {
-    let bytes = line.as_bytes();
-    let mut i = 0usize;
-    let mut in_single = false;
-    let mut in_double = false;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-
-        if in_double {
-            if b == b'\\' {
-                i = i.saturating_add(2);
-                continue;
-            }
-            if b == b'"' {
-                in_double = false;
-            }
-            i = i.saturating_add(1);
-            continue;
-        }
-
-        if in_single {
-            if b == b'\'' {
-                if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
-                    i = i.saturating_add(2);
-                    continue;
-                }
-                in_single = false;
-            }
-            i = i.saturating_add(1);
-            continue;
-        }
-
-        match b {
-            b'\'' => {
-                in_single = true;
-                i = i.saturating_add(1);
-            }
-            b'"' => {
-                in_double = true;
-                i = i.saturating_add(1);
-            }
-            b'#' => {
-                if i == 0 || bytes[i - 1].is_ascii_whitespace() {
-                    return Some(i);
-                }
-                i = i.saturating_add(1);
-            }
-            _ => {
-                i = i.saturating_add(1);
-            }
-        }
-    }
-
-    None
-}
-
-fn comment_start(line: &str) -> Option<usize> {
-    let hash = yaml_comment_hash_pos(line)?;
-    let bytes = line.as_bytes();
-    let mut start = hash;
-    while start > 0 && bytes[start - 1].is_ascii_whitespace() {
-        start -= 1;
-    }
-    Some(start)
 }
 
 fn render_user_message_lines(content: &str) -> Vec<Line<'static>> {
@@ -3404,60 +3234,81 @@ mod tests {
     }
 
     #[test]
-    fn update_default_model_yaml_replaces_existing_value() {
-        let input = "# header\ndefault_model: old/p\n\nproviders:\n  p:\n    base_url: x\n";
-        let out = update_default_model_yaml(input, "new/m");
-        assert!(out.contains("default_model: new/m"));
-        assert!(!out.contains("default_model: old/p"));
-        assert!(out.contains("providers:"));
+    fn session_mcp_servers_follow_config_defaults() {
+        let mut config = Config::default();
+        config.mcp.servers = vec![
+            kiliax_core::config::McpServerConfig {
+                name: "context7".to_string(),
+                enable: true,
+                command: "npx".to_string(),
+                args: vec!["context7".to_string()],
+            },
+            kiliax_core::config::McpServerConfig {
+                name: "filesystem".to_string(),
+                enable: false,
+                command: "npx".to_string(),
+                args: vec!["filesystem".to_string()],
+            },
+        ];
+
+        assert_eq!(
+            session_mcp_servers_from_config(&config),
+            vec![
+                SessionMcpServerSetting {
+                    id: "context7".to_string(),
+                    enable: true,
+                },
+                SessionMcpServerSetting {
+                    id: "filesystem".to_string(),
+                    enable: false,
+                },
+            ]
+        );
     }
 
     #[test]
-    fn update_default_model_yaml_inserts_when_missing() {
-        let input = "# header\n\nproviders:\n  p:\n    base_url: x\n";
-        let out = update_default_model_yaml(input, "p/m");
-        assert!(out.lines().any(|l| l.trim() == "default_model: p/m"));
-        assert!(out.contains("providers:"));
-    }
+    fn session_mcp_overrides_only_change_session_selected_servers() {
+        let mut config = Config::default();
+        config.mcp.servers = vec![
+            kiliax_core::config::McpServerConfig {
+                name: "context7".to_string(),
+                enable: true,
+                command: "npx".to_string(),
+                args: vec!["context7".to_string()],
+            },
+            kiliax_core::config::McpServerConfig {
+                name: "filesystem".to_string(),
+                enable: false,
+                command: "npx".to_string(),
+                args: vec!["filesystem".to_string()],
+            },
+        ];
 
-    #[test]
-    fn update_mcp_server_enable_yaml_inserts_when_missing() {
-        let input = "mcp:\n  servers:\n    - name: context7\n      command: npx\n";
-        let out = update_mcp_server_enable_yaml(input, "context7", false).unwrap();
-        assert!(out.contains("- name: context7\n      enable: false\n      command: npx"));
-    }
+        let session_config = config_with_session_mcp_overrides(
+            &config,
+            &[SessionMcpServerSetting {
+                id: "filesystem".to_string(),
+                enable: true,
+            }],
+        );
 
-    #[test]
-    fn update_mcp_server_enable_yaml_replaces_existing_value() {
-        let input =
-            "mcp:\n  servers:\n    - name: \"context7\"\n      enable: true # keep\n      command: npx\n";
-        let out = update_mcp_server_enable_yaml(input, "context7", false).unwrap();
-        assert!(out.contains("enable: false # keep"));
-        assert!(!out.contains("enable: true"));
-    }
-
-    #[test]
-    fn update_mcp_server_enable_yaml_matches_unquoted_name_with_hash() {
-        let input =
-            "mcp:\n  servers:\n    - name: context#7\n      enable: true\n      command: npx\n";
-        let out = update_mcp_server_enable_yaml(input, "context#7", false).unwrap();
-        assert!(out.contains("- name: context#7\n      enable: false\n      command: npx"));
-    }
-
-    #[test]
-    fn update_mcp_server_enable_yaml_matches_quoted_name_with_hash() {
-        let input = "mcp:\n  servers:\n    - name: \"context#7\"\n      enable: true # keep\n      command: npx\n";
-        let out = update_mcp_server_enable_yaml(input, "context#7", false).unwrap();
-        assert!(out.contains("enable: false # keep"));
-        assert!(!out.contains("enable: true"));
-    }
-
-    #[test]
-    fn comment_start_ignores_hash_without_whitespace() {
-        assert!(comment_start("enable: true#keep").is_none());
-
-        let line = "enable: true   # keep";
-        let pos = comment_start(line).unwrap();
-        assert_eq!(&line[pos..], "   # keep");
+        assert!(session_config
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.name == "context7")
+            .is_some_and(|server| server.enable));
+        assert!(session_config
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.name == "filesystem")
+            .is_some_and(|server| server.enable));
+        assert!(!config
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.name == "filesystem")
+            .is_some_and(|server| server.enable));
     }
 }

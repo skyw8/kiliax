@@ -25,7 +25,7 @@ use kiliax_core::{
     llm::LlmClient,
     prompt::PromptBuilder,
     runtime::AgentRuntimeOptions,
-    session::{FileSessionStore, SessionId},
+    session::{FileSessionStore, SessionId, SessionMcpServerSetting},
     tools::{self, ToolEngine},
 };
 
@@ -74,6 +74,37 @@ fn print_help() {
     println!("  1) ~/.kiliax/kiliax.yaml");
     println!();
     println!("If no config is found, {bin} will write a template and exit.");
+}
+
+fn session_mcp_servers_from_config(
+    config: &kiliax_core::config::Config,
+) -> Vec<SessionMcpServerSetting> {
+    config
+        .mcp
+        .servers
+        .iter()
+        .map(|server| SessionMcpServerSetting {
+            id: server.name.clone(),
+            enable: server.enable,
+        })
+        .collect()
+}
+
+fn config_with_session_mcp_overrides(
+    base: &kiliax_core::config::Config,
+    overrides: &[SessionMcpServerSetting],
+) -> kiliax_core::config::Config {
+    let mut config = base.clone();
+    let enabled_by_id: std::collections::HashMap<&str, bool> = overrides
+        .iter()
+        .map(|server| (server.id.as_str(), server.enable))
+        .collect();
+    for server in &mut config.mcp.servers {
+        if let Some(enable) = enabled_by_id.get(server.name.as_str()) {
+            server.enable = *enable;
+        }
+    }
+    config
 }
 
 fn print_version() {
@@ -243,7 +274,11 @@ async fn main() -> Result<()> {
         .unwrap_or_else(AgentProfile::general);
 
     let (session, messages, llm) = match resumed {
-        Some(session) => {
+        Some(mut session) => {
+            if session.meta.mcp_servers.is_empty() {
+                session.meta.mcp_servers = session_mcp_servers_from_config(&loaded.config);
+                store.checkpoint(&mut session).await?;
+            }
             let messages = session.messages.clone();
             let llm = LlmClient::from_config(&loaded.config, session.meta.model_id.as_deref())?
                 .with_prompt_cache_key(session.meta.prompt_cache_key.clone());
@@ -267,7 +302,7 @@ async fn main() -> Result<()> {
                 builder = builder.add_skills(skills);
             }
             let messages = builder.build();
-            let session = store
+            let mut session = store
                 .create(
                     profile.name.to_string(),
                     Some(model_id.clone()),
@@ -277,12 +312,20 @@ async fn main() -> Result<()> {
                     messages.clone(),
                 )
                 .await?;
+            session.meta.mcp_servers = session_mcp_servers_from_config(&loaded.config);
+            store.checkpoint(&mut session).await?;
             let llm = llm.with_prompt_cache_key(session.meta.prompt_cache_key.clone());
             (session, messages, llm)
         }
     };
 
     let runtime = kiliax_core::runtime::AgentRuntime::new(llm, tool_engine);
+    let session_config =
+        config_with_session_mcp_overrides(&loaded.config, &session.meta.mcp_servers);
+    runtime
+        .tools()
+        .set_config(session_config)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     let extra_workspace_roots: Vec<std::path::PathBuf> = session
         .meta

@@ -94,6 +94,10 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_workspace_roots: Vec<String>,
 
+    /// Session-scoped MCP enablement overrides.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<SessionMcpServerSetting>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
@@ -114,6 +118,12 @@ pub struct SessionMeta {
     pub last_snapshot_seq: u64,
 
     pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionMcpServerSetting {
+    pub id: String,
+    pub enable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -275,6 +285,7 @@ impl FileSessionStore {
             config_path,
             workspace_root,
             extra_workspace_roots,
+            mcp_servers: Vec::new(),
             title: derive_title(&initial_messages),
             last_finish_reason: None,
             last_error: None,
