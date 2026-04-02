@@ -1026,7 +1026,7 @@ export default function App() {
 
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
-      setAuthError("Unauthorized. Re-open the URL printed by `kiliax serve start`.");
+      setAuthError("Unauthorized. Re-open the URL printed by `kiliax server start`.");
       setAlerts([]);
       return;
     }

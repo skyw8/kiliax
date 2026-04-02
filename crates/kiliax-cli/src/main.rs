@@ -61,9 +61,9 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  {bin} [plan|general] [--resume <SESSION_ID>]");
-    println!("  {bin} serve start");
-    println!("  {bin} serve stop");
-    println!("  {bin} serve restart");
+    println!("  {bin} server start");
+    println!("  {bin} server stop");
+    println!("  {bin} server restart");
     println!();
     println!("Options:");
     println!("  --resume <SESSION_ID>    Resume a session");
@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
 
     let workspace_root = std::env::current_dir()?;
 
-    if args.first().is_some_and(|a| a == "serve") {
+    if args.first().is_some_and(|a| a == "server") {
         match args.get(1).map(String::as_str) {
             Some("start") => {
                 let Some(loaded) = load_or_init_config()? else {

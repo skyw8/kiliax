@@ -338,7 +338,7 @@ async fn auth_middleware(
   <body>
     <h2>Unauthorized</h2>
     <p>This UI requires a token.</p>
-    <p>Start the server with <code>kiliax serve start</code> and open the printed URL:</p>
+    <p>Start the server with <code>kiliax server start</code> and open the printed URL:</p>
     <pre>http://127.0.0.1:8123/?token=...</pre>
     <p>After the first visit, your browser will store a cookie and you can use <code>/</code>.</p>
   </body>
