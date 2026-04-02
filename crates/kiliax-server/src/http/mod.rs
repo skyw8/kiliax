@@ -7,8 +7,8 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::response::sse::Event as SseEvent;
 use axum::response::{Html, IntoResponse, Response, Sse};
-use axum::routing::{get, patch, post};
-use axum::{Json, Router};
+use axum::routing::get;
+use axum::{Extension, Json, Router};
 use futures_util::stream::{self, StreamExt as _};
 use kiliax_core::session::SessionId;
 use tokio::sync::broadcast;
@@ -16,6 +16,8 @@ use tower::ServiceExt as _;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::Span;
+use utoipa_axum::{routes, router::OpenApiRouter};
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::error::{ApiError, ApiErrorCode};
 use crate::state::ServerState;
@@ -64,44 +66,72 @@ fn http_version(version: axum::http::Version) -> &'static str {
 }
 
 pub fn build_app(state: Arc<ServerState>) -> Router {
-    let api = Router::new()
-        .route("/sessions", post(create_session).get(list_sessions))
-        .route("/config", get(get_config).put(put_config))
-        .route("/config/mcp", patch(patch_config_mcp))
-        .route(
-            "/config/providers",
-            get(get_config_providers).patch(patch_config_providers),
-        )
-        .route(
-            "/config/runtime",
-            get(get_config_runtime).patch(patch_config_runtime),
-        )
-        .route("/config/skills", get(get_config_skills).patch(patch_config_skills))
-        .route("/fs/list", get(fs_list))
-        .route("/skills", get(list_global_skills))
-        .route("/sessions/{session_id}", get(get_session).delete(delete_session))
-        .route("/sessions/{session_id}/fork", post(fork_session))
-        .route("/sessions/{session_id}/open", post(open_workspace))
-        .route("/sessions/{session_id}/settings", patch(patch_settings))
-        .route("/sessions/{session_id}/messages", get(get_messages))
-        .route("/sessions/{session_id}/skills", get(list_skills))
-        .route("/sessions/{session_id}/runs", post(create_run))
-        .route("/runs/{run_id}", get(get_run))
-        .route("/runs/{run_id}/cancel", post(cancel_run))
-        .route("/capabilities", get(get_capabilities))
-        .route("/admin/info", get(get_admin_info))
-        .route("/admin/stop", post(stop_server))
-        .route("/sessions/{session_id}/events", get(list_events))
-        .route("/sessions/{session_id}/events/stream", get(stream_events_sse))
-        .route("/sessions/{session_id}/events/ws", get(stream_events_ws))
+    use utoipa::OpenApi as _;
+
+    let v1 = OpenApiRouter::<Arc<ServerState>>::default()
+        .routes(routes!(create_session, list_sessions))
+        .routes(routes!(get_config, put_config))
+        .routes(routes!(patch_config_mcp))
+        .routes(routes!(get_config_providers, patch_config_providers))
+        .routes(routes!(get_config_runtime, patch_config_runtime))
+        .routes(routes!(get_config_skills, patch_config_skills))
+        .routes(routes!(fs_list))
+        .routes(routes!(list_global_skills))
+        .routes(routes!(get_session, delete_session))
+        .routes(routes!(fork_session))
+        .routes(routes!(open_workspace))
+        .routes(routes!(patch_settings))
+        .routes(routes!(get_messages))
+        .routes(routes!(list_skills))
+        .routes(routes!(create_run))
+        .routes(routes!(get_run))
+        .routes(routes!(cancel_run))
+        .routes(routes!(get_capabilities))
+        .routes(routes!(get_admin_info))
+        .routes(routes!(stop_server))
+        .routes(routes!(list_events))
+        .routes(routes!(stream_events_sse))
+        .routes(routes!(stream_events_ws))
         .route_layer(http_trace_layer());
 
-    Router::new()
-        .nest("/v1", api)
-        .fallback(serve_web)
-        .with_state(state.clone())
+    let (v1_router, v1_openapi) = v1.split_for_parts();
+    let openapi = crate::openapi::ApiDoc::openapi().nest("/v1", v1_openapi);
+    let openapi = Arc::new(openapi);
+
+    let swagger: Router<Arc<ServerState>> =
+        SwaggerUi::new("/docs").url("/v1/openapi.json", (*openapi).clone()).into();
+
+    let openapi_yaml: Router<Arc<ServerState>> = Router::new()
+        .route("/v1/openapi.yaml", get(get_openapi_yaml))
+        .layer(Extension(openapi.clone()));
+
+    let app: Router<Arc<ServerState>> = Router::new()
+        .nest("/v1", v1_router)
+        .merge(swagger)
+        .merge(openapi_yaml)
+        .fallback(serve_web);
+
+    app.with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
         .layer(middleware::from_fn(access_log_middleware))
+}
+
+async fn get_openapi_yaml(
+    Extension(openapi): Extension<Arc<utoipa::openapi::OpenApi>>,
+) -> impl IntoResponse {
+    match openapi.to_yaml() {
+        Ok(yaml) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/yaml")],
+            yaml,
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to render openapi",
+        )
+            .into_response(),
+    }
 }
 
 fn http_trace_layer() -> TraceLayer<
@@ -418,6 +448,19 @@ struct ListSessionsQuery {
     cursor: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/sessions",
+    tags = ["Sessions"],
+    params(
+        ("Idempotency-Key" = Option<String>, Header, description = "Client-provided idempotency key for safe retries.")
+    ),
+    request_body = Option<crate::api::SessionCreateRequest>,
+    responses(
+        (status = 201, body = crate::api::Session),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn create_session(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
@@ -431,10 +474,29 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(out)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/config",
+    tags = ["Config"],
+    responses(
+        (status = 200, body = crate::api::ConfigResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_config(State(state): State<Arc<ServerState>>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.get_config().await?))
 }
 
+#[utoipa::path(
+    put,
+    path = "/config",
+    tags = ["Config"],
+    request_body = crate::api::ConfigUpdateRequest,
+    responses(
+        (status = 200, body = crate::api::ConfigResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn put_config(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<crate::api::ConfigUpdateRequest>,
@@ -442,6 +504,16 @@ async fn put_config(
     Ok(Json(state.update_config(req).await?))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/config/mcp",
+    tags = ["Config"],
+    request_body = crate::api::ConfigMcpPatchRequest,
+    responses(
+        (status = 204, description = "No Content"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn patch_config_mcp(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<crate::api::ConfigMcpPatchRequest>,
@@ -450,12 +522,31 @@ async fn patch_config_mcp(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/config/providers",
+    tags = ["Config"],
+    responses(
+        (status = 200, body = crate::api::ConfigProvidersResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_config_providers(
     State(state): State<Arc<ServerState>>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.get_config_providers().await?))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/config/providers",
+    tags = ["Config"],
+    request_body = crate::api::ConfigProvidersPatchRequest,
+    responses(
+        (status = 204, description = "No Content"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn patch_config_providers(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<crate::api::ConfigProvidersPatchRequest>,
@@ -464,12 +555,31 @@ async fn patch_config_providers(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/config/runtime",
+    tags = ["Config"],
+    responses(
+        (status = 200, body = crate::api::ConfigRuntimeResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_config_runtime(
     State(state): State<Arc<ServerState>>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.get_config_runtime().await?))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/config/runtime",
+    tags = ["Config"],
+    request_body = crate::api::ConfigRuntimePatchRequest,
+    responses(
+        (status = 204, description = "No Content"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn patch_config_runtime(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<crate::api::ConfigRuntimePatchRequest>,
@@ -478,12 +588,31 @@ async fn patch_config_runtime(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/config/skills",
+    tags = ["Config"],
+    responses(
+        (status = 200, body = crate::api::ConfigSkillsResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_config_skills(
     State(state): State<Arc<ServerState>>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.get_config_skills().await?))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/config/skills",
+    tags = ["Config"],
+    request_body = crate::api::ConfigSkillsPatchRequest,
+    responses(
+        (status = 204, description = "No Content"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn patch_config_skills(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<crate::api::ConfigSkillsPatchRequest>,
@@ -498,6 +627,18 @@ struct FsListQuery {
     path: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/fs/list",
+    tags = ["FS"],
+    params(
+        ("path" = Option<String>, Query, description = "Path to list (defaults to workspace root).")
+    ),
+    responses(
+        (status = 200, body = crate::api::FsListResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn fs_list(
     State(state): State<Arc<ServerState>>,
     Query(q): Query<FsListQuery>,
@@ -505,6 +646,20 @@ async fn fs_list(
     Ok(Json(state.fs_list(q.path).await?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions",
+    tags = ["Sessions"],
+    params(
+        ("live" = Option<bool>, Query, description = "If true, only return live sessions."),
+        ("limit" = Option<usize>, Query, description = "Max number of items to return."),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor returned by a previous list call.")
+    ),
+    responses(
+        (status = 200, body = crate::api::SessionListResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn list_sessions(
     State(state): State<Arc<ServerState>>,
     Query(q): Query<ListSessionsQuery>,
@@ -515,6 +670,18 @@ async fn list_sessions(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}",
+    tags = ["Sessions"],
+    params(
+        ("session_id" = String, Path, description = "Session id.")
+    ),
+    responses(
+        (status = 200, body = crate::api::Session),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_session(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -525,6 +692,18 @@ async fn get_session(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/sessions/{session_id}",
+    tags = ["Sessions"],
+    params(
+        ("session_id" = String, Path, description = "Session id.")
+    ),
+    responses(
+        (status = 204, description = "No Content"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn delete_session(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -535,6 +714,19 @@ async fn delete_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/sessions/{session_id}/fork",
+    tags = ["Sessions"],
+    params(
+        ("session_id" = String, Path, description = "Session id.")
+    ),
+    request_body = crate::api::ForkSessionRequest,
+    responses(
+        (status = 201, body = crate::api::ForkSessionResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn fork_session(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -546,6 +738,19 @@ async fn fork_session(
     Ok((StatusCode::CREATED, Json(out)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/sessions/{session_id}/open",
+    tags = ["Sessions"],
+    params(
+        ("session_id" = String, Path, description = "Session id.")
+    ),
+    request_body = crate::api::OpenWorkspaceRequest,
+    responses(
+        (status = 204, description = "No Content"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn open_workspace(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -557,6 +762,19 @@ async fn open_workspace(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    patch,
+    path = "/sessions/{session_id}/settings",
+    tags = ["Sessions"],
+    params(
+        ("session_id" = String, Path, description = "Session id.")
+    ),
+    request_body = crate::api::SessionSettingsPatch,
+    responses(
+        (status = 200, body = crate::api::Session),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn patch_settings(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -583,6 +801,20 @@ struct MessagesQuery {
     before: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/messages",
+    tags = ["Sessions"],
+    params(
+        ("session_id" = String, Path, description = "Session id."),
+        ("limit" = Option<usize>, Query, description = "Max number of items to return."),
+        ("before" = Option<String>, Query, description = "Return messages before this message id (exclusive).")
+    ),
+    responses(
+        (status = 200, body = crate::api::MessageListResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_messages(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -595,6 +827,18 @@ async fn get_messages(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/skills",
+    tags = ["Skills"],
+    params(
+        ("session_id" = String, Path, description = "Session id.")
+    ),
+    responses(
+        (status = 200, body = crate::api::SkillListResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn list_skills(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -605,6 +849,15 @@ async fn list_skills(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    get,
+    path = "/skills",
+    tags = ["Skills"],
+    responses(
+        (status = 200, body = crate::api::SkillListResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn list_global_skills(
     State(state): State<Arc<ServerState>>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -612,6 +865,20 @@ async fn list_global_skills(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    post,
+    path = "/sessions/{session_id}/runs",
+    tags = ["Runs"],
+    params(
+        ("session_id" = String, Path, description = "Session id."),
+        ("Idempotency-Key" = Option<String>, Header, description = "Client-provided idempotency key for safe retries.")
+    ),
+    request_body = crate::api::RunCreateRequest,
+    responses(
+        (status = 201, body = crate::api::Run),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn create_run(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
@@ -626,6 +893,18 @@ async fn create_run(
     Ok((StatusCode::CREATED, Json(out)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/runs/{run_id}",
+    tags = ["Runs"],
+    params(
+        ("run_id" = String, Path, description = "Run id.")
+    ),
+    responses(
+        (status = 200, body = crate::api::Run),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_run(
     State(state): State<Arc<ServerState>>,
     Path(run_id): Path<String>,
@@ -634,6 +913,18 @@ async fn get_run(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    post,
+    path = "/runs/{run_id}/cancel",
+    tags = ["Runs"],
+    params(
+        ("run_id" = String, Path, description = "Run id.")
+    ),
+    responses(
+        (status = 200, body = crate::api::Run),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn cancel_run(
     State(state): State<Arc<ServerState>>,
     Path(run_id): Path<String>,
@@ -642,6 +933,15 @@ async fn cancel_run(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    get,
+    path = "/capabilities",
+    tags = ["Capabilities"],
+    responses(
+        (status = 200, body = crate::api::Capabilities),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_capabilities(
     State(state): State<Arc<ServerState>>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -649,6 +949,15 @@ async fn get_capabilities(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/info",
+    tags = ["Admin"],
+    responses(
+        (status = 200, body = crate::api::AdminInfo),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn get_admin_info(State(state): State<Arc<ServerState>>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(crate::api::AdminInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -657,6 +966,15 @@ async fn get_admin_info(State(state): State<Arc<ServerState>>) -> Result<impl In
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/stop",
+    tags = ["Admin"],
+    responses(
+        (status = 200, description = "OK"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn stop_server(State(state): State<Arc<ServerState>>) -> Result<impl IntoResponse, ApiError> {
     state.shutdown.notify_waiters();
     Ok(StatusCode::OK)
@@ -670,6 +988,20 @@ struct EventsQuery {
     after: Option<u64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/events",
+    tags = ["Events"],
+    params(
+        ("session_id" = String, Path, description = "Session id."),
+        ("limit" = Option<usize>, Query, description = "Max number of items to return."),
+        ("after" = Option<u64>, Query, description = "Return events after this event id (exclusive).")
+    ),
+    responses(
+        (status = 200, body = crate::api::EventListResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn list_events(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -688,6 +1020,20 @@ struct StreamQuery {
     after_event_id: Option<u64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/events/stream",
+    tags = ["Events"],
+    params(
+        ("session_id" = String, Path, description = "Session id."),
+        ("Last-Event-ID" = Option<String>, Header, description = "Resume from last event id (exclusive)."),
+        ("after_event_id" = Option<u64>, Query, description = "Start streaming after this event id (exclusive).")
+    ),
+    responses(
+        (status = 200, content_type = "text/event-stream", body = String),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn stream_events_sse(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
@@ -752,6 +1098,19 @@ async fn stream_events_sse(
     Ok(Sse::new(out).keep_alive(axum::response::sse::KeepAlive::default()))
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/events/ws",
+    tags = ["Events"],
+    params(
+        ("session_id" = String, Path, description = "Session id."),
+        ("after_event_id" = Option<u64>, Query, description = "Start streaming after this event id (exclusive).")
+    ),
+    responses(
+        (status = 101, description = "Switching Protocols"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
 async fn stream_events_ws(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,

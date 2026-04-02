@@ -1707,7 +1707,7 @@ fn map_core_message_to_api(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<api
                     arguments: c.arguments,
                 })
                 .collect(),
-            usage,
+            usage: usage.map(api::TokenUsage::from),
         }),
         CoreMessage::Tool {
             tool_call_id,
@@ -1752,7 +1752,7 @@ fn map_core_message_to_api_event_message(
                     arguments: c.arguments,
                 })
                 .collect(),
-            usage,
+            usage: usage.map(api::TokenUsage::from),
         }),
         CoreMessage::Tool {
             tool_call_id,

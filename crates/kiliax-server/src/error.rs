@@ -2,15 +2,16 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ApiErrorResponse {
     pub error: ApiErrorBody,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ApiErrorBody {
     pub code: ApiErrorCode,
     pub message: String,
@@ -18,7 +19,7 @@ pub struct ApiErrorBody {
     pub details: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiErrorCode {
     InvalidArgument,

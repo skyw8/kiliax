@@ -1,30 +1,50 @@
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use kiliax_core::config::Config as KiliaxConfig;
-use kiliax_core::llm::TokenUsage;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u32>,
+}
+
+impl From<kiliax_core::llm::TokenUsage> for TokenUsage {
+    fn from(value: kiliax_core::llm::TokenUsage) -> Self {
+        Self {
+            prompt_tokens: value.prompt_tokens,
+            completion_tokens: value.completion_tokens,
+            total_tokens: value.total_tokens,
+            cached_tokens: value.cached_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SessionListResponse {
     pub items: Vec<SessionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MessageListResponse {
     pub items: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_before: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct EventListResponse {
     pub items: Vec<Event>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_after: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
@@ -35,7 +55,7 @@ pub struct SessionSummary {
     pub settings: SessionSettings,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionLastOutcome {
     None,
@@ -43,14 +63,14 @@ pub enum SessionLastOutcome {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Session {
     #[serde(flatten)]
     pub summary: SessionSummary,
     pub mcp_status: Vec<McpServerStatus>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SessionStatus {
     pub run_state: SessionRunState,
     pub active_run_id: Option<String>,
@@ -61,7 +81,7 @@ pub struct SessionStatus {
     pub last_event_id: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionRunState {
     Idle,
@@ -69,7 +89,7 @@ pub enum SessionRunState {
     Tooling,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SessionCreateRequest {
     #[serde(default)]
     pub title: Option<String>,
@@ -77,7 +97,7 @@ pub struct SessionCreateRequest {
     pub settings: Option<SessionCreateSettings>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCreateSettings {
     #[serde(default)]
@@ -92,7 +112,7 @@ pub struct SessionCreateSettings {
     pub extra_workspace_roots: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionSettingsPatch {
     #[serde(default)]
@@ -105,19 +125,19 @@ pub struct SessionSettingsPatch {
     pub extra_workspace_roots: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct McpServersPatch {
     #[serde(default)]
     pub servers: Option<Vec<McpServerSetting>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct McpServerSetting {
     pub id: String,
     pub enable: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SessionSettings {
     pub agent: String,
     pub model_id: String,
@@ -127,12 +147,12 @@ pub struct SessionSettings {
     pub extra_workspace_roots: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct McpServers {
     pub servers: Vec<McpServerSetting>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct McpServerStatus {
     pub id: String,
     pub enable: bool,
@@ -143,7 +163,7 @@ pub struct McpServerStatus {
     pub tools: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum McpConnectionState {
     Disabled,
@@ -152,7 +172,7 @@ pub enum McpConnectionState {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunCreateRequest {
     pub input: RunInput,
@@ -166,7 +186,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunInput {
     Text { text: String },
@@ -175,7 +195,7 @@ pub enum RunInput {
     RegenerateAfterUserMessage { user_message_id: u64 },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunOverrides {
     #[serde(default)]
@@ -186,7 +206,7 @@ pub struct RunOverrides {
     pub mcp: Option<McpServersPatch>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Run {
     pub id: String,
     pub session_id: String,
@@ -205,7 +225,7 @@ pub struct Run {
     pub overrides: Option<RunOverrides>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     Queued,
@@ -215,51 +235,52 @@ pub enum RunState {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RunError {
     pub code: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Capabilities {
     pub agents: Vec<String>,
     pub models: Vec<String>,
     pub mcp_servers: Vec<McpServerStatus>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AdminInfo {
     pub version: String,
     pub workspace_root: String,
     pub config_path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConfigResponse {
     pub path: String,
     pub yaml: String,
+    #[schema(value_type = Object)]
     pub config: KiliaxConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ConfigUpdateRequest {
     pub yaml: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ConfigMcpPatchRequest {
     pub servers: Vec<McpServerSetting>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConfigProvidersResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
     pub providers: Vec<ConfigProviderSummary>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConfigProviderSummary {
     pub id: String,
     pub base_url: String,
@@ -267,7 +288,7 @@ pub struct ConfigProviderSummary {
     pub models: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigProvidersPatchRequest {
     #[serde(default)]
@@ -280,7 +301,7 @@ pub struct ConfigProvidersPatchRequest {
     pub delete: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigProviderUpsert {
     pub id: String,
@@ -295,14 +316,14 @@ pub struct ConfigProviderUpsert {
     pub models: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConfigRuntimeResponse {
     pub runtime_max_steps: Option<usize>,
     pub agents_plan_max_steps: Option<usize>,
     pub agents_general_max_steps: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigRuntimePatchRequest {
     #[serde(default)]
@@ -315,19 +336,19 @@ pub struct ConfigRuntimePatchRequest {
     pub agents_general_max_steps: Option<Option<usize>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConfigSkillsResponse {
     pub default_enable: bool,
     pub skills: Vec<SkillEnableSetting>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct SkillEnableSetting {
     pub id: String,
     pub enable: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigSkillsPatchRequest {
     #[serde(default)]
@@ -337,12 +358,12 @@ pub struct ConfigSkillsPatchRequest {
     pub skills: Vec<SkillEnableSetting>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SkillListResponse {
     pub items: Vec<SkillSummary>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SkillSummary {
     pub id: String,
     pub name: String,
@@ -350,7 +371,7 @@ pub struct SkillSummary {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Event {
     pub event_id: u64,
     pub ts: String,
@@ -362,7 +383,7 @@ pub struct Event {
     pub data: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum Message {
     User {
@@ -389,26 +410,26 @@ pub enum Message {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ForkSessionRequest {
     #[serde(default)]
     pub message_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ForkSessionResponse {
     pub session: Session,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct FsListResponse {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -416,14 +437,14 @@ pub struct FsListResponse {
     pub entries: Vec<FsEntry>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct FsEntry {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenWorkspaceTarget {
     Vscode,
@@ -431,7 +452,7 @@ pub enum OpenWorkspaceTarget {
     Terminal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OpenWorkspaceRequest {
     pub target: OpenWorkspaceTarget,

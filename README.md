@@ -44,42 +44,40 @@ cd kiliax
 cargo build --release -p kiliax
 ```
 
-## run
-
-```bash
-cargo run -p kiliax
-cargo run -p kiliax -- serve start
-
-
-
-cd workspace 
-cargo run -p kiliax --manifest-path=../Cargo.toml
-cargo run -p kiliax --manifest-path=../Cargo.toml -- serve start
-
-cargo run -p kiliax-core --example chat_hello
-cargo run -p kiliax-core --example stream_chat
-cargo run -p kiliax-core --example agent_loop
-```
-
-## session control server
+## usage
+session control server
 
 Manage the optional background `kiliax-server` (REST + SSE/WS) with:
 
 ```bash
-cd web
-bun install && bun run build
+# tui
+kiliax
+
+# server
 kiliax serve start
 kiliax serve stop
 kiliax serve restart
 ```
 
-Configure bind/auth in `kiliax.yaml`:
-```yaml
-server:
-  host: 127.0.0.1
-  port: 8123
-  # token is optional when host is loopback. Recommended when exposing to LAN.
-  # token: your-long-random-token
+
+## build&run
+
+```bash
+cargo run -p kiliax
+cargo run -p kiliax -- serve start
+# http://127.0.0.1:8123/docs
+curl http://127.0.0.1:8123/v1/openapi.yaml > openapi.yaml
+
+cd workspace 
+cargo run -p kiliax --manifest-path=../Cargo.toml
+cargo run -p kiliax --manifest-path=../Cargo.toml -- serve start
+```
+
+demo example
+```bash
+cargo run -p kiliax-core --example chat_hello
+cargo run -p kiliax-core --example stream_chat
+cargo run -p kiliax-core --example agent_loop
 ```
 
 ## observability (OpenTelemetry / Langfuse)

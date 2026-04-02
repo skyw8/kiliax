@@ -209,6 +209,80 @@ async fn web_serves_dist_and_spa_fallback() {
 }
 
 #[tokio::test]
+async fn openapi_and_docs_are_served() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, Some("secret".to_string())).await;
+
+    let auth = ("Authorization", "Bearer secret");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty_with_headers(
+            Method::GET,
+            "/v1/openapi.json",
+            &[auth],
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body.get("openapi").and_then(|v| v.as_str()), Some("3.1.0"));
+    assert!(
+        body.get("paths")
+            .and_then(|p| p.get("/v1/sessions"))
+            .is_some(),
+        "paths missing /v1/sessions: {body}"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty_with_headers(
+            Method::GET,
+            "/v1/openapi.yaml",
+            &[auth],
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_text(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("openapi: 3.1.0"), "body: {body}");
+    assert!(body.contains("/v1/sessions"), "body: {body}");
+
+    // /docs requires cookie auth (web UI flow).
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/docs?token=secret"))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    let set_cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        set_cookie.contains("kiliax_token=secret"),
+        "set-cookie missing token: {set_cookie}"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty_with_headers(
+            Method::GET,
+            "/docs/",
+            &[("Cookie", "kiliax_token=secret")],
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_text(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        body.contains("Swagger UI") || body.contains("swagger-ui"),
+        "body: {body}"
+    );
+}
+
+#[tokio::test]
 async fn messages_include_usage_when_present() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;
