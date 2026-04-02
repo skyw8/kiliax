@@ -57,6 +57,9 @@ kiliax
 kiliax server start
 kiliax server stop
 kiliax server restart
+
+# or shorter
+ki
 ```
 
 
