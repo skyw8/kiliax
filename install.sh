@@ -47,7 +47,7 @@ get_latest_version() {
         -H "X-GitHub-Api-Version: 2022-11-28" \
         ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
         "$url" || true)"
-    echo "$body" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+    printf '%s\n' "$body" | grep -m1 '"tag_name":' | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' || true
 }
 
 # Download url -> file with useful diagnostics on failure
