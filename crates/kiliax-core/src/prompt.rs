@@ -230,18 +230,48 @@ fn today_ymd() -> String {
 
 fn render_project_prompt(workspace_root: Option<&Path>) -> Option<String> {
     let root = workspace_root?;
-    for filename in ["AGENTS.md", "CLAUDE.md"] {
-        let path = root.join(filename);
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let content = content.trim();
-        if content.is_empty() {
-            continue;
-        }
-        return Some(format!("# Project (AGENTS.md)\n{content}"));
-    }
 
+    let sections: Vec<String> = project_instruction_paths(root)
+        .into_iter()
+        .filter_map(|path| {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                return None;
+            };
+            let content = content.trim();
+            if content.is_empty() {
+                return None;
+            }
+            Some(format!("## {}\n{content}", path.display()))
+        })
+        .collect();
+
+    if sections.is_empty() {
+        None
+    } else {
+        Some(format!("# Project Instructions\n{}", sections.join("\n\n")))
+    }
+}
+
+fn project_instruction_paths(workspace_root: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<&Path> = workspace_root.ancestors().collect();
+    dirs.reverse();
+
+    let mut paths = Vec::new();
+    for dir in dirs {
+        if let Some(path) = preferred_project_instruction_path(dir) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn preferred_project_instruction_path(dir: &Path) -> Option<PathBuf> {
+    for filename in ["AGENTS.md", "CLAUDE.md"] {
+        let path = dir.join(filename);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
     None
 }
 
@@ -403,7 +433,7 @@ mod tests {
             .build();
 
         let has_project = msgs.iter().any(|m| {
-            matches!(m, Message::System { content } if content.contains("# Project (AGENTS.md)") && content.contains("project rules"))
+            matches!(m, Message::System { content } if content.contains("# Project Instructions") && content.contains("project rules"))
         });
         assert!(has_project);
     }
@@ -419,9 +449,42 @@ mod tests {
             .build();
 
         let has_project = msgs.iter().any(|m| {
-            matches!(m, Message::System { content } if content.contains("# Project (AGENTS.md)") && content.contains("claude rules"))
+            matches!(m, Message::System { content } if content.contains("# Project Instructions") && content.contains("claude rules"))
         });
         assert!(has_project);
+    }
+
+    #[test]
+    fn includes_nested_project_instructions_in_scope_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let nested = repo.join("crates").join("kiliax-server");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "root rules").unwrap();
+        std::fs::write(repo.join("crates").join("CLAUDE.md"), "crate rules").unwrap();
+        std::fs::write(nested.join("AGENTS.md"), "nested rules").unwrap();
+
+        let msgs = PromptBuilder::new()
+            .include_tools_prompt(false)
+            .with_workspace_root(&nested)
+            .build();
+
+        let project = msgs
+            .iter()
+            .find_map(|m| match m {
+                Message::System { content } if content.contains("# Project Instructions") => {
+                    Some(content.clone())
+                }
+                _ => None,
+            })
+            .expect("project prompt");
+
+        let root_idx = project.find("root rules").unwrap();
+        let crate_idx = project.find("crate rules").unwrap();
+        let nested_idx = project.find("nested rules").unwrap();
+
+        assert!(root_idx < crate_idx);
+        assert!(crate_idx < nested_idx);
     }
 
     #[test]
@@ -482,7 +545,7 @@ mod tests {
         let project_idx = msgs
             .iter()
             .position(|m| {
-                matches!(m, Message::System { content } if content.contains("# Project (AGENTS.md)"))
+                matches!(m, Message::System { content } if content.contains("# Project Instructions"))
             })
             .unwrap();
         assert!(project_idx < env_idx);

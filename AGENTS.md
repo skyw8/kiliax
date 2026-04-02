@@ -25,7 +25,7 @@ minimal
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
 - Config + model routing: `crates/kiliax-core/src/config.rs`
 - OpenAI-compatible client (streaming/tool-calls/usage/shared HTTP client): `crates/kiliax-core/src/llm.rs`
-- Prompt assembly: `crates/kiliax-core/src/prompt.rs`
+- Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
 - Session store + snapshots + events + session-scoped MCP overrides: `crates/kiliax-core/src/session.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery): `crates/kiliax-core/src/tools/`
