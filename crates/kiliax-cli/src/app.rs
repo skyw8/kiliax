@@ -2293,9 +2293,6 @@ fn render_tool_result_lines(
     elapsed: Option<Duration>,
     tool_content: &str,
 ) -> Vec<Line<'static>> {
-    if matches!(pending.kind, PendingToolCallKind::ApplyPatch { .. }) {
-        return render_apply_patch_tool_result_lines(pending, elapsed, tool_content);
-    }
     if matches!(pending.kind, PendingToolCallKind::UpdatePlan { .. }) {
         return render_update_plan_tool_result_lines(pending, elapsed);
     }
@@ -2323,71 +2320,6 @@ fn render_tool_result_lines(
             Span::styled(detail, Style::default().dim()),
         ]));
     }
-    out
-}
-
-fn render_apply_patch_tool_result_lines(
-    pending: &PendingToolCall,
-    elapsed: Option<Duration>,
-    tool_content: &str,
-) -> Vec<Line<'static>> {
-    let duration = elapsed.map(fmt_duration_compact);
-    let (summary, detail) = summarize_tool_result(pending, tool_content);
-    let parsed = serde_json::from_str::<ApplyPatchOutput>(tool_content).ok();
-
-    let mut header = vec![Span::from("• ").dim(), tool_name_span(&summary.tool)];
-    if !summary.rest.is_empty() {
-        header.push(Span::from(" "));
-        header.push(Span::from(summary.rest));
-    }
-    if let Some(duration) = duration {
-        header.push(Span::from(" "));
-        header.push(Span::styled(
-            format!("({duration})"),
-            Style::default().dim(),
-        ));
-    }
-
-    let mut out = vec![Line::from(header)];
-    if let Some(detail) = detail {
-        out.push(Line::from(vec![
-            Span::from("  └ ").dim(),
-            Span::styled(detail, Style::default().dim()),
-        ]));
-    }
-
-    let Some(parsed) = parsed else {
-        return out;
-    };
-
-    for file in parsed.files.iter().take(6) {
-        let mut label = format!("{} {}", file.action, file.path);
-        if let Some(dest) = file.moved_to.as_deref() {
-            label.push_str(&format!(" -> {dest}"));
-        }
-        if let (Some(added), Some(removed)) = (file.added_lines, file.removed_lines) {
-            label.push_str(&format!(" (+{added}/-{removed})"));
-        }
-        out.push(Line::from(vec![
-            Span::from("  └ ").dim(),
-            Span::styled(label, Style::default().dim()),
-        ]));
-
-        if let Some(diff) = file.diff.as_deref() {
-            out.extend(render_diff_block_with_prefix(diff, "    └ ", "      "));
-        }
-    }
-
-    if parsed.files.len() > 6 {
-        out.push(Line::from(vec![
-            Span::from("  └ ").dim(),
-            Span::styled(
-                format!("… ({} more files)", parsed.files.len().saturating_sub(6)),
-                Style::default().dim(),
-            ),
-        ]));
-    }
-
     out
 }
 
@@ -2446,41 +2378,6 @@ fn render_update_plan_tool_result_lines(
     }
 
     out
-}
-
-fn render_diff_block_with_prefix(
-    diff: &str,
-    first_prefix: &'static str,
-    rest_prefix: &'static str,
-) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let mut first = true;
-    for raw in diff.split('\n') {
-        let prefix = if first { first_prefix } else { rest_prefix };
-        first = false;
-
-        let style = diff_line_style(raw);
-        let mut line = Line::from(vec![Span::from(prefix).dim(), Span::from(raw.to_string())]);
-        line.style = style;
-        out.push(line);
-    }
-    out
-}
-
-fn diff_line_style(line: &str) -> Style {
-    use crate::style;
-
-    if line.starts_with("@@") || line.starts_with("diff ") || line.starts_with("index ") {
-        Style::default().dim()
-    } else if line.starts_with("+++ ") || line.starts_with("--- ") {
-        Style::default().dim()
-    } else if line.starts_with('+') {
-        style::diff_insert_style()
-    } else if line.starts_with('-') {
-        style::diff_delete_style()
-    } else {
-        Style::default().dim()
-    }
 }
 
 fn truncate_one_line(text: &str, max_chars: usize) -> String {
@@ -3256,28 +3153,6 @@ struct ShellCommandOutput {
     stdout: String,
     #[allow(dead_code)]
     stderr: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApplyPatchOutput {
-    #[allow(dead_code)]
-    ok: bool,
-    #[serde(default)]
-    files: Vec<PatchedFile>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PatchedFile {
-    action: String,
-    path: String,
-    #[serde(default)]
-    moved_to: Option<String>,
-    #[serde(default)]
-    diff: Option<String>,
-    #[serde(default)]
-    added_lines: Option<usize>,
-    #[serde(default)]
-    removed_lines: Option<usize>,
 }
 
 #[cfg(test)]

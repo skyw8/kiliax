@@ -33,7 +33,7 @@ minimal
 ### crates/kiliax-cli (TUI)
 
 - Ratatui UI + event loop + slash commands: `crates/kiliax-cli/src/main.rs`
-- App state + render pipeline (+ per-call token usage display): `crates/kiliax-cli/src/app.rs`
+- App state + render pipeline (condensed tool results + per-call token usage): `crates/kiliax-cli/src/app.rs`
 - Terminal init + viewport backend: `crates/kiliax-cli/src/terminal.rs`
 - Server daemon control (start/stop/restart): `crates/kiliax-cli/src/daemon.rs`
 
