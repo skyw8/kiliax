@@ -24,7 +24,7 @@ minimal
 
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
 - Config + model routing: `crates/kiliax-core/src/config.rs`
-- OpenAI-compatible client (streaming/tool-calls/usage): `crates/kiliax-core/src/llm.rs`
+- OpenAI-compatible client (streaming/tool-calls/usage/shared HTTP client): `crates/kiliax-core/src/llm.rs`
 - Prompt assembly: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
 - Session store + snapshots + events + session-scoped MCP overrides: `crates/kiliax-core/src/session.rs`
@@ -40,7 +40,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/session default actions: `crates/kiliax-server/src/http/`
+- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/session default actions: `crates/kiliax-server/src/http/`
 - State (config/session lifecycle/run queue/durable-vs-ephemeral events/default persistence): `crates/kiliax-server/src/state.rs`
 - Infra (path validation/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes message `usage` and session default writes): `crates/kiliax-server/src/api.rs`

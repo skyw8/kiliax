@@ -185,11 +185,43 @@ async fn serve_web(State(state): State<Arc<ServerState>>, req: axum::extract::Re
         return StatusCode::NOT_FOUND.into_response();
     }
 
+    if let Some(dist_dir) = find_web_dist_dir(&state.workspace_root) {
+        let index = dist_dir.join("index.html");
+
+        let path = req.uri().path().to_string();
+        let svc = ServeDir::new(dist_dir).fallback(ServeFile::new(index));
+        return match svc.oneshot(req).await {
+            Ok(resp) => {
+                let mut resp = resp.map(axum::body::Body::new).into_response();
+
+                if path.starts_with("/assets/") {
+                    resp.headers_mut().insert(
+                        axum::http::header::CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=31536000, immutable"),
+                    );
+                } else if resp
+                    .headers()
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| v.starts_with("text/html"))
+                {
+                    resp.headers_mut().insert(
+                        axum::http::header::CACHE_CONTROL,
+                        HeaderValue::from_static("no-cache"),
+                    );
+                }
+
+                resp
+            }
+            Err(_) => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
+
     if crate::web::embedded::ENABLED {
         return serve_web_embedded(req.uri().path());
     }
 
-    let Some(dist_dir) = find_web_dist_dir(&state.workspace_root) else {
+    {
         let hint = r#"<!doctype html>
 <html>
   <head>
@@ -217,37 +249,7 @@ bun run build</pre>
             axum::http::header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         );
-        return resp;
-    };
-
-    let index = dist_dir.join("index.html");
-
-    let path = req.uri().path().to_string();
-    let svc = ServeDir::new(dist_dir).fallback(ServeFile::new(index));
-    match svc.oneshot(req).await {
-        Ok(resp) => {
-            let mut resp = resp.map(axum::body::Body::new).into_response();
-
-            if path.starts_with("/assets/") {
-                resp.headers_mut().insert(
-                    axum::http::header::CACHE_CONTROL,
-                    HeaderValue::from_static("public, max-age=31536000, immutable"),
-                );
-            } else if resp
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| v.starts_with("text/html"))
-            {
-                resp.headers_mut().insert(
-                    axum::http::header::CACHE_CONTROL,
-                    HeaderValue::from_static("no-cache"),
-                );
-            }
-
-            resp
-        }
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+        resp
     }
 }
 

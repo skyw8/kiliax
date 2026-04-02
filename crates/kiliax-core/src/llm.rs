@@ -54,6 +54,7 @@ pub enum LlmError {
 #[derive(Debug, Clone)]
 pub struct LlmClient {
     client: Client<KiliaxOpenAIConfig>,
+    http: reqwest::Client,
     route: ResolvedModel,
     prompt_cache_key: Option<String>,
 }
@@ -62,8 +63,10 @@ impl LlmClient {
     pub fn new(route: ResolvedModel) -> Self {
         let cfg = KiliaxOpenAIConfig::new(&route.base_url, route.api_key.as_deref());
         let client = Client::with_config(cfg);
+        let http = reqwest::Client::new();
         Self {
             client,
+            http,
             route,
             prompt_cache_key: None,
         }
@@ -189,8 +192,8 @@ impl LlmClient {
             inject_prompt_cache_fields(&mut body, self.prompt_cache_key.as_deref());
 
             let cfg = self.client.config();
-            let http = reqwest::Client::new();
-            let resp = http
+            let resp = self
+                .http
                 .post(cfg.url("/chat/completions"))
                 .query(&cfg.query())
                 .headers(cfg.headers())
@@ -419,8 +422,8 @@ impl LlmClient {
             }
 
             let cfg = self.client.config();
-            let http = reqwest::Client::new();
-            let mut event_source = http
+            let mut event_source = self
+                .http
                 .post(cfg.url("/chat/completions"))
                 .query(&cfg.query())
                 .headers(cfg.headers())
@@ -1063,7 +1066,7 @@ fn to_openai_tool(tool: ToolDefinition) -> ChatCompletionTool {
             name: tool.name,
             description: tool.description,
             parameters: tool.parameters,
-            strict: None,
+            strict: tool.strict,
         },
     }
 }
@@ -1572,7 +1575,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_tool_conversion_omits_strict() {
+    fn openai_tool_conversion_preserves_strict() {
         let tool = ToolDefinition {
             name: "t".to_string(),
             description: None,
@@ -1580,7 +1583,7 @@ mod tests {
             strict: Some(true),
         };
         let openai = to_openai_tool(tool);
-        assert!(openai.function.strict.is_none());
+        assert_eq!(openai.function.strict, Some(true));
     }
 
     #[test]
