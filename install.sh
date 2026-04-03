@@ -22,8 +22,8 @@ detect_platform() {
     case "$os" in
         linux)
             case "$arch" in
-                x86_64) echo "linux-x64" ;;
-                aarch64|arm64) echo "linux-arm64" ;;
+                x86_64) echo "linux-x64-musl" ;;
+                aarch64|arm64) echo "linux-arm64-musl" ;;
                 *) echo "Unsupported architecture: $arch"; exit 1 ;;
             esac
             ;;
