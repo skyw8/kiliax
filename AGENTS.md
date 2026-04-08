@@ -24,7 +24,7 @@ minimal
 
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
 - Config + model routing: `crates/kiliax-core/src/config.rs`
-- OpenAI-compatible client (streaming/tool-calls/usage/shared HTTP client): `crates/kiliax-core/src/llm.rs`
+- OpenAI-compatible client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-core/src/llm.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
 - Session store + snapshots + events + session-scoped MCP overrides: `crates/kiliax-core/src/session.rs`
@@ -59,6 +59,14 @@ minimal
 ## constraints
 **All UI languages default to English, including any prompts, outputs, etc.**
 
+### API
+
+- Symptom: `HTTP 400 ... thinking is enabled but reasoning_content is missing in assistant tool call message at index N`.
+- Why: Moonshot/Kimi validates the full `messages[]` history; when thinking is enabled, every `assistant` message that contains `tool_calls` must include a non-empty `reasoning_content`.
+- Rule: always send `reasoning_content` for `assistant` tool-call messages; if there is no reasoning text, send a single whitespace (`" "`) (some gateways treat `""` as missing).
+- Implementation: patch outbound JSON in `crates/kiliax-core/src/llm.rs` (`inject_reasoning_content_for_tool_calls(...)`) and retry once when the provider returns this specific error.
+- Provider routing: proxies may hide the upstream base_url/provider; detection should also match on the model string (see `should_inject_reasoning_content(...)`).
+
 ### TUI
 
 Subsequent modifications must remain consistent:
@@ -75,6 +83,7 @@ Subsequent modifications must remain consistent:
 ### Web
 
 - The session status badge (e.g. `step 1`) in the left sidebar must display in a single line and must not wrap to two lines
+
 
 ## dev ENV
 

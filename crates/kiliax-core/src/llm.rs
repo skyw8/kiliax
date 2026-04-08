@@ -192,7 +192,7 @@ impl LlmClient {
             inject_prompt_cache_fields(&mut body, self.prompt_cache_key.as_deref());
 
             let cfg = self.client.config();
-            let resp = self
+            let mut resp = self
                 .http
                 .post(cfg.url("/chat/completions"))
                 .query(&cfg.query())
@@ -202,10 +202,30 @@ impl LlmClient {
                 .await
                 .map_err(OpenAIError::Reqwest)?;
 
-            let status = resp.status();
+            let mut status = resp.status();
             if !status.is_success() {
                 let err = map_api_error_response(status, resp).await;
-                return Err(LlmError::OpenAI(err));
+                if is_reasoning_content_missing_error(&err) {
+                    // WHY: Be resilient to mis-routed provider detection or gateway differences.
+                    // If the provider explicitly complains about missing `reasoning_content`, patch and retry once.
+                    inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
+                    resp = self
+                        .http
+                        .post(cfg.url("/chat/completions"))
+                        .query(&cfg.query())
+                        .headers(cfg.headers())
+                        .json(&body)
+                        .send()
+                        .await
+                        .map_err(OpenAIError::Reqwest)?;
+                    status = resp.status();
+                    if !status.is_success() {
+                        let err = map_api_error_response(status, resp).await;
+                        return Err(LlmError::OpenAI(err));
+                    }
+                } else {
+                    return Err(LlmError::OpenAI(err));
+                }
             }
 
             let bytes = resp.bytes().await.map_err(OpenAIError::Reqwest)?;
@@ -421,9 +441,10 @@ impl LlmClient {
                 }
             }
 
-            let cfg = self.client.config();
-            let mut event_source = self
-                .http
+            let cfg = self.client.config().clone();
+            let http = self.http.clone();
+            let internal_messages_for_patch = internal_messages.clone();
+            let mut event_source = http
                 .post(cfg.url("/chat/completions"))
                 .query(&cfg.query())
                 .headers(cfg.headers())
@@ -438,6 +459,9 @@ impl LlmClient {
             let max_completion_bytes = telemetry::capture_max_bytes();
             tokio::spawn(
                 async move {
+                    let mut body = body;
+                    let mut retried_reasoning_patch = false;
+                    let mut forwarded_any = false;
                     let mut last_usage: Option<CompletionUsage> = None;
                     let mut outcome = "ok";
                     let mut completion = String::new();
@@ -445,7 +469,12 @@ impl LlmClient {
                     let mut ttft: Option<std::time::Duration> = None;
                     let mut completion_start_time: Option<String> = None;
 
-                    while let Some(ev) = event_source.next().await {
+                    loop {
+                        let ev = event_source.next().await;
+                        let Some(ev) = ev else {
+                            break;
+                        };
+
                         match ev {
                             Ok(Event::Open) => continue,
                             Ok(Event::Message(message)) => {
@@ -511,6 +540,10 @@ impl LlmClient {
                                     }
                                 };
 
+                                if response.is_ok() {
+                                    forwarded_any = true;
+                                }
+
                                 if tx.send(response).is_err() {
                                     outcome = "cancelled";
                                     break;
@@ -519,6 +552,39 @@ impl LlmClient {
                             Err(reqwest_eventsource::Error::StreamEnded) => break,
                             Err(err) => {
                                 let mapped = map_eventsource_error(err).await;
+                                if !retried_reasoning_patch
+                                    && !forwarded_any
+                                    && is_reasoning_content_missing_error(&mapped)
+                                {
+                                    // WHY: Some providers validate the prompt before streaming any chunks.
+                                    // If they reject missing tool-call `reasoning_content`, patch and reconnect once.
+                                    inject_reasoning_content_for_tool_calls(
+                                        &mut body,
+                                        &internal_messages_for_patch,
+                                    );
+                                    event_source.close();
+                                    match http
+                                        .post(cfg.url("/chat/completions"))
+                                        .query(&cfg.query())
+                                        .headers(cfg.headers())
+                                        .json(&body)
+                                        .eventsource()
+                                    {
+                                        Ok(es) => {
+                                            event_source = es;
+                                            retried_reasoning_patch = true;
+                                            continue;
+                                        }
+                                        Err(err) => {
+                                            let _ = tx.send(Err(LlmError::OpenAI(
+                                                OpenAIError::StreamError(err.to_string()),
+                                            )));
+                                            outcome = "error";
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 let _ = tx.send(Err(LlmError::OpenAI(mapped)));
                                 outcome = "error";
                                 break;
@@ -717,10 +783,19 @@ fn normalize_api_base(api_base: &str) -> String {
     api_base.trim().trim_end_matches('/').to_string()
 }
 
+// WHY: Moonshot/Kimi will reject requests when thinking is enabled unless every assistant
+// tool-call message includes `reasoning_content`. Proxies may hide the upstream provider/base_url,
+// so we also match on the model string.
 fn should_inject_reasoning_content(route: &ResolvedModel) -> bool {
     let provider = route.provider.to_ascii_lowercase();
     let base_url = route.base_url.to_ascii_lowercase();
-    provider.contains("moonshot") || base_url.contains("moonshot")
+    let model = route.model.to_ascii_lowercase();
+    provider.contains("moonshot")
+        || base_url.contains("moonshot")
+        || provider.contains("kimi")
+        || base_url.contains("kimi")
+        || model.contains("kimi")
+        || model.contains("moonshot")
 }
 
 fn inject_prompt_cache_fields(body: &mut serde_json::Value, prompt_cache_key: Option<&str>) {
@@ -739,6 +814,9 @@ fn inject_prompt_cache_fields(body: &mut serde_json::Value, prompt_cache_key: Op
 }
 
 fn inject_reasoning_content_for_tool_calls(body: &mut serde_json::Value, messages: &[Message]) {
+    // WHY: Moonshot/Kimi (and some proxies) requires a non-empty `reasoning_content` on *every*
+    // assistant message that contains tool calls. Even when we don't have reasoning text, we send
+    // a single whitespace (`" "`) to avoid gateways treating `""` as "missing".
     let Some(body_messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) else {
         return;
     };
@@ -761,11 +839,74 @@ fn inject_reasoning_content_for_tool_calls(body: &mut serde_json::Value, message
             continue;
         };
 
+        let reasoning_ok = match obj.get("reasoning_content") {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+            Some(_) => true,
+        };
+        if reasoning_ok {
+            continue;
+        }
+
         obj.insert(
             "reasoning_content".to_string(),
-            serde_json::Value::String(reasoning_content.clone().unwrap_or_default()),
+            serde_json::Value::String(
+                reasoning_content
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(" ")
+                    .to_string(),
+            ),
         );
     }
+
+    // Safety pass: patch the exact outbound JSON, even if internal and serialized message indices drift.
+    // WHY: The provider error references the *serialized* `messages[]` array index; patching the outbound
+    // JSON directly prevents hard 400s even if internal message indexing ever diverges.
+    for msg in body_messages {
+        let Some(obj) = msg.as_object_mut() else {
+            continue;
+        };
+
+        if obj.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+
+        let has_tool_calls = obj
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .is_some_and(|calls| !calls.is_empty())
+            || obj.get("function_call").is_some();
+        if !has_tool_calls {
+            continue;
+        }
+
+        let reasoning_ok = match obj.get("reasoning_content") {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+            Some(_) => true,
+        };
+        if reasoning_ok {
+            continue;
+        }
+
+        obj.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(" ".to_string()),
+        );
+    }
+}
+
+fn is_reasoning_content_missing_error(err: &OpenAIError) -> bool {
+    // WHY: Some providers surface this as a structured API error, others as a stream setup error string.
+    let msg = match err {
+        OpenAIError::ApiError(api) => api.message.as_str(),
+        OpenAIError::StreamError(text) => text.as_str(),
+        _ => return false,
+    };
+
+    let msg = msg.to_ascii_lowercase();
+    msg.contains("reasoning_content") && msg.contains("missing")
 }
 
 async fn map_eventsource_error(err: reqwest_eventsource::Error) -> OpenAIError {
@@ -1598,5 +1739,126 @@ mod tests {
         let mut body = serde_json::json!({"model":"m"});
         inject_prompt_cache_fields(&mut body, Some("k"));
         assert_eq!(body["prompt_cache_key"], serde_json::json!("k"));
+    }
+
+    #[test]
+    fn should_inject_reasoning_content_matches_kimi_model_even_behind_proxy() {
+        let route = ResolvedModel {
+            provider: "proxy".to_string(),
+            model: "kimi-k2.5".to_string(),
+            base_url: "http://127.0.0.1:8000/v1".to_string(),
+            api_key: None,
+        };
+        assert!(should_inject_reasoning_content(&route));
+    }
+
+    #[test]
+    fn inject_reasoning_content_for_tool_calls_inserts_empty_string() {
+        let messages = vec![
+            Message::User {
+                content: UserMessageContent::Text("hi".to_string()),
+            },
+            Message::Assistant {
+                content: None,
+                reasoning_content: None,
+                tool_calls: vec![ToolCall {
+                    id: "call_1".to_string(),
+                    name: "t".to_string(),
+                    arguments: "{}".to_string(),
+                }],
+                usage: None,
+            },
+            Message::Tool {
+                tool_call_id: "call_1".to_string(),
+                content: "ok".to_string(),
+            },
+        ];
+
+        let mut body = serde_json::json!({
+            "messages": [
+                {"role":"user","content":"hi"},
+                {
+                    "role":"assistant",
+                    "tool_calls":[{"id":"call_1","type":"function","function":{"name":"t","arguments":"{}"}}]
+                },
+                {"role":"tool","tool_call_id":"call_1","content":"ok"}
+            ]
+        });
+
+        inject_reasoning_content_for_tool_calls(&mut body, &messages);
+        assert_eq!(body["messages"][1]["reasoning_content"], serde_json::json!(" "));
+    }
+
+    #[test]
+    fn inject_reasoning_content_for_tool_calls_does_not_override_existing_value() {
+        let messages = vec![Message::Assistant {
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "t".to_string(),
+                arguments: "{}".to_string(),
+            }],
+            usage: None,
+        }];
+
+        let mut body = serde_json::json!({
+            "messages": [
+                {
+                    "role":"assistant",
+                    "reasoning_content":"keep",
+                    "tool_calls":[{"id":"call_1","type":"function","function":{"name":"t","arguments":"{}"}}]
+                }
+            ]
+        });
+
+        inject_reasoning_content_for_tool_calls(&mut body, &messages);
+        assert_eq!(body["messages"][0]["reasoning_content"], serde_json::json!("keep"));
+    }
+
+    #[test]
+    fn inject_reasoning_content_for_tool_calls_overrides_empty_string() {
+        let messages = vec![Message::Assistant {
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "t".to_string(),
+                arguments: "{}".to_string(),
+            }],
+            usage: None,
+        }];
+
+        let mut body = serde_json::json!({
+            "messages": [
+                {
+                    "role":"assistant",
+                    "reasoning_content":"",
+                    "tool_calls":[{"id":"call_1","type":"function","function":{"name":"t","arguments":"{}"}}]
+                }
+            ]
+        });
+
+        inject_reasoning_content_for_tool_calls(&mut body, &messages);
+        assert_eq!(body["messages"][0]["reasoning_content"], serde_json::json!(" "));
+    }
+
+    #[test]
+    fn inject_reasoning_content_for_tool_calls_patches_body_even_if_indices_drift() {
+        let messages = vec![Message::User {
+            content: UserMessageContent::Text("hi".to_string()),
+        }];
+
+        let mut body = serde_json::json!({
+            "messages": [
+                {
+                    "role":"assistant",
+                    "tool_calls":[{"id":"call_1","type":"function","function":{"name":"t","arguments":"{}"}}]
+                }
+            ]
+        });
+
+        inject_reasoning_content_for_tool_calls(&mut body, &messages);
+        assert_eq!(body["messages"][0]["reasoning_content"], serde_json::json!(" "));
     }
 }
