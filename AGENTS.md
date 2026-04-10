@@ -53,6 +53,7 @@ minimal
 ### web (React UI)
 
 - Main UI (WS streaming/session fork/edit/regenerate/usage/tmp workspace cleanup/session vs default settings/sidebar refresh): `web/src/app.tsx`
+- Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + explicit session default persistence: `web/src/lib/api.ts`
 - Types (includes message `usage` and session default writes): `web/src/lib/types.ts`
 

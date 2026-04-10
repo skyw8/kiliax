@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
-import { cn } from "@/lib/utils";
-import { CodeBlock } from "@/components/code-block";
+import { cn } from "../lib/utils";
+import { CodeBlock } from "./code-block";
 
 export type MermaidErrorInfo = { key?: string; message: string };
 

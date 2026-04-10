@@ -17,7 +17,7 @@ import type {
   SessionSaveDefaultsRequest,
   SkillEnableSetting,
   SkillListResponse,
-} from "@/lib/types";
+} from "./types";
 
 export class ApiError extends Error {
   status: number;

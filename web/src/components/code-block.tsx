@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Copy } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn } from "../lib/utils";
 
 type TokenKind =
   | "plain"

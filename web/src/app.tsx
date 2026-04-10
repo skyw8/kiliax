@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
-import { api, ApiError, wsUrl } from "@/lib/api";
-import { hrefToSession, navigate, useRoute } from "@/lib/router";
-import { cn } from "@/lib/utils";
+import { api, ApiError, wsUrl } from "./lib/api";
+import { hrefToSession, navigate, useRoute } from "./lib/router";
+import { cn } from "./lib/utils";
 import type {
   Capabilities,
   ConfigProviderSummary,
@@ -14,22 +14,22 @@ import type {
   SessionSummary,
   SkillSummary,
   ToolCall,
-} from "@/lib/types";
-import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { CodeBlock } from "@/components/code-block";
-import { Markdown, type MermaidErrorInfo } from "@/components/markdown";
+} from "./lib/types";
+import { Alert } from "./components/ui/alert";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { CodeBlock } from "./components/code-block";
+import { Markdown, type MermaidErrorInfo } from "./components/markdown";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
-import { Textarea } from "@/components/ui/textarea";
+} from "./components/ui/dialog";
+import { Input } from "./components/ui/input";
+import { Separator } from "./components/ui/separator";
+import { Textarea } from "./components/ui/textarea";
 
 type PendingMessage = {
   sessionId: string;
