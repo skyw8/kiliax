@@ -758,12 +758,19 @@ async fn get_session(
     Ok(Json(out))
 }
 
+#[derive(serde::Deserialize)]
+struct DeleteSessionQuery {
+    #[serde(default)]
+    delete_workspace_root: Option<bool>,
+}
+
 #[utoipa::path(
     delete,
     path = "/sessions/{session_id}",
     tags = ["Sessions"],
     params(
-        ("session_id" = String, Path, description = "Session id.")
+        ("session_id" = String, Path, description = "Session id."),
+        ("delete_workspace_root" = Option<bool>, Query, description = "If true, also delete the tmp workspace directory when no sessions remain.")
     ),
     responses(
         (status = 204, description = "No Content"),
@@ -773,10 +780,13 @@ async fn get_session(
 async fn delete_session(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
+    Query(q): Query<DeleteSessionQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id =
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-    state.delete_session(&id).await?;
+    state
+        .delete_session(&id, q.delete_workspace_root.unwrap_or(false))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

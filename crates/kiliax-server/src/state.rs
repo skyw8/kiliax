@@ -21,7 +21,7 @@ use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{
     default_tmp_workspace_root, open_external, validate_client_extra_workspace_roots,
-    validate_client_workspace_root,
+    validate_client_workspace_root, is_tmp_workspace_root,
 };
 
 pub struct ServerState {
@@ -1062,7 +1062,73 @@ impl ServerState {
         })
     }
 
-    pub async fn delete_session(&self, session_id: &SessionId) -> Result<(), ApiError> {
+    async fn session_workspace_root(&self, session_id: &SessionId) -> Result<Option<PathBuf>, ApiError> {
+        if let Some(live) = self.get_live(session_id.as_str()).await {
+            let root = live.settings.lock().await.workspace_root.trim().to_string();
+            if !root.is_empty() {
+                return Ok(Some(PathBuf::from(root)));
+            }
+        }
+
+        let state = self.store.load(session_id).await.map_err(map_session_err)?;
+        let root = state.meta.workspace_root.unwrap_or_default();
+        let root = root.trim().to_string();
+        if root.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(PathBuf::from(root)))
+        }
+    }
+
+    async fn workspace_root_in_use(&self, root: &Path) -> Result<bool, ApiError> {
+        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        for meta in self.store.list().await.map_err(map_session_err)? {
+            let Some(ws) = meta.workspace_root.as_deref() else {
+                continue;
+            };
+            let ws = ws.trim();
+            if ws.is_empty() {
+                continue;
+            }
+            let candidate = PathBuf::from(ws);
+            let candidate = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            if candidate == canonical_root {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn maybe_delete_tmp_workspace_root(&self, root: &Path) -> Result<(), ApiError> {
+        if !is_tmp_workspace_root(root)? {
+            return Ok(());
+        }
+        if self.workspace_root_in_use(root).await? {
+            return Ok(());
+        }
+        match tokio::fs::remove_dir_all(root).await {
+            Ok(()) => tracing::info!(event = "workspace.tmp_deleted", path = %root.display()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => tracing::warn!(
+                event = "workspace.tmp_delete_failed",
+                path = %root.display(),
+                error = %err
+            ),
+        }
+        Ok(())
+    }
+
+    pub async fn delete_session(
+        &self,
+        session_id: &SessionId,
+        delete_workspace_root: bool,
+    ) -> Result<(), ApiError> {
+        let workspace_root = if delete_workspace_root {
+            self.session_workspace_root(session_id).await?
+        } else {
+            None
+        };
+
         let removed = self.sessions.lock().await.remove(session_id.as_str());
         if let Some(live) = removed.map(|e| e.live) {
             live.shutdown().await;
@@ -1071,6 +1137,10 @@ impl ServerState {
             .delete(session_id)
             .await
             .map_err(map_session_err)?;
+
+        if let Some(root) = workspace_root {
+            self.maybe_delete_tmp_workspace_root(&root).await?;
+        }
         Ok(())
     }
 

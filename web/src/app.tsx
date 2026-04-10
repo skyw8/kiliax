@@ -1463,9 +1463,10 @@ export default function App() {
     const ids = sessions
       .filter((s) => (s.settings.workspace_root ?? "") === workspaceRoot)
       .map((s) => s.id);
+    const deleteWorkspaceRoot = isTmpWorkspaceRoot(workspaceRoot);
     try {
       for (const id of ids) {
-        await api.deleteSession(id);
+        await api.deleteSession(id, { delete_workspace_root: deleteWorkspaceRoot });
       }
       setPinnedWorkspaceRoots((prev) => prev.filter((r) => r !== workspaceRoot));
       setPinnedSessionIds((prev) => prev.filter((id) => !ids.includes(id)));
@@ -1697,7 +1698,11 @@ export default function App() {
 
   async function deleteSession(sessionId: string) {
     try {
-      await api.deleteSession(sessionId);
+      const root =
+        sessions.find((s) => s.id === sessionId)?.settings.workspace_root ?? "";
+      await api.deleteSession(sessionId, {
+        delete_workspace_root: isTmpWorkspaceRoot(root),
+      });
       setPinnedSessionIds((prev) => prev.filter((id) => id !== sessionId));
       if (selectedIdRef.current === sessionId) {
         navigate("/", { replace: true });
@@ -3801,6 +3806,11 @@ export default function App() {
               {deleteSessionSummary?.title ?? deleteSessionSummary?.id ?? ""}
             </DialogDescription>
           </DialogHeader>
+          {isTmpWorkspaceRoot(deleteSessionSummary?.settings.workspace_root ?? "") ? (
+            <div className="mt-3 text-sm text-zinc-600">
+              This also deletes the temporary workspace directory on disk.
+            </div>
+          ) : null}
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
               Cancel
@@ -3832,7 +3842,11 @@ export default function App() {
             </DialogDescription>
           </DialogHeader>
           <div className="mt-3 text-sm text-zinc-600">
-            This deletes all sessions under this workspace (directory is not removed).
+            {isTmpWorkspaceRoot(workspaceDeleteConfirm?.workspaceRoot ?? "") ? (
+              <>This deletes all sessions and removes the temporary workspace directory on disk.</>
+            ) : (
+              <>This deletes all sessions under this workspace (directory is not removed).</>
+            )}
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="outline" onClick={() => setWorkspaceDeleteConfirm(null)}>

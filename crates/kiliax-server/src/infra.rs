@@ -12,6 +12,23 @@ fn home_kiliax_dir() -> Result<PathBuf, ApiError> {
     Ok(home.join(".kiliax"))
 }
 
+pub(crate) fn kiliax_workspace_dir() -> Result<PathBuf, ApiError> {
+    Ok(home_kiliax_dir()?.join("workspace"))
+}
+
+pub(crate) fn is_tmp_workspace_root(root: &Path) -> Result<bool, ApiError> {
+    let base = kiliax_workspace_dir()?;
+    let base = std::fs::canonicalize(&base).unwrap_or(base);
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if root.parent() != Some(base.as_path()) {
+        return Ok(false);
+    }
+    let Some(name) = root.file_name().and_then(|n| n.to_str()) else {
+        return Ok(false);
+    };
+    Ok(name.starts_with("tmp_"))
+}
+
 fn expand_tilde(path: &str) -> Result<PathBuf, ApiError> {
     let trimmed = path.trim();
     if trimmed == "~" {
@@ -88,8 +105,7 @@ pub(crate) fn validate_client_extra_workspace_roots(
 }
 
 pub(crate) fn default_tmp_workspace_root() -> Result<PathBuf, ApiError> {
-    let base = home_kiliax_dir()?.join("workspace");
-    Ok(base.join(format!("tmp_{}", SessionId::new())))
+    Ok(kiliax_workspace_dir()?.join(format!("tmp_{}", SessionId::new())))
 }
 
 fn is_wsl() -> bool {
