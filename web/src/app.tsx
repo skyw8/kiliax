@@ -933,6 +933,10 @@ export default function App() {
     workspaceRoot: string;
   } | null>(null);
 
+  const [providerDeleteConfirm, setProviderDeleteConfirm] = useState<{
+    providerId: string;
+  } | null>(null);
+
   const [workspaceMenu, setWorkspaceMenu] = useState<{
     workspaceRoot: string;
     x: number;
@@ -1952,6 +1956,13 @@ export default function App() {
     try {
       await api.patchConfigProviders({ default_model: trimmed ? trimmed : null });
       await refreshAfterConfigChange();
+      pushAlert({
+        id: newAlertId("cfg"),
+        level: "success",
+        title: "Saved",
+        message: "Default model updated.",
+        autoCloseMs: 2500,
+      });
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -1965,6 +1976,13 @@ export default function App() {
       await api.patchConfigProviders({ default_model: null });
       setSettingsProvidersDefaultModel("");
       await refreshAfterConfigChange();
+      pushAlert({
+        id: newAlertId("cfg"),
+        level: "success",
+        title: "Saved",
+        message: "Default model cleared.",
+        autoCloseMs: 2500,
+      });
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -2070,7 +2088,6 @@ export default function App() {
   }
 
   async function deleteProvider(id: string) {
-    if (!window.confirm(`Delete provider "${id}"?`)) return;
     setSettingsSaving(true);
     try {
       await api.patchConfigProviders({ delete: [id] });
@@ -2081,6 +2098,13 @@ export default function App() {
         return remaining[0]?.id ?? PROVIDERS_PANE_NEW_PROVIDER;
       });
       await refreshAfterConfigChange();
+      pushAlert({
+        id: newAlertId("cfg"),
+        level: "success",
+        title: "Deleted",
+        message: `Provider "${id}" deleted.`,
+        autoCloseMs: 3000,
+      });
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -3538,7 +3562,11 @@ export default function App() {
                             variant="outline"
                             className="border-rose-200 text-rose-700 hover:bg-rose-50"
                             disabled={settingsSaving}
-                            onClick={() => deleteProvider(providersPaneSelectedProvider.id)}
+                            onClick={() =>
+                              setProviderDeleteConfirm({
+                                providerId: providersPaneSelectedProvider.id,
+                              })
+                            }
                           >
                             Delete
                           </Button>
@@ -3969,6 +3997,40 @@ export default function App() {
                 if (!root) return;
                 setWorkspaceDeleteConfirm(null);
                 await deleteWorkspace(root);
+              }}
+            >
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(providerDeleteConfirm)}
+        onOpenChange={(open) => !open && setProviderDeleteConfirm(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete provider?</DialogTitle>
+            <DialogDescription className="truncate">
+              {providerDeleteConfirm?.providerId ?? ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-3 text-sm text-zinc-600">
+            This updates global config and may affect sessions using this provider.
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setProviderDeleteConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 text-zinc-50 hover:bg-red-500"
+              disabled={settingsSaving}
+              onClick={async () => {
+                const id = providerDeleteConfirm?.providerId;
+                if (!id) return;
+                setProviderDeleteConfirm(null);
+                await deleteProvider(id);
               }}
             >
               Delete
