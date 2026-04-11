@@ -76,9 +76,17 @@ const LIST_PAGE_SIZE = 6;
 const PROVIDERS_PANE_DEFAULT_MODEL = "__default_model__";
 const PROVIDERS_PANE_NEW_PROVIDER = "__new_provider__";
 
-function displayModelId(modelId: string): string {
-  const idx = modelId.indexOf("/");
-  return idx === -1 ? modelId : modelId.slice(idx + 1);
+function splitModelId(modelId: string): { provider: string | null; model: string } {
+  const raw = (modelId ?? "").trim();
+  const idx = raw.indexOf("/");
+  if (idx === -1) return { provider: null, model: raw };
+  return { provider: raw.slice(0, idx), model: raw.slice(idx + 1) };
+}
+
+function modelLabel(modelId: string): string {
+  const { provider, model } = splitModelId(modelId);
+  if (!provider) return model;
+  return `${model} (${provider})`;
 }
 
 function hasMermaidFence(text?: string | null): boolean {
@@ -123,6 +131,11 @@ function monotonicNowMs(): number {
     return performance.now();
   }
   return Date.now();
+}
+
+function isOverlaySidebarViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia?.("(max-width: 767px)")?.matches ?? false;
 }
 
 function fmtDurationCompact(durationMs: number): string {
@@ -292,10 +305,10 @@ function savePinnedWorkspaceRoots(roots: string[]) {
 function loadSidebarOpen(): boolean {
   try {
     const raw = localStorage.getItem(SIDEBAR_OPEN_KEY);
-    if (!raw) return true;
+    if (!raw) return !isOverlaySidebarViewport();
     return raw !== "0" && raw !== "false";
   } catch {
-    return true;
+    return !isOverlaySidebarViewport();
   }
 }
 
@@ -374,6 +387,19 @@ function workspaceBasename(root: string): string {
 function isTmpWorkspaceRoot(root: string): boolean {
   const p = normalizePathForMatch(root).toLowerCase();
   return p.includes("/.kiliax/workspace/tmp_");
+}
+
+function middleEllipsis(text: string, headChars: number, tailChars: number): string {
+  const s = text ?? "";
+  if (s.length <= headChars + tailChars + 1) return s;
+  return `${s.slice(0, Math.max(0, headChars))}…${s.slice(Math.max(0, s.length - tailChars))}`;
+}
+
+function workspaceDisplayName(root: string): string {
+  const base = workspaceBasename(root);
+  if (!base) return base;
+  if (!isTmpWorkspaceRoot(root)) return base;
+  return middleEllipsis(base, 22, 6);
 }
 
 function renderToolCalls(
@@ -615,7 +641,7 @@ function MessageRow({
 }) {
   if (msg.role === "user") {
     const wide = hasMermaidFence(msg.content);
-    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[78%]";
+    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     return (
       <div className="group flex justify-end">
@@ -653,7 +679,7 @@ function MessageRow({
 
   if (msg.role === "assistant") {
     const wide = hasMermaidFence(msg.content);
-    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[78%]";
+    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
     const usageText = fmtTokenUsage(msg.usage);
     const canRegenerate = Boolean(historyMutable && onRegenerateAssistant);
     return (
@@ -752,7 +778,7 @@ function MessageRow({
 
   return (
     <div className="flex justify-start">
-      <details className="relative w-full max-w-[78%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2">
+      <details className="relative w-full max-w-[92%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2 sm:max-w-[78%]">
         <button
           type="button"
           className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
@@ -804,7 +830,7 @@ function SessionItemRow({
           <Badge variant={badge.variant}>{badge.label}</Badge>
         </div>
         <div className="mt-1 truncate text-xs text-zinc-500">
-          {displayModelId(summary.settings.model_id)}
+          {modelLabel(summary.settings.model_id)}
         </div>
       </button>
 
@@ -1175,6 +1201,7 @@ export default function App() {
 
   function selectSession(sessionId: string) {
     navigate(hrefToSession(sessionId));
+    if (isOverlaySidebarViewport()) setSidebarOpen(false);
   }
 
   function openSessionMenuAt(sessionId: string, anchor: DOMRect) {
@@ -2510,10 +2537,29 @@ export default function App() {
   return (
     <div className="h-dvh w-full bg-zinc-50 text-zinc-900">
       <AlertStack items={alerts} onClose={closeAlert} />
-      <div className="flex h-full">
+      <div className="flex h-full overflow-hidden">
         {sidebarOpen ? (
-          <aside className="flex w-[280px] flex-col border-r border-zinc-200 bg-zinc-50">
-            <div className="space-y-1 p-3">
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-black/20 md:hidden"
+              aria-hidden="true"
+              onClick={() => setSidebarOpen(false)}
+            />
+            <aside className="fixed inset-y-0 left-0 z-50 flex w-[min(320px,85vw)] flex-col border-r border-zinc-200 bg-zinc-50 shadow-lg md:static md:z-auto md:w-[280px] md:shadow-none">
+              <div className="flex items-center justify-between px-3 pt-3 md:hidden">
+                <div className="text-xs font-semibold text-zinc-700">Menu</div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Close sidebar"
+                  title="Close sidebar"
+                  onClick={() => setSidebarOpen(false)}
+                >
+                  <X className="h-4 w-4 text-zinc-600" />
+                </Button>
+              </div>
+              <div className="space-y-1 p-3 pt-2 md:pt-3">
               <Button variant="ghost" className="w-full justify-start gap-2" onClick={onNewSession}>
                 <Plus className="h-4 w-4 text-violet-600" />
                 New Session
@@ -2759,10 +2805,11 @@ export default function App() {
               </Button>
             </div>
           </aside>
+          </>
         ) : null}
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-start justify-between gap-4 border-b border-zinc-200 bg-white px-4 py-3">
+          <div className="flex flex-col gap-3 border-b border-zinc-200 bg-white px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex items-start gap-2">
               <Button
                 variant="ghost"
@@ -2781,7 +2828,7 @@ export default function App() {
                 <div className="truncate text-sm font-medium">
                   {selectedSummary?.title ?? "New thread"}
                 </div>
-                <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-600">
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
                   {selectedBadge ? (
                     <Badge variant={selectedBadge.variant}>{selectedBadge.label}</Badge>
                   ) : (
@@ -2789,7 +2836,7 @@ export default function App() {
                   )}
                   {session ? (
                     <span className="truncate">
-                      {session.settings.agent} · {displayModelId(session.settings.model_id)}
+                      {session.settings.agent} · {modelLabel(session.settings.model_id)}
                     </span>
                   ) : null}
                 </div>
@@ -2797,73 +2844,85 @@ export default function App() {
             </div>
 
             {session ? (
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                <label className="text-xs text-zinc-600">Agent</label>
-                <select
-                  className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs"
-                  value={session.settings.agent}
-                  onChange={(e) => patchSession({ agent: e.target.value })}
-                >
-                  {agentOptions.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-
-                <label className="ml-2 text-xs text-zinc-600">Model</label>
-                <select
-                  className="h-8 min-w-[220px] rounded-md border border-zinc-200 bg-white px-2 text-xs"
-                  value={session.settings.model_id}
-                  onChange={(e) => patchSession({ model_id: e.target.value })}
-                >
-                  {modelOptions.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  disabled={modelDefaultsSaving}
-                  title="Set agent & model defaults for new sessions"
-                  aria-label="Set agent & model defaults for new sessions"
-                  onClick={() =>
-                    saveSelectedSessionDefaults(
-                      { model: true, agent: true, mcp: false },
-                      setModelDefaultsSaving,
-                      "Saved current session agent and model as the defaults for new sessions.",
-                    )
-                  }
-                >
-                  <Bookmark className="h-4 w-4 text-violet-600" />
-                </Button>
-
-                <div className="flex max-w-[420px] items-center gap-2 rounded-md px-2 py-1">
-                  <span className="text-xs text-zinc-600">workspace</span>
-                  <span
-                    className="min-w-0 truncate font-mono text-xs text-zinc-800"
-                    title={session.settings.workspace_root ?? ""}
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:w-auto lg:flex lg:flex-wrap lg:items-center lg:justify-end">
+                <div className="flex items-center gap-2">
+                  <span className="shrink-0 text-xs text-zinc-600">Agent</span>
+                  <select
+                    className="h-8 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 text-xs lg:w-[160px] lg:flex-none"
+                    value={session.settings.agent}
+                    title={session.settings.agent}
+                    aria-label="Agent"
+                    onChange={(e) => patchSession({ agent: e.target.value })}
                   >
-                    {workspaceBasename(session.settings.workspace_root ?? "")}
-                  </span>
+                    {agentOptions.map((a) => (
+                      <option key={a} value={a}>
+                        {a}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="justify-start gap-2"
-                  onClick={() => {
-                    setExtraFolderPickerPath(session.settings.workspace_root ?? "");
-                    setAddFolderOpen(true);
-                  }}
-                >
-                  <FolderPlus className="h-4 w-4 text-violet-600" />
-                  Add folder
-                </Button>
+                <div className="flex items-center gap-2">
+                  <span className="shrink-0 text-xs text-zinc-600">Model</span>
+                  <select
+                    className="h-8 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 text-xs lg:w-[240px] lg:flex-none"
+                    value={session.settings.model_id}
+                    title={session.settings.model_id}
+                    aria-label="Model"
+                    onChange={(e) => patchSession({ model_id: e.target.value })}
+                  >
+                    {modelOptions.map((m) => (
+                      <option key={m} value={m}>
+                        {modelLabel(m)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex min-w-0 items-center justify-end gap-2 sm:col-span-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={modelDefaultsSaving}
+                    title="Set agent & model defaults for new sessions"
+                    aria-label="Set agent & model defaults for new sessions"
+                    onClick={() =>
+                      saveSelectedSessionDefaults(
+                        { model: true, agent: true, mcp: false },
+                        setModelDefaultsSaving,
+                        "Saved current session agent and model as the defaults for new sessions.",
+                      )
+                    }
+                  >
+                    <Bookmark className="h-4 w-4 text-violet-600" />
+                  </Button>
+
+                  <div className="flex min-w-0 max-w-full items-center gap-2 rounded-md px-2 py-1 lg:max-w-[420px]">
+                    <span className="hidden shrink-0 text-xs text-zinc-600 sm:inline">
+                      workspace
+                    </span>
+                    <span
+                      className="min-w-0 truncate font-mono text-xs text-zinc-800"
+                      title={session.settings.workspace_root ?? ""}
+                    >
+                      {workspaceDisplayName(session.settings.workspace_root ?? "")}
+                    </span>
+                  </div>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="justify-start gap-2"
+                    onClick={() => {
+                      setExtraFolderPickerPath(session.settings.workspace_root ?? "");
+                      setAddFolderOpen(true);
+                    }}
+                  >
+                    <FolderPlus className="h-4 w-4 text-violet-600" />
+                    <span className="hidden sm:inline">Add folder</span>
+                  </Button>
+                </div>
               </div>
             ) : null}
           </div>
@@ -2871,7 +2930,7 @@ export default function App() {
           <div
             ref={chatScrollRef}
             onScroll={updateIsAtBottom}
-            className="flex-1 overflow-auto bg-zinc-50 px-4 py-4"
+            className="flex-1 overflow-auto bg-zinc-50 px-3 py-4 sm:px-4"
           >
             {selectedId ? (
               <div className="mx-auto w-full max-w-4xl space-y-3">
@@ -2892,7 +2951,7 @@ export default function App() {
 
                 {stream.thinking ? (
                   <div className="flex justify-start">
-                    <details className="relative w-full max-w-[78%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2">
+                    <details className="relative w-full max-w-[92%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2 sm:max-w-[78%]">
                       <button
                         type="button"
                         className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
@@ -2954,7 +3013,7 @@ export default function App() {
                 {stream.assistant ? (
                   <div className="flex justify-start">
                     <div
-                      className={`${hasMermaidFence(stream.assistant) ? "w-full max-w-[92%]" : "max-w-[78%]"} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}
+                      className={`${hasMermaidFence(stream.assistant) ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]"} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}
                     >
                       <Markdown text={stream.assistant} deferMermaid />
                       <div className="mt-2 border-t border-zinc-200 pt-1">
@@ -3004,7 +3063,7 @@ export default function App() {
           </div>
 
           {selectedId && !isAtBottom ? (
-            <div className="fixed bottom-24 right-6 z-40">
+            <div className="fixed bottom-24 right-3 z-40 sm:right-6">
               <Button
                 variant="outline"
                 size="icon"
@@ -3021,9 +3080,9 @@ export default function App() {
             </div>
           ) : null}
 
-          <div className="border-t border-zinc-200 bg-white px-4 py-3">
+          <div className="border-t border-zinc-200 bg-white px-3 py-3 sm:px-4">
             <div className="mx-auto w-full max-w-4xl">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <div className="flex min-w-0 flex-1 items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
                   <Textarea
                     ref={composerRef}
@@ -3069,7 +3128,7 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="flex items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm">
+                <div className="flex items-center gap-1 self-end rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm sm:self-auto">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -3186,8 +3245,8 @@ export default function App() {
           {settingsLoading ? (
             <div className="py-10 text-center text-sm text-zinc-500">Loading…</div>
           ) : settingsTab === "providers" ? (
-            <div className="flex h-[min(600px,72vh)] gap-3">
-              <div className="flex w-80 shrink-0 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white">
+            <div className="flex h-[min(600px,72vh)] flex-col gap-3 md:flex-row">
+              <div className="flex h-[min(240px,30vh)] w-full shrink-0 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white md:h-full md:w-80">
                 <div className="flex items-center justify-between border-b border-zinc-200 px-3 py-2">
                   <div className="text-xs font-semibold text-zinc-700">Providers</div>
                   <div className="text-xs text-zinc-500">{settingsProviders.length}</div>
@@ -3278,7 +3337,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white">
                 <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-zinc-900">
@@ -3360,9 +3419,11 @@ export default function App() {
                             newProviderModels.map((m) => (
                               <div
                                 key={m}
-                                className="flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs"
+                                className="flex min-w-0 max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs"
                               >
-                                <span className="font-mono">{m}</span>
+                                <span className="max-w-[240px] truncate font-mono" title={m}>
+                                  {m}
+                                </span>
                                 <button
                                   type="button"
                                   className="rounded-full p-0.5 text-zinc-500 hover:bg-zinc-200"
@@ -3442,9 +3503,11 @@ export default function App() {
                             providersPaneSelectedProvider.models.map((m) => (
                               <div
                                 key={m}
-                                className="flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs"
+                                className="flex min-w-0 max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs"
                               >
-                                <span className="font-mono">{m}</span>
+                                <span className="max-w-[240px] truncate font-mono" title={m}>
+                                  {m}
+                                </span>
                                 <button
                                   type="button"
                                   className="rounded-full p-0.5 text-zinc-500 hover:bg-zinc-200 disabled:opacity-50"
