@@ -1786,7 +1786,10 @@ mod tests {
         });
 
         inject_reasoning_content_for_tool_calls(&mut body, &messages);
-        assert_eq!(body["messages"][1]["reasoning_content"], serde_json::json!(" "));
+        assert_eq!(
+            body["messages"][1]["reasoning_content"],
+            serde_json::json!(" ")
+        );
     }
 
     #[test]
@@ -1813,7 +1816,10 @@ mod tests {
         });
 
         inject_reasoning_content_for_tool_calls(&mut body, &messages);
-        assert_eq!(body["messages"][0]["reasoning_content"], serde_json::json!("keep"));
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::json!("keep")
+        );
     }
 
     #[test]
@@ -1840,7 +1846,10 @@ mod tests {
         });
 
         inject_reasoning_content_for_tool_calls(&mut body, &messages);
-        assert_eq!(body["messages"][0]["reasoning_content"], serde_json::json!(" "));
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::json!(" ")
+        );
     }
 
     #[test]
@@ -1859,6 +1868,9 @@ mod tests {
         });
 
         inject_reasoning_content_for_tool_calls(&mut body, &messages);
-        assert_eq!(body["messages"][0]["reasoning_content"], serde_json::json!(" "));
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::json!(" ")
+        );
     }
 }

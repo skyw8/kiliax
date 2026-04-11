@@ -27,7 +27,7 @@ minimal
 - OpenAI-compatible client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-core/src/llm.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
-- Session store + snapshots + events + session-scoped MCP overrides: `crates/kiliax-core/src/session.rs`
+- Session store + snapshots + events + session-scoped MCP/skills overrides: `crates/kiliax-core/src/session.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-cli (TUI)

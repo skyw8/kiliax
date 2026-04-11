@@ -7,9 +7,10 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+use crate::config::SkillsConfig;
 use crate::llm::Message;
 
-const SESSION_SCHEMA_VERSION: u32 = 3;
+const SESSION_SCHEMA_VERSION: u32 = 4;
 const DEFAULT_CHECKPOINT_EVERY: u64 = 32;
 
 const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
@@ -97,6 +98,10 @@ pub struct SessionMeta {
     /// Session-scoped MCP enablement overrides.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<SessionMcpServerSetting>,
+
+    /// Session-scoped skills enablement overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<SkillsConfig>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -286,6 +291,7 @@ impl FileSessionStore {
             workspace_root,
             extra_workspace_roots,
             mcp_servers: Vec::new(),
+            skills: None,
             title: derive_title(&initial_messages),
             last_finish_reason: None,
             last_error: None,

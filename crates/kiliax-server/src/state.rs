@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -20,8 +20,8 @@ use tracing::{Instrument, Span};
 use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{
-    default_tmp_workspace_root, open_external, validate_client_extra_workspace_roots,
-    validate_client_workspace_root, is_tmp_workspace_root,
+    default_tmp_workspace_root, is_tmp_workspace_root, open_external,
+    validate_client_extra_workspace_roots, validate_client_workspace_root,
 };
 
 pub struct ServerState {
@@ -837,6 +837,7 @@ impl ServerState {
             let patch = api::SessionSettingsPatch {
                 agent: create.agent,
                 model_id: create.model_id,
+                skills: create.skills,
                 mcp: create.mcp,
                 extra_workspace_roots: None,
             };
@@ -885,12 +886,13 @@ impl ServerState {
             )
             .map_err(ApiError::internal_error)?;
 
+        let skills_config = skills_config_from_settings(&settings.skills);
         let messages = build_preamble(
             &profile,
             &settings.model_id,
             &workspace_root,
             &tools,
-            &config.skills,
+            &skills_config,
         )
         .await;
 
@@ -1062,7 +1064,10 @@ impl ServerState {
         })
     }
 
-    async fn session_workspace_root(&self, session_id: &SessionId) -> Result<Option<PathBuf>, ApiError> {
+    async fn session_workspace_root(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<PathBuf>, ApiError> {
         if let Some(live) = self.get_live(session_id.as_str()).await {
             let root = live.settings.lock().await.workspace_root.trim().to_string();
             if !root.is_empty() {
@@ -1187,6 +1192,10 @@ impl ServerState {
                     server.enable = *enable;
                 }
             }
+        }
+
+        if req.skills {
+            next.skills = skills_config_from_settings(&settings.skills);
         }
 
         let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
@@ -1384,6 +1393,8 @@ fn session_events_api_path(store: &FileSessionStore, session_id: &SessionId) -> 
 struct SettingsFile {
     agent: String,
     model_id: String,
+    #[serde(default)]
+    skills: Option<api::SkillsSettings>,
     mcp: api::McpServers,
     #[serde(default)]
     workspace_root: String,
@@ -1405,6 +1416,7 @@ async fn write_settings_file(path: &Path, settings: &api::SessionSettings) -> Re
     let file = SettingsFile {
         agent: settings.agent.clone(),
         model_id: settings.model_id.clone(),
+        skills: Some(settings.skills.clone()),
         mcp: settings.mcp.clone(),
         workspace_root: settings.workspace_root.clone(),
         extra_workspace_roots: Some(settings.extra_workspace_roots.clone()),
@@ -1427,6 +1439,9 @@ async fn load_settings_for_meta(
         let mut settings = api::SessionSettings {
             agent: file.agent,
             model_id: file.model_id,
+            skills: file
+                .skills
+                .unwrap_or_else(|| skills_settings_from_config(&config.skills)),
             mcp: file.mcp,
             workspace_root: file.workspace_root,
             extra_workspace_roots: file.extra_workspace_roots.unwrap_or_default(),
@@ -1544,6 +1559,11 @@ fn default_settings(
         .map(|m| m.extra_workspace_roots.clone())
         .unwrap_or_default();
 
+    let skills = match meta.and_then(|m| m.skills.as_ref()) {
+        Some(skills) => skills_settings_from_config(skills),
+        None => skills_settings_from_config(&config.skills),
+    };
+
     let servers = config
         .mcp
         .servers
@@ -1557,10 +1577,40 @@ fn default_settings(
     Ok(api::SessionSettings {
         agent,
         model_id,
+        skills,
         mcp: api::McpServers { servers },
         workspace_root,
         extra_workspace_roots,
     })
+}
+
+fn skills_settings_from_config(skills: &kiliax_core::config::SkillsConfig) -> api::SkillsSettings {
+    api::SkillsSettings {
+        default_enable: skills.default_enable,
+        overrides: skills
+            .overrides
+            .iter()
+            .map(|(id, enable)| api::SkillEnableSetting {
+                id: id.clone(),
+                enable: *enable,
+            })
+            .collect(),
+    }
+}
+
+fn skills_config_from_settings(skills: &api::SkillsSettings) -> kiliax_core::config::SkillsConfig {
+    let mut overrides: BTreeMap<String, bool> = BTreeMap::new();
+    for s in &skills.overrides {
+        let id = s.id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        overrides.insert(id.to_string(), s.enable);
+    }
+    kiliax_core::config::SkillsConfig {
+        default_enable: skills.default_enable,
+        overrides,
+    }
 }
 
 fn apply_settings_patch(
@@ -1589,6 +1639,14 @@ fn apply_settings_patch(
         })?;
         settings.model_id = model_id.to_string();
     }
+    if let Some(skills) = patch.skills.as_ref() {
+        if let Some(v) = skills.default_enable {
+            settings.skills.default_enable = v;
+        }
+        if let Some(overrides) = skills.overrides.as_ref() {
+            merge_skill_overrides(&mut settings.skills.overrides, overrides)?;
+        }
+    }
     if let Some(patch_servers) = patch.mcp.as_ref().and_then(|m| m.servers.as_ref()) {
         merge_mcp_settings(
             &mut settings.mcp.servers,
@@ -1604,6 +1662,32 @@ fn apply_settings_patch(
             .filter(|s| !s.is_empty())
             .collect();
     }
+    Ok(())
+}
+
+fn merge_skill_overrides(
+    existing: &mut Vec<api::SkillEnableSetting>,
+    patch: &[api::SkillEnableSetting],
+) -> Result<(), ApiError> {
+    let mut map: HashMap<String, bool> =
+        existing.iter().map(|s| (s.id.clone(), s.enable)).collect();
+
+    for p in patch {
+        let id = p.id.trim();
+        if id.is_empty() {
+            return Err(ApiError::invalid_argument("skill id must not be empty"));
+        }
+        map.insert(id.to_string(), p.enable);
+    }
+
+    let mut entries: Vec<(String, bool)> = map.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    existing.clear();
+    existing.extend(
+        entries
+            .into_iter()
+            .map(|(id, enable)| api::SkillEnableSetting { id, enable }),
+    );
     Ok(())
 }
 
@@ -2239,6 +2323,7 @@ impl LiveSession {
             session.meta.model_id = Some(settings.model_id.clone());
             session.meta.workspace_root = Some(settings.workspace_root.clone());
             session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+            session.meta.skills = Some(skills_config_from_settings(&settings.skills));
             live.store
                 .checkpoint(&mut session)
                 .await
@@ -2868,12 +2953,13 @@ impl LiveSession {
                 || effective.model_id != base_settings.model_id
                 || effective.mcp.servers != base_settings.mcp.servers
             {
+                let skills_config = skills_config_from_settings(&base_settings.skills);
                 let preamble = build_preamble(
                     &profile,
                     &effective.model_id,
                     &workspace_root,
                     &tools_for_run,
-                    &config.skills,
+                    &skills_config,
                 )
                 .await;
                 insert_preamble_updates_before_last_user(&mut messages, preamble);
@@ -3097,12 +3183,13 @@ impl LiveSession {
             )
         })?;
 
+        let skills_config = skills_config_from_settings(&settings.skills);
         let preamble = build_preamble(
             &profile,
             &settings.model_id,
             &workspace_root,
             &tools,
-            &config.skills,
+            &skills_config,
         )
         .await;
 
@@ -3118,6 +3205,7 @@ impl LiveSession {
         session.meta.model_id = Some(settings.model_id.clone());
         session.meta.workspace_root = Some(settings.workspace_root.clone());
         session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+        session.meta.skills = Some(skills_config_from_settings(&settings.skills));
         self.store
             .checkpoint(&mut session)
             .await

@@ -105,6 +105,8 @@ pub struct SessionCreateSettings {
     #[serde(default)]
     pub model_id: Option<String>,
     #[serde(default)]
+    pub skills: Option<SkillsSettingsPatch>,
+    #[serde(default)]
     pub mcp: Option<McpServersPatch>,
     #[serde(default)]
     pub workspace_root: Option<String>,
@@ -120,6 +122,8 @@ pub struct SessionSettingsPatch {
     #[serde(default)]
     pub model_id: Option<String>,
     #[serde(default)]
+    pub skills: Option<SkillsSettingsPatch>,
+    #[serde(default)]
     pub mcp: Option<McpServersPatch>,
     #[serde(default)]
     pub extra_workspace_roots: Option<Vec<String>>,
@@ -130,12 +134,24 @@ pub struct SessionSettingsPatch {
 pub struct SessionSaveDefaultsRequest {
     pub model: bool,
     pub mcp: bool,
+    #[serde(default)]
+    pub skills: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct McpServersPatch {
     #[serde(default)]
     pub servers: Option<Vec<McpServerSetting>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SkillsSettingsPatch {
+    #[serde(default)]
+    pub default_enable: Option<bool>,
+
+    #[serde(default)]
+    pub overrides: Option<Vec<SkillEnableSetting>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -145,9 +161,17 @@ pub struct McpServerSetting {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SkillsSettings {
+    pub default_enable: bool,
+    #[serde(default)]
+    pub overrides: Vec<SkillEnableSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SessionSettings {
     pub agent: String,
     pub model_id: String,
+    pub skills: SkillsSettings,
     pub mcp: McpServers,
     pub workspace_root: String,
     #[serde(default)]

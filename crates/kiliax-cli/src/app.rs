@@ -1199,6 +1199,7 @@ impl App {
             &self.model_id,
             &self.workspace_root,
             self.runtime.tools(),
+            &self.config.skills,
         )
         .await;
         let session = self
@@ -1392,11 +1393,18 @@ impl App {
         self.session.meta.agent = self.profile.name.to_string();
         self.session.meta.updated_at_ms = now_ms();
 
+        let skills_config = self
+            .session
+            .meta
+            .skills
+            .clone()
+            .unwrap_or_else(|| self.config.skills.clone());
         let new_preamble = build_preamble(
             &self.profile,
             &self.model_id,
             &self.workspace_root,
             self.runtime.tools(),
+            &skills_config,
         )
         .await;
         for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
@@ -1493,11 +1501,18 @@ impl App {
             self.session.meta.model_id = Some(self.model_id.clone());
             self.session.meta.updated_at_ms = now_ms();
 
+            let skills_config = self
+                .session
+                .meta
+                .skills
+                .clone()
+                .unwrap_or_else(|| self.config.skills.clone());
             let new_preamble = build_preamble(
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
                 self.runtime.tools(),
+                &skills_config,
             )
             .await;
             for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
@@ -1602,11 +1617,18 @@ impl App {
 
             self.session.meta.updated_at_ms = now_ms();
 
+            let skills_config = self
+                .session
+                .meta
+                .skills
+                .clone()
+                .unwrap_or_else(|| self.config.skills.clone());
             let new_preamble = build_preamble(
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
                 self.runtime.tools(),
+                &skills_config,
             )
             .await;
             for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
@@ -2001,6 +2023,7 @@ async fn build_preamble(
     model_id: &str,
     workspace_root: &PathBuf,
     tools: &kiliax_core::tools::ToolEngine,
+    skills_config: &kiliax_core::config::SkillsConfig,
 ) -> Vec<Message> {
     let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
         .with_tools({
@@ -2009,7 +2032,14 @@ async fn build_preamble(
         .with_model_id(model_id.to_string())
         .with_workspace_root(workspace_root);
     if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
-        builder = builder.add_skills(skills);
+        let filtered = skills.into_iter().filter(|s| {
+            skills_config
+                .overrides
+                .get(&s.id)
+                .copied()
+                .unwrap_or(skills_config.default_enable)
+        });
+        builder = builder.add_skills(filtered);
     }
     builder.build()
 }

@@ -16,17 +16,24 @@ export interface McpServers {
   servers: McpServerSetting[];
 }
 
+export interface SkillsSettings {
+  default_enable: boolean;
+  overrides: SkillEnableSetting[];
+}
+
 export interface SessionSettings {
   agent: string;
   model_id: string;
   workspace_root: string;
   extra_workspace_roots: string[];
+  skills: SkillsSettings;
   mcp: McpServers;
 }
 
 export interface SessionSaveDefaultsRequest {
   model: boolean;
   mcp: boolean;
+  skills?: boolean;
 }
 
 export interface SessionStatus {

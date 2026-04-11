@@ -275,8 +275,16 @@ async fn main() -> Result<()> {
 
     let (session, messages, llm) = match resumed {
         Some(mut session) => {
+            let mut dirty = false;
             if session.meta.mcp_servers.is_empty() {
                 session.meta.mcp_servers = session_mcp_servers_from_config(&loaded.config);
+                dirty = true;
+            }
+            if session.meta.skills.is_none() {
+                session.meta.skills = Some(loaded.config.skills.clone());
+                dirty = true;
+            }
+            if dirty {
                 store.checkpoint(&mut session).await?;
             }
             let messages = session.messages.clone();
@@ -299,7 +307,14 @@ async fn main() -> Result<()> {
                 .with_model_id(model_id.clone())
                 .with_workspace_root(&workspace_root);
             if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
-                builder = builder.add_skills(skills);
+                let cfg = &loaded.config.skills;
+                let filtered = skills.into_iter().filter(|s| {
+                    cfg.overrides
+                        .get(&s.id)
+                        .copied()
+                        .unwrap_or(cfg.default_enable)
+                });
+                builder = builder.add_skills(filtered);
             }
             let messages = builder.build();
             let mut session = store
@@ -313,6 +328,7 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             session.meta.mcp_servers = session_mcp_servers_from_config(&loaded.config);
+            session.meta.skills = Some(loaded.config.skills.clone());
             store.checkpoint(&mut session).await?;
             let llm = llm.with_prompt_cache_key(session.meta.prompt_cache_key.clone());
             (session, messages, llm)

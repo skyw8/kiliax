@@ -884,6 +884,7 @@ export default function App() {
   const [skillsDefaultEnable, setSkillsDefaultEnable] = useState(true);
   const [skillsOverrides, setSkillsOverrides] = useState<Record<string, boolean>>({});
   const [skillsSaving, setSkillsSaving] = useState(false);
+  const [skillsDefaultsSaving, setSkillsDefaultsSaving] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [mcpSaving, setMcpSaving] = useState(false);
   const [mcpDefaultsSaving, setMcpDefaultsSaving] = useState(false);
@@ -1733,14 +1734,17 @@ export default function App() {
 
   async function openSkills() {
     try {
-      const [skillsRes, cfgRes] = await Promise.all([
-        api.listGlobalSkills(),
-        api.getConfigSkills(),
-      ]);
+      const skillsRes = selectedId
+        ? await api.listSkills(selectedId)
+        : await api.listGlobalSkills();
       setSkills(skillsRes.items);
-      setSkillsDefaultEnable(cfgRes.default_enable ?? true);
+
+      const activeSkillsSettings = selectedId
+        ? (session?.settings.skills ?? selectedSummary?.settings.skills)
+        : null;
+      setSkillsDefaultEnable(activeSkillsSettings?.default_enable ?? true);
       const nextOverrides: Record<string, boolean> = {};
-      for (const s of cfgRes.skills ?? []) {
+      for (const s of activeSkillsSettings?.overrides ?? []) {
         if (!s?.id) continue;
         nextOverrides[s.id] = Boolean(s.enable);
       }
@@ -2091,19 +2095,21 @@ export default function App() {
     }
   }
 
-  async function patchSession(patch: any) {
-    if (!selectedId) return;
+  async function patchSession(patch: any): Promise<boolean> {
+    if (!selectedId) return false;
     try {
       const s = await api.patchSessionSettings(selectedId, patch);
       setSession(s);
       await refreshSessions();
+      return true;
     } catch (err) {
       handleApiError(err);
+      return false;
     }
   }
 
   async function saveSelectedSessionDefaults(
-    req: { model: boolean; mcp: boolean },
+    req: { model: boolean; mcp: boolean; skills?: boolean },
     onSaving: (saving: boolean) => void,
     message: string,
   ) {
@@ -3604,62 +3610,105 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Skills</DialogTitle>
-            <DialogDescription>Discovered from skills roots</DialogDescription>
+            <DialogDescription>
+              {session ? "Current session skills" : "Select a session to edit skills"}
+            </DialogDescription>
           </DialogHeader>
-          <div className="max-h-[420px] overflow-auto rounded-md border border-zinc-200">
-            {skills.length ? (
-              <div className="divide-y divide-zinc-200">
-                {skills.map((s) => {
-                  const enabled = skillsOverrides[s.id] ?? skillsDefaultEnable;
-                  return (
-                    <label
-                      key={s.id}
-                      className="flex items-center justify-between gap-3 bg-white px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-zinc-900">
-                          {s.name}
+          <div className="space-y-2">
+            <label className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2">
+              <div className="text-sm text-zinc-900">Enable by default</div>
+              <input
+                type="checkbox"
+                checked={skillsDefaultEnable}
+                disabled={skillsSaving || !session}
+                onChange={async (e) => {
+                  const next = e.target.checked;
+                  const prev = skillsDefaultEnable;
+                  setSkillsDefaultEnable(next);
+                  setSkillsSaving(true);
+                  try {
+                    const ok = await patchSession({ skills: { default_enable: next } });
+                    if (!ok) setSkillsDefaultEnable(prev);
+                  } finally {
+                    setSkillsSaving(false);
+                  }
+                }}
+              />
+            </label>
+
+            <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
+              {skills.length ? (
+                <div className="divide-y divide-zinc-200">
+                  {skills.map((s) => {
+                    const enabled = skillsOverrides[s.id] ?? skillsDefaultEnable;
+                    return (
+                      <label
+                        key={s.id}
+                        className="flex items-center justify-between gap-3 bg-white px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-zinc-900">
+                            {s.name}
+                          </div>
+                          <div className="mt-0.5 truncate text-xs text-zinc-600">
+                            <span className="font-mono">{s.id}</span>
+                            {s.description ? ` · ${s.description}` : ""}
+                          </div>
                         </div>
-                        <div className="mt-0.5 truncate text-xs text-zinc-600">
-                          <span className="font-mono">{s.id}</span>
-                          {s.description ? ` · ${s.description}` : ""}
-                        </div>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        disabled={skillsSaving}
-                        onChange={async (e) => {
-                          const next = e.target.checked;
-                          const prev = skillsOverrides[s.id];
-                          setSkillsOverrides((o) => ({ ...o, [s.id]: next }));
-                          setSkillsSaving(true);
-                          try {
-                            await api.patchConfigSkills({
-                              skills: [{ id: s.id, enable: next }],
-                            });
-                          } catch (err) {
-                            setSkillsOverrides((o) => {
-                              const copy = { ...o };
-                              if (prev === undefined) delete copy[s.id];
-                              else copy[s.id] = prev;
-                              return copy;
-                            });
-                            handleApiError(err);
-                          } finally {
-                            setSkillsSaving(false);
-                          }
-                        }}
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="bg-white px-3 py-6 text-center text-sm text-zinc-500">
-                No skills
-              </div>
-            )}
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          disabled={skillsSaving || !session}
+                          onChange={async (e) => {
+                            if (!session) return;
+                            const next = e.target.checked;
+                            const prev = skillsOverrides[s.id];
+                            setSkillsOverrides((o) => ({ ...o, [s.id]: next }));
+                            setSkillsSaving(true);
+                            try {
+                              const ok = await patchSession({
+                                skills: { overrides: [{ id: s.id, enable: next }] },
+                              });
+                              if (!ok) {
+                                setSkillsOverrides((o) => {
+                                  const copy = { ...o };
+                                  if (prev === undefined) delete copy[s.id];
+                                  else copy[s.id] = prev;
+                                  return copy;
+                                });
+                              }
+                            } finally {
+                              setSkillsSaving(false);
+                            }
+                          }}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="bg-white px-3 py-6 text-center text-sm text-zinc-500">
+                  No skills
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!session || skillsDefaultsSaving}
+                onClick={() =>
+                  saveSelectedSessionDefaults(
+                    { model: false, mcp: false, skills: true },
+                    setSkillsDefaultsSaving,
+                    "Saved current session skills as the default.",
+                  )
+                }
+              >
+                Save skills defaults
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
