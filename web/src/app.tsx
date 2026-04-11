@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
 import { api, ApiError, wsUrl } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { cn } from "./lib/utils";
@@ -55,6 +55,7 @@ type AlertItem = {
   traceId?: string;
   details?: unknown;
   autoCloseMs?: number;
+  level?: "success" | "error";
 };
 
 type ProviderDraft = {
@@ -187,12 +188,20 @@ function AlertStack({
   if (!items.length) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex w-[min(560px,calc(100vw-24px))] flex-col gap-3">
+    <div className="fixed bottom-6 right-6 z-[1000] flex w-[min(560px,calc(100vw-24px))] flex-col gap-3">
       {items.map((a) => (
-        <Alert key={a.id} variant="destructive" className="shadow-lg">
+        <Alert
+          key={a.id}
+          variant={a.level === "success" ? "success" : "destructive"}
+          className="shadow-lg"
+        >
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+              {a.level === "success" ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+              )}
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-zinc-900">
                   {a.title}
@@ -1043,6 +1052,7 @@ export default function App() {
         err.details != null ? err.details : err.bodyText ? { raw_body: err.bodyText } : undefined;
       pushAlert({
         id: newAlertId("api"),
+        level: "error",
         title: "Request failed",
         subtitle,
         message: err.message,
@@ -1053,6 +1063,7 @@ export default function App() {
       const message = err instanceof Error ? err.message : String(err);
       pushAlert({
         id: newAlertId("ui"),
+        level: "error",
         title: "Unexpected error",
         message,
       });
@@ -1088,6 +1099,7 @@ export default function App() {
 
     pushAlert({
       id: newAlertId("mermaid"),
+      level: "error",
       title: "Mermaid error",
       message: "Mermaid diagram failed to render.",
       details: { key: key || undefined, error: info.message },
@@ -1422,6 +1434,7 @@ export default function App() {
       if (step) subtitleParts.push(`step: ${step}`);
       pushAlert({
         id: newAlertId("run"),
+        level: "error",
         title: "Run failed",
         subtitle: subtitleParts.join(" • "),
         message,
@@ -1866,6 +1879,7 @@ export default function App() {
       await api.putConfig({ yaml: configYaml });
       pushAlert({
         id: newAlertId("config"),
+        level: "success",
         title: "Saved",
         message: "Config updated.",
         autoCloseMs: 2500,
@@ -1949,11 +1963,11 @@ export default function App() {
     const apiKey = newProviderApiKey.trim();
 
     if (!id) {
-      pushAlert({ id: newAlertId("cfg"), title: "Invalid provider", message: "Provider id is required." });
+      pushAlert({ id: newAlertId("cfg"), level: "error", title: "Invalid provider", message: "Provider id is required." });
       return;
     }
     if (!baseUrl) {
-      pushAlert({ id: newAlertId("cfg"), title: "Invalid provider", message: "Base URL is required." });
+      pushAlert({ id: newAlertId("cfg"), level: "error", title: "Invalid provider", message: "Base URL is required." });
       return;
     }
 
@@ -1989,7 +2003,7 @@ export default function App() {
     if (!p) return;
     const baseUrl = p.baseUrl.trim();
     if (!baseUrl) {
-      pushAlert({ id: newAlertId("cfg"), title: "Invalid provider", message: "Base URL is required." });
+      pushAlert({ id: newAlertId("cfg"), level: "error", title: "Invalid provider", message: "Base URL is required." });
       return;
     }
     const models = normalizeModels(p.models);
@@ -2068,6 +2082,7 @@ export default function App() {
     if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
       pushAlert({
         id: newAlertId("cfg"),
+        level: "error",
         title: "Invalid value",
         message: `${label} must be a positive integer.`,
         autoCloseMs: 4000,
@@ -2123,6 +2138,7 @@ export default function App() {
       await refreshAfterConfigChange();
       pushAlert({
         id: newAlertId("defaults"),
+        level: "success",
         title: "Saved",
         message,
         autoCloseMs: 3000,
@@ -3621,10 +3637,16 @@ export default function App() {
             {skillsLoadErrors.length ? (
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 <div className="font-medium">Some skills failed to load</div>
-                <div className="mt-1 space-y-1">
+                <div className="mt-1 max-h-[180px] space-y-2 overflow-auto pr-1">
                   {skillsLoadErrors.slice(0, 6).map((e) => (
-                    <div key={`${e.id}:${e.path}`} className="truncate" title={e.error}>
-                      <span className="font-mono">{e.id}</span>: {e.error}
+                    <div key={`${e.id}:${e.path}`} className="rounded-md border border-amber-200 bg-white/70 px-2 py-1">
+                      <div className="font-mono text-xs text-amber-900">{e.id}</div>
+                      <div className="mt-0.5 break-all font-mono text-[11px] text-amber-700">
+                        {e.path}
+                      </div>
+                      <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] text-amber-900">
+                        {e.error}
+                      </div>
                     </div>
                   ))}
                   {skillsLoadErrors.length > 6 ? (

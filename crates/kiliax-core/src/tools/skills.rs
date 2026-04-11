@@ -121,7 +121,11 @@ pub fn discover_skills(workspace_root: &Path) -> SkillDiscovery {
                     errors.push(SkillDiscoveryError {
                         id: id.clone(),
                         path: md.clone(),
-                        error: err.to_string(),
+                        error: match &err {
+                            SkillError::Io(e) => e.to_string(),
+                            SkillError::ParseFrontMatter { source, .. } => source.to_string(),
+                            SkillError::InvalidFrontMatter { reason, .. } => reason.clone(),
+                        },
                     });
                     continue;
                 }

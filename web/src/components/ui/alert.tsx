@@ -7,6 +7,7 @@ const alertVariants = cva("relative w-full rounded-lg border p-4", {
   variants: {
     variant: {
       default: "border-zinc-200 bg-white text-zinc-900",
+      success: "border-emerald-200 bg-white text-zinc-900",
       destructive: "border-red-200 bg-white text-zinc-900",
     },
   },
