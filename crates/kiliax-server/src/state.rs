@@ -578,14 +578,17 @@ impl ServerState {
         };
 
         if workspace_root.trim().is_empty() {
-            return Ok(api::SkillListResponse { items: Vec::new() });
+            return Ok(api::SkillListResponse {
+                items: Vec::new(),
+                errors: Vec::new(),
+            });
         }
         let root = PathBuf::from(workspace_root.trim());
 
-        let skills =
-            kiliax_core::tools::skills::discover_skills(&root).map_err(ApiError::internal_error)?;
+        let discovered = kiliax_core::tools::skills::discover_skills(&root);
         Ok(api::SkillListResponse {
-            items: skills
+            items: discovered
+                .items
                 .into_iter()
                 .map(|s| api::SkillSummary {
                     id: s.id,
@@ -593,19 +596,37 @@ impl ServerState {
                     description: s.description,
                 })
                 .collect(),
+            errors: discovered
+                .errors
+                .into_iter()
+                .map(|e| api::SkillLoadError {
+                    id: e.id,
+                    path: e.path.display().to_string(),
+                    error: e.error,
+                })
+                .collect(),
         })
     }
 
     pub async fn list_global_skills(&self) -> Result<api::SkillListResponse, ApiError> {
-        let skills = kiliax_core::tools::skills::discover_skills(&self.workspace_root)
-            .map_err(ApiError::internal_error)?;
+        let discovered = kiliax_core::tools::skills::discover_skills(&self.workspace_root);
         Ok(api::SkillListResponse {
-            items: skills
+            items: discovered
+                .items
                 .into_iter()
                 .map(|s| api::SkillSummary {
                     id: s.id,
                     name: s.name,
                     description: s.description,
+                })
+                .collect(),
+            errors: discovered
+                .errors
+                .into_iter()
+                .map(|e| api::SkillLoadError {
+                    id: e.id,
+                    path: e.path.display().to_string(),
+                    error: e.error,
                 })
                 .collect(),
         })
@@ -3496,16 +3517,15 @@ async fn build_preamble(
         })
         .with_model_id(model_id.to_string())
         .with_workspace_root(workspace_root);
-    if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
-        let filtered = skills.into_iter().filter(|s| {
-            skills_config
-                .overrides
-                .get(&s.id)
-                .copied()
-                .unwrap_or(skills_config.default_enable)
-        });
-        builder = builder.add_skills(filtered);
-    }
+    let discovered = kiliax_core::tools::skills::discover_skills(workspace_root);
+    let filtered = discovered.items.into_iter().filter(|s| {
+        skills_config
+            .overrides
+            .get(&s.id)
+            .copied()
+            .unwrap_or(skills_config.default_enable)
+    });
+    builder = builder.add_skills(filtered);
     builder.build()
 }
 

@@ -12,6 +12,7 @@ import type {
   Message,
   Session,
   SessionSummary,
+  SkillLoadError,
   SkillSummary,
   ToolCall,
 } from "./lib/types";
@@ -883,6 +884,7 @@ export default function App() {
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [skillsDefaultEnable, setSkillsDefaultEnable] = useState(true);
   const [skillsOverrides, setSkillsOverrides] = useState<Record<string, boolean>>({});
+  const [skillsLoadErrors, setSkillsLoadErrors] = useState<SkillLoadError[]>([]);
   const [skillsSaving, setSkillsSaving] = useState(false);
   const [skillsDefaultsSaving, setSkillsDefaultsSaving] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
@@ -1738,6 +1740,7 @@ export default function App() {
         ? await api.listSkills(selectedId)
         : await api.listGlobalSkills();
       setSkills(skillsRes.items);
+      setSkillsLoadErrors(skillsRes.errors ?? []);
 
       const activeSkillsSettings = selectedId
         ? (session?.settings.skills ?? selectedSummary?.settings.skills)
@@ -3615,6 +3618,23 @@ export default function App() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
+            {skillsLoadErrors.length ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <div className="font-medium">Some skills failed to load</div>
+                <div className="mt-1 space-y-1">
+                  {skillsLoadErrors.slice(0, 6).map((e) => (
+                    <div key={`${e.id}:${e.path}`} className="truncate" title={e.error}>
+                      <span className="font-mono">{e.id}</span>: {e.error}
+                    </div>
+                  ))}
+                  {skillsLoadErrors.length > 6 ? (
+                    <div className="text-amber-700">
+                      +{skillsLoadErrors.length - 6} more…
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             <label className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2">
               <div className="text-sm text-zinc-900">Enable by default</div>
               <input

@@ -2031,16 +2031,15 @@ async fn build_preamble(
         })
         .with_model_id(model_id.to_string())
         .with_workspace_root(workspace_root);
-    if let Ok(skills) = kiliax_core::tools::skills::discover_skills(workspace_root) {
-        let filtered = skills.into_iter().filter(|s| {
-            skills_config
-                .overrides
-                .get(&s.id)
-                .copied()
-                .unwrap_or(skills_config.default_enable)
-        });
-        builder = builder.add_skills(filtered);
-    }
+    let discovered = kiliax_core::tools::skills::discover_skills(workspace_root);
+    let filtered = discovered.items.into_iter().filter(|s| {
+        skills_config
+            .overrides
+            .get(&s.id)
+            .copied()
+            .unwrap_or(skills_config.default_enable)
+    });
+    builder = builder.add_skills(filtered);
     builder.build()
 }
 

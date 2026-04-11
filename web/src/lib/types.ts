@@ -188,6 +188,13 @@ export interface SkillSummary {
 
 export interface SkillListResponse {
   items: SkillSummary[];
+  errors: SkillLoadError[];
+}
+
+export interface SkillLoadError {
+  id: string;
+  path: string;
+  error: string;
 }
 
 export interface FsEntry {

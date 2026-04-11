@@ -99,9 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .with_model_id(model_id)
                 .with_workspace_root(&workspace_root);
-            if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
-                builder = builder.add_skills(skills);
-            }
+            let discovered = tools::skills::discover_skills(&workspace_root);
+            builder = builder.add_skills(discovered.items);
             let msgs = builder.push_user(prompt).build();
 
             let s = store

@@ -306,16 +306,15 @@ async fn main() -> Result<()> {
                 })
                 .with_model_id(model_id.clone())
                 .with_workspace_root(&workspace_root);
-            if let Ok(skills) = tools::skills::discover_skills(&workspace_root) {
-                let cfg = &loaded.config.skills;
-                let filtered = skills.into_iter().filter(|s| {
-                    cfg.overrides
-                        .get(&s.id)
-                        .copied()
-                        .unwrap_or(cfg.default_enable)
-                });
-                builder = builder.add_skills(filtered);
-            }
+            let discovered = tools::skills::discover_skills(&workspace_root);
+            let cfg = &loaded.config.skills;
+            let filtered = discovered.items.into_iter().filter(|s| {
+                cfg.overrides
+                    .get(&s.id)
+                    .copied()
+                    .unwrap_or(cfg.default_enable)
+            });
+            builder = builder.add_skills(filtered);
             let messages = builder.build();
             let mut session = store
                 .create(

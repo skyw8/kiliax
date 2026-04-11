@@ -401,6 +401,8 @@ pub struct ConfigSkillsPatchRequest {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SkillListResponse {
     pub items: Vec<SkillSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<SkillLoadError>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -409,6 +411,13 @@ pub struct SkillSummary {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SkillLoadError {
+    pub id: String,
+    pub path: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

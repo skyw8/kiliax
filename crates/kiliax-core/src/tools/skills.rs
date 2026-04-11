@@ -7,6 +7,20 @@ use serde::{Deserialize, Serialize};
 use crate::telemetry;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDiscoveryError {
+    pub id: String,
+    pub path: PathBuf,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDiscovery {
+    pub items: Vec<Skill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<SkillDiscoveryError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Skill {
     /// Stable identifier derived from the directory name.
     pub id: String,
@@ -34,7 +48,7 @@ pub enum SkillError {
     InvalidFrontMatter { path: PathBuf, reason: String },
 }
 
-pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> {
+pub fn discover_skills(workspace_root: &Path) -> SkillDiscovery {
     let roots = skill_roots(workspace_root);
     let started = Instant::now();
     let span = tracing::info_span!(
@@ -47,13 +61,36 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
     let _enter = span.enter();
 
     let mut out: BTreeMap<String, Skill> = BTreeMap::new();
+    let mut errors: Vec<SkillDiscoveryError> = Vec::new();
 
     for root in roots {
         if !root.is_dir() {
             continue;
         }
-        for entry in std::fs::read_dir(&root)? {
-            let entry = entry?;
+        let rd = match std::fs::read_dir(&root) {
+            Ok(v) => v,
+            Err(err) => {
+                errors.push(SkillDiscoveryError {
+                    id: "<root>".to_string(),
+                    path: root.clone(),
+                    error: err.to_string(),
+                });
+                continue;
+            }
+        };
+
+        for entry in rd {
+            let entry = match entry {
+                Ok(v) => v,
+                Err(err) => {
+                    errors.push(SkillDiscoveryError {
+                        id: "<entry>".to_string(),
+                        path: root.clone(),
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -66,9 +103,29 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
             if !md.is_file() {
                 continue;
             }
-            let raw = std::fs::read_to_string(&md)?;
+            let raw = match std::fs::read_to_string(&md) {
+                Ok(v) => v,
+                Err(err) => {
+                    errors.push(SkillDiscoveryError {
+                        id: id.clone(),
+                        path: md.clone(),
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
 
-            let parsed = parse_skill_markdown(&md, &raw)?;
+            let parsed = match parse_skill_markdown(&md, &raw) {
+                Ok(v) => v,
+                Err(err) => {
+                    errors.push(SkillDiscoveryError {
+                        id: id.clone(),
+                        path: md.clone(),
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
             let mut name = parsed
                 .front_matter
                 .name
@@ -109,7 +166,10 @@ pub fn discover_skills(workspace_root: &Path) -> Result<Vec<Skill>, SkillError> 
     span.record("skills.discovered", skills.len() as u64);
     span.record("skills.duration_ms", started.elapsed().as_millis() as u64);
     telemetry::metrics::record_skills_discovered(skills.len());
-    Ok(skills)
+    SkillDiscovery {
+        items: skills,
+        errors,
+    }
 }
 
 pub fn skill_roots(workspace_root: &Path) -> Vec<PathBuf> {
@@ -257,6 +317,32 @@ mod tests {
         assert_eq!(parsed.front_matter.description.as_deref(), Some("Hello"));
         assert!(parsed.content.starts_with("# Title"));
         assert!(!parsed.content.contains("name: Demo"));
+    }
+
+    #[test]
+    fn discover_skips_invalid_skills_and_reports_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let skills_dir = root.join("skills");
+
+        let good_id = "zz_test_good_skill";
+        let good_dir = skills_dir.join(good_id);
+        std::fs::create_dir_all(&good_dir).unwrap();
+        std::fs::write(good_dir.join("SKILL.md"), "---\nname: Good\n---\n# Good\n").unwrap();
+
+        let bad_id = "zz_test_bad_skill";
+        let bad_dir = skills_dir.join(bad_id);
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        std::fs::write(
+            bad_dir.join("SKILL.md"),
+            "---\nname: Bad\ndescription: foo: bar\n---\n# Bad\n",
+        )
+        .unwrap();
+
+        let discovered = discover_skills(root);
+        assert!(discovered.items.iter().any(|s| s.id == good_id));
+        assert!(!discovered.items.iter().any(|s| s.id == bad_id));
+        assert!(discovered.errors.iter().any(|e| e.id == bad_id));
     }
 
     #[test]
