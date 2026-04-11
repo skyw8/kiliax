@@ -32,6 +32,7 @@ export interface SessionSettings {
 
 export interface SessionSaveDefaultsRequest {
   model: boolean;
+  agent?: boolean;
   mcp: boolean;
   skills?: boolean;
 }

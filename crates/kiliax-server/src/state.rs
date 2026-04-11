@@ -1201,6 +1201,17 @@ impl ServerState {
             next.default_model = Some(settings.model_id.clone());
         }
 
+        if req.agent {
+            let profile = AgentProfile::from_name(&settings.agent).ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    ApiErrorCode::AgentNotSupported,
+                    "agent not supported",
+                )
+            })?;
+            next.default_agent = Some(profile.name.to_string());
+        }
+
         if req.mcp {
             let by_id: HashMap<&str, bool> = settings
                 .mcp
@@ -1561,6 +1572,14 @@ fn default_settings(
 ) -> Result<api::SessionSettings, ApiError> {
     let agent = meta
         .and_then(|m| AgentProfile::from_name(&m.agent))
+        .or_else(|| {
+            config
+                .default_agent
+                .as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .and_then(AgentProfile::from_name)
+        })
         .unwrap_or_else(AgentProfile::general)
         .name
         .to_string();

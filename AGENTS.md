@@ -23,7 +23,7 @@ minimal
 ### crates/kiliax-core (core library)
 
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
-- Config + model routing: `crates/kiliax-core/src/config.rs`
+- Config + model/agent defaults + routing: `crates/kiliax-core/src/config.rs`
 - OpenAI-compatible client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-core/src/llm.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`

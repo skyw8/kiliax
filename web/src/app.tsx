@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Bookmark, CheckCircle2, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
 import { api, ApiError, wsUrl } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { cn } from "./lib/utils";
@@ -1455,9 +1455,19 @@ export default function App() {
     }
   }
 
+  function inheritedModelIdForNewSession(): string | undefined {
+    const v = (
+      session?.settings?.model_id ??
+      selectedSummary?.settings?.model_id ??
+      ""
+    ).trim();
+    return v ? v : undefined;
+  }
+
   async function onNewSession() {
     try {
-      const s = await api.createSession();
+      const modelId = inheritedModelIdForNewSession();
+      const s = await api.createSession(modelId ? { settings: { model_id: modelId } } : undefined);
       await refreshSessions();
       selectSession(s.id);
     } catch (err) {
@@ -1467,7 +1477,10 @@ export default function App() {
 
   async function onNewSessionInWorkspace(workspaceRoot: string) {
     try {
-      const s = await api.createSession({ settings: { workspace_root: workspaceRoot } });
+      const modelId = inheritedModelIdForNewSession();
+      const s = await api.createSession({
+        settings: { workspace_root: workspaceRoot, model_id: modelId },
+      });
       await refreshSessions();
       selectSession(s.id);
     } catch (err) {
@@ -1500,7 +1513,10 @@ export default function App() {
     if (!trimmed) return;
     setWorkspaceCreateSaving(true);
     try {
-      const s = await api.createSession({ settings: { workspace_root: trimmed } });
+      const modelId = inheritedModelIdForNewSession();
+      const s = await api.createSession({
+        settings: { workspace_root: trimmed, model_id: modelId },
+      });
       await refreshSessions();
       setWorkspaceCreateOpen(false);
       setWorkspacePickerPath("");
@@ -2127,7 +2143,7 @@ export default function App() {
   }
 
   async function saveSelectedSessionDefaults(
-    req: { model: boolean; mcp: boolean; skills?: boolean },
+    req: { model: boolean; agent?: boolean; mcp: boolean; skills?: boolean },
     onSaving: (saving: boolean) => void,
     message: string,
   ) {
@@ -2785,18 +2801,21 @@ export default function App() {
                 </select>
 
                 <Button
-                  variant="outline"
-                  size="sm"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
                   disabled={modelDefaultsSaving}
+                  title="Set agent & model defaults for new sessions"
+                  aria-label="Set agent & model defaults for new sessions"
                   onClick={() =>
                     saveSelectedSessionDefaults(
-                      { model: true, mcp: false },
+                      { model: true, agent: true, mcp: false },
                       setModelDefaultsSaving,
-                      "Saved current session model as the default.",
+                      "Saved current session agent and model as the defaults for new sessions.",
                     )
                   }
                 >
-                  Save model default
+                  <Bookmark className="h-4 w-4 text-violet-600" />
                 </Button>
 
                 <div className="flex max-w-[420px] items-center gap-2 rounded-md px-2 py-1">

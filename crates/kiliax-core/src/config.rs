@@ -333,6 +333,9 @@ pub struct Config {
     #[serde(default)]
     pub default_model: Option<String>,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
+
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
 
@@ -490,6 +493,9 @@ struct ConfigFile {
     pub default_model: Option<String>,
 
     #[serde(default)]
+    pub default_agent: Option<String>,
+
+    #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
 
     #[serde(default)]
@@ -637,6 +643,7 @@ pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
 fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
     let ConfigFile {
         default_model,
+        default_agent,
         mut providers,
         server,
         otel,
@@ -668,6 +675,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
 
     Ok(Config {
         default_model,
+        default_agent,
         providers,
         server,
         otel,

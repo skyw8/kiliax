@@ -133,6 +133,8 @@ pub struct SessionSettingsPatch {
 #[serde(deny_unknown_fields)]
 pub struct SessionSaveDefaultsRequest {
     pub model: bool,
+    #[serde(default)]
+    pub agent: bool,
     pub mcp: bool,
     #[serde(default)]
     pub skills: bool,

@@ -1309,6 +1309,7 @@ mcp:
             Method::PATCH,
             &format!("/v1/sessions/{session_id}/settings"),
             serde_json::json!({
+                "agent": "plan",
                 "model_id": "test/new-model",
                 "mcp": { "servers": [{ "id": "demo", "enable": true }] }
             }),
@@ -1339,7 +1340,7 @@ mcp:
         .oneshot(req_json(
             Method::POST,
             &format!("/v1/sessions/{session_id}/settings/save-defaults"),
-            serde_json::json!({ "model": true, "mcp": true }),
+            serde_json::json!({ "model": true, "agent": true, "mcp": true }),
         ))
         .await
         .expect("oneshot");
@@ -1360,6 +1361,12 @@ mcp:
     );
     assert_eq!(
         body.get("config")
+            .and_then(|cfg| cfg.get("default_agent"))
+            .and_then(|v| v.as_str()),
+        Some("plan")
+    );
+    assert_eq!(
+        body.get("config")
             .and_then(|cfg| cfg.get("mcp"))
             .and_then(|mcp| mcp.get("servers"))
             .and_then(|servers| servers.as_array())
@@ -1376,6 +1383,12 @@ mcp:
         .expect("oneshot");
     let (status, body) = read_json(resp).await;
     assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        body.get("settings")
+            .and_then(|s| s.get("agent"))
+            .and_then(|v| v.as_str()),
+        Some("plan")
+    );
     assert_eq!(
         body.get("settings")
             .and_then(|s| s.get("model_id"))
