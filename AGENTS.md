@@ -17,6 +17,10 @@ minimal
 - [async-openai](https://github.com/64bit/async-openai) openai compatible API
 - [ratatui](https://github.com/ratatui/ratatui) TUI
 
+- react
+- shadcn
+- bun
+- vite
 
 ## arch
 
@@ -53,7 +57,7 @@ minimal
 ### web (React UI)
 
 - Main UI (responsive layout + WS streaming/session actions/settings): `web/src/app.tsx`
-- UI primitives (Dialog/Button/Input/etc): `web/src/components/ui/`
+- UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + explicit session default persistence: `web/src/lib/api.ts`
 - Types (includes message `usage` and session default writes): `web/src/lib/types.ts`

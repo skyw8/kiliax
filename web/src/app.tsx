@@ -17,6 +17,7 @@ import type {
   ToolCall,
 } from "./lib/types";
 import { Alert } from "./components/ui/alert";
+import { ActionSheet } from "./components/ui/action-sheet";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { CodeBlock } from "./components/code-block";
@@ -30,6 +31,7 @@ import {
 } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { Separator } from "./components/ui/separator";
+import { Sheet, SheetClose, SheetContent } from "./components/ui/sheet";
 import { Textarea } from "./components/ui/textarea";
 
 type PendingMessage = {
@@ -136,6 +138,31 @@ function monotonicNowMs(): number {
 function isOverlaySidebarViewport(): boolean {
   if (typeof window === "undefined") return false;
   return window.matchMedia?.("(max-width: 767px)")?.matches ?? false;
+}
+
+function useOverlaySidebarViewport(): boolean {
+  const [matches, setMatches] = useState<boolean>(() => isOverlaySidebarViewport());
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia?.("(max-width: 767px)");
+    if (!mq) return;
+
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", onChange);
+      return () => mq.removeEventListener("change", onChange);
+    }
+    // Safari < 14
+    // eslint-disable-next-line deprecation/deprecation
+    mq.addListener(onChange);
+    // eslint-disable-next-line deprecation/deprecation
+    return () => mq.removeListener(onChange);
+  }, []);
+
+  return matches;
 }
 
 function fmtDurationCompact(durationMs: number): string {
@@ -303,12 +330,13 @@ function savePinnedWorkspaceRoots(roots: string[]) {
 }
 
 function loadSidebarOpen(): boolean {
+  if (isOverlaySidebarViewport()) return false;
   try {
     const raw = localStorage.getItem(SIDEBAR_OPEN_KEY);
-    if (!raw) return !isOverlaySidebarViewport();
+    if (!raw) return true;
     return raw !== "0" && raw !== "false";
   } catch {
-    return !isOverlaySidebarViewport();
+    return true;
   }
 }
 
@@ -645,7 +673,7 @@ function MessageRow({
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     return (
       <div className="group flex justify-end">
-        <div className={`${bubbleWidth} relative rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}>
+        <div className={`${bubbleWidth} relative whitespace-pre-wrap break-words rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}>
           <div className="absolute right-full top-2 flex items-center gap-1 pr-2 invisible opacity-0 transition-opacity group-hover:visible group-hover:opacity-100">
             <button
               type="button"
@@ -883,6 +911,7 @@ export default function App() {
   const [workspacesVisible, setWorkspacesVisible] = useState<number>(LIST_PAGE_SIZE);
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, boolean>>({});
   const route = useRoute();
+  const isNarrowViewport = useOverlaySidebarViewport();
   const selectedId = route.name === "session" ? route.sessionId : null;
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -949,6 +978,9 @@ export default function App() {
     x: number;
     y: number;
   } | null>(null);
+  const [sessionActionSheet, setSessionActionSheet] = useState<{
+    sessionId: string;
+  } | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [deleteConfirm, setDeleteConfirm] = useState<{
@@ -967,6 +999,9 @@ export default function App() {
     workspaceRoot: string;
     x: number;
     y: number;
+  } | null>(null);
+  const [workspaceActionSheet, setWorkspaceActionSheet] = useState<{
+    workspaceRoot: string;
   } | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -1122,6 +1157,29 @@ export default function App() {
     setAlerts((prev) => pruneAlerts([...prev, alert]));
   }
 
+  async function copyWithToast(value: string, label: string) {
+    const text = (value ?? "").trim();
+    if (!text) return;
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      pushAlert({
+        id: newAlertId("copy"),
+        level: "success",
+        title: "Copied",
+        message: `${label} copied to clipboard.`,
+        autoCloseMs: 1600,
+      });
+      return;
+    }
+    pushAlert({
+      id: newAlertId("copy"),
+      level: "error",
+      title: "Copy failed",
+      message: "Clipboard access was blocked by the browser.",
+      autoCloseMs: 4000,
+    });
+  }
+
   function handleMermaidError(info: MermaidErrorInfo) {
     const key = (info.key ?? "").trim();
     if (key && seenMermaidAlertKeysRef.current.has(key)) return;
@@ -1201,13 +1259,34 @@ export default function App() {
 
   function selectSession(sessionId: string) {
     navigate(hrefToSession(sessionId));
-    if (isOverlaySidebarViewport()) setSidebarOpen(false);
+    if (isNarrowViewport) setSidebarOpen(false);
   }
 
   function openSessionMenuAt(sessionId: string, anchor: DOMRect) {
+    if (isNarrowViewport) {
+      setSessionActionSheet((prev) => {
+        if (prev?.sessionId === sessionId) return null;
+        return { sessionId };
+      });
+      return;
+    }
     setSessionMenu((prev) => {
       if (prev?.sessionId === sessionId) return null;
       return { sessionId, x: anchor.right, y: anchor.bottom };
+    });
+  }
+
+  function openWorkspaceMenuAt(workspaceRoot: string, anchor: DOMRect) {
+    if (isNarrowViewport) {
+      setWorkspaceActionSheet((prev) => {
+        if (prev?.workspaceRoot === workspaceRoot) return null;
+        return { workspaceRoot };
+      });
+      return;
+    }
+    setWorkspaceMenu((prev) => {
+      if (prev?.workspaceRoot === workspaceRoot) return null;
+      return { workspaceRoot, x: anchor.right, y: anchor.bottom };
     });
   }
 
@@ -1795,6 +1874,7 @@ export default function App() {
   }
 
   async function openSkills() {
+    if (isNarrowViewport) setSidebarOpen(false);
     try {
       const skillsRes = selectedId
         ? await api.listSkills(selectedId)
@@ -1882,6 +1962,7 @@ export default function App() {
   }
 
   async function openSettings() {
+    if (isNarrowViewport) setSidebarOpen(false);
     setSettingsLoading(true);
     try {
       setProvidersPaneSelection("");
@@ -1912,6 +1993,7 @@ export default function App() {
   }
 
   async function openMcp() {
+    if (isNarrowViewport) setSidebarOpen(false);
     if (selectedId) {
       await fetchSession(selectedId);
     } else {
@@ -2301,8 +2383,9 @@ export default function App() {
   }, [pinnedWorkspaceRoots]);
 
   useEffect(() => {
+    if (isNarrowViewport) return;
     saveSidebarOpen(sidebarOpen);
-  }, [sidebarOpen]);
+  }, [sidebarOpen, isNarrowViewport]);
 
   useEffect(() => {
     saveSidebarSectionOpen(WORKSPACES_OPEN_KEY, workspacesPaneOpen);
@@ -2363,6 +2446,16 @@ export default function App() {
       return next.length === prev.length ? prev : next;
     });
   }, [workspaceGroups]);
+
+  useEffect(() => {
+    if (isNarrowViewport) {
+      setSessionMenu(null);
+      setWorkspaceMenu(null);
+      return;
+    }
+    setSessionActionSheet(null);
+    setWorkspaceActionSheet(null);
+  }, [isNarrowViewport]);
 
   useEffect(() => {
     if (!sessionMenu) return;
@@ -2534,278 +2627,268 @@ export default function App() {
     );
   }
 
+  const sessionActionSheetSummary = sessionActionSheet
+    ? sortedSessions.find((s) => s.id === sessionActionSheet.sessionId) ?? null
+    : null;
+  const sessionActionSheetLabel =
+    sessionActionSheetSummary?.title ??
+    sessionActionSheetSummary?.id ??
+    sessionActionSheet?.sessionId ??
+    "";
+  const workspaceActionSheetLabel = workspaceActionSheet?.workspaceRoot
+    ? workspaceDisplayName(workspaceActionSheet.workspaceRoot)
+    : "";
+
+  const sidebarPaneTopPadding = isNarrowViewport ? "pt-2" : "pt-3";
+  const sidebarPane = (
+    <div className="flex h-full flex-col">
+      {isNarrowViewport ? (
+        <div className="flex items-center justify-between px-3 pt-3">
+          <div className="text-xs font-semibold text-zinc-700">Menu</div>
+          <SheetClose asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              aria-label="Close sidebar"
+              title="Close sidebar"
+            >
+              <X className="h-4 w-4 text-zinc-600" />
+            </Button>
+          </SheetClose>
+        </div>
+      ) : null}
+
+      <div className={cn("space-y-1 p-3", sidebarPaneTopPadding)}>
+        <Button variant="ghost" className="w-full justify-start gap-2" onClick={onNewSession}>
+          <Plus className="h-4 w-4 text-violet-600" />
+          New Session
+        </Button>
+        <Button variant="ghost" className="w-full justify-start gap-2" onClick={openSkills}>
+          <Sparkles className="h-4 w-4 text-amber-600" />
+          Skills
+        </Button>
+        <Button variant="ghost" className="w-full justify-start gap-2" onClick={openMcp}>
+          <Plug className="h-4 w-4 text-emerald-600" />
+          MCP
+        </Button>
+      </div>
+
+      <Separator />
+
+      <div className="min-h-0 flex-1 p-2">
+        <div className="flex h-full flex-col gap-2">
+          <div className="flex items-center justify-between px-2">
+            <button
+              className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-700"
+              onClick={() => setWorkspacesPaneOpen((v) => !v)}
+            >
+              {workspacesPaneOpen ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+              Workspaces
+            </button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              aria-label="Add workspace folder"
+              onClick={() => {
+                setWorkspacePickerPath("");
+                setWorkspaceCreateOpen(true);
+              }}
+            >
+              <FolderPlus className="h-4 w-4 text-violet-600" />
+            </Button>
+          </div>
+
+          {workspacesPaneOpen ? (
+            <div className="min-h-0 flex-1 overflow-auto px-1">
+              <div className="space-y-1">
+                {visibleWorkspaceGroups.map((g) => {
+                  const expanded = Boolean(expandedWorkspaces[g.root]);
+                  const pinnedWorkspace = pinnedWorkspaceRoots.includes(g.root);
+                  return (
+                    <div key={g.root} className="rounded-md">
+                      <div className="group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-white/70">
+                        <button
+                          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                          onClick={() =>
+                            setExpandedWorkspaces((prev) => ({
+                              ...prev,
+                              [g.root]: !Boolean(prev[g.root]),
+                            }))
+                          }
+                        >
+                          {expanded ? (
+                            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                          ) : (
+                            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                          )}
+                          {pinnedWorkspace ? (
+                            <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
+                          ) : null}
+                          <div className="min-w-0 truncate text-xs font-medium text-zinc-800" title={g.root}>
+                            {workspaceBasename(g.root)}
+                          </div>
+                          <div className="shrink-0 text-[10px] text-zinc-500">({g.sessions.length})</div>
+                        </button>
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          aria-label="Workspace actions"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                            openWorkspaceMenuAt(g.root, rect);
+                          }}
+                        >
+                          <MoreHorizontal className="h-4 w-4 text-zinc-500" />
+                        </Button>
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          aria-label="New session in workspace"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onNewSessionInWorkspace(g.root);
+                          }}
+                        >
+                          <Plus className="h-4 w-4 text-violet-600" />
+                        </Button>
+                      </div>
+
+                      {expanded ? (
+                        <div className="mt-1 space-y-1 pl-5">
+                          {g.sessions.map((s) => {
+                            const active = s.id === selectedId;
+                            const pinned = pinnedSessionIds.includes(s.id);
+                            return (
+                              <SessionItemRow
+                                key={s.id}
+                                summary={s}
+                                active={active}
+                                pinned={pinned}
+                                onSelect={() => selectSession(s.id)}
+                                onOpenMenu={openSessionMenuAt}
+                              />
+                            );
+                          })}
+                          {!g.sessions.length ? (
+                            <div className="px-2 py-2 text-xs text-zinc-500">No sessions</div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+
+                {canLoadMoreWorkspaces ? (
+                  <div className="px-2 py-2">
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-center text-xs"
+                      onClick={() => setWorkspacesVisible((v) => v + LIST_PAGE_SIZE)}
+                    >
+                      Load more
+                    </Button>
+                  </div>
+                ) : null}
+
+                {!workspaceGroups.length ? (
+                  <div className="px-2 py-6 text-center text-sm text-zinc-500">No workspaces</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          <Separator />
+
+          <div className="flex items-center justify-between gap-2 px-2">
+            <button
+              className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-700"
+              onClick={() => setSessionsPaneOpen((v) => !v)}
+            >
+              {sessionsPaneOpen ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+              Sessions
+            </button>
+          </div>
+
+          {sessionsPaneOpen ? (
+            <div className="min-h-0 flex-1 overflow-auto px-1">
+              <div className="space-y-1">
+                {visibleSessions.map((s) => {
+                  const active = s.id === selectedId;
+                  const pinned = pinnedSessionIds.includes(s.id);
+                  return (
+                    <SessionItemRow
+                      key={s.id}
+                      summary={s}
+                      active={active}
+                      pinned={pinned}
+                      onSelect={() => selectSession(s.id)}
+                      onOpenMenu={openSessionMenuAt}
+                    />
+                  );
+                })}
+
+                {canLoadMoreSessions ? (
+                  <div className="px-2 py-2">
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-center text-xs"
+                      onClick={() => setSessionsVisible((v) => v + LIST_PAGE_SIZE)}
+                    >
+                      Load more
+                    </Button>
+                  </div>
+                ) : null}
+                {!tmpSessions.length ? (
+                  <div className="px-2 py-6 text-center text-sm text-zinc-500">No sessions</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <Separator />
+
+      <div className="p-3">
+        <Button variant="ghost" className="w-full justify-start gap-2" onClick={openSettings}>
+          <Settings className="h-4 w-4 text-blue-600" />
+          Settings
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="h-dvh w-full bg-zinc-50 text-zinc-900">
       <AlertStack items={alerts} onClose={closeAlert} />
       <div className="flex h-full overflow-hidden">
-        {sidebarOpen ? (
-          <>
-            <div
-              className="fixed inset-0 z-40 bg-black/20 md:hidden"
-              aria-hidden="true"
-              onClick={() => setSidebarOpen(false)}
-            />
-            <aside className="fixed inset-y-0 left-0 z-50 flex w-[min(320px,85vw)] flex-col border-r border-zinc-200 bg-zinc-50 shadow-lg md:static md:z-auto md:w-[280px] md:shadow-none">
-              <div className="flex items-center justify-between px-3 pt-3 md:hidden">
-                <div className="text-xs font-semibold text-zinc-700">Menu</div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  aria-label="Close sidebar"
-                  title="Close sidebar"
-                  onClick={() => setSidebarOpen(false)}
-                >
-                  <X className="h-4 w-4 text-zinc-600" />
-                </Button>
-              </div>
-              <div className="space-y-1 p-3 pt-2 md:pt-3">
-              <Button variant="ghost" className="w-full justify-start gap-2" onClick={onNewSession}>
-                <Plus className="h-4 w-4 text-violet-600" />
-                New Session
-              </Button>
-              <Button
-                variant="ghost"
-                className="w-full justify-start gap-2"
-                onClick={openSkills}
-              >
-                <Sparkles className="h-4 w-4 text-amber-600" />
-                Skills
-              </Button>
-              <Button
-                variant="ghost"
-                className="w-full justify-start gap-2"
-                onClick={openMcp}
-              >
-                <Plug className="h-4 w-4 text-emerald-600" />
-                MCP
-              </Button>
-            </div>
-
-            <Separator />
-
-            <div className="min-h-0 flex-1 p-2">
-              <div className="flex h-full flex-col gap-2">
-                <div className="flex items-center justify-between px-2">
-                  <button
-                    className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-700"
-                    onClick={() => setWorkspacesPaneOpen((v) => !v)}
-                  >
-                    {workspacesPaneOpen ? (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    )}
-                    Workspaces
-                  </button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    aria-label="Add workspace folder"
-                    onClick={() => {
-                      setWorkspacePickerPath("");
-                      setWorkspaceCreateOpen(true);
-                    }}
-                  >
-                    <FolderPlus className="h-4 w-4 text-violet-600" />
-                  </Button>
-                </div>
-
-                {workspacesPaneOpen ? (
-                  <div className="min-h-0 flex-1 overflow-auto px-1">
-                    <div className="space-y-1">
-                      {visibleWorkspaceGroups.map((g) => {
-                        const expanded = Boolean(expandedWorkspaces[g.root]);
-                        const pinnedWorkspace = pinnedWorkspaceRoots.includes(g.root);
-                        return (
-                          <div key={g.root} className="rounded-md">
-                            <div className="group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-white/70">
-                              <button
-                                className="flex min-w-0 flex-1 items-center gap-1 text-left"
-                                onClick={() =>
-                                  setExpandedWorkspaces((prev) => ({
-                                    ...prev,
-                                    [g.root]: !Boolean(prev[g.root]),
-                                  }))
-                                }
-                              >
-                                {expanded ? (
-                                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-                                ) : (
-                                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-                                )}
-                                {pinnedWorkspace ? (
-                                  <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" />
-                                ) : null}
-                                <div
-                                  className="min-w-0 truncate text-xs font-medium text-zinc-800"
-                                  title={g.root}
-                                >
-                                  {workspaceBasename(g.root)}
-                                </div>
-                                <div className="shrink-0 text-[10px] text-zinc-500">
-                                  ({g.sessions.length})
-                                </div>
-                              </button>
-
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                aria-label="Workspace actions"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  const rect = (
-                                    e.currentTarget as HTMLButtonElement
-                                  ).getBoundingClientRect();
-                                  setWorkspaceMenu((prev) => {
-                                    if (prev?.workspaceRoot === g.root) return null;
-                                    return { workspaceRoot: g.root, x: rect.right, y: rect.bottom };
-                                  });
-                                }}
-                              >
-                                <MoreHorizontal className="h-4 w-4 text-zinc-500" />
-                              </Button>
-
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                aria-label="New session in workspace"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  onNewSessionInWorkspace(g.root);
-                                }}
-                              >
-                                <Plus className="h-4 w-4 text-violet-600" />
-                              </Button>
-                            </div>
-
-	                            {expanded ? (
-	                              <div className="mt-1 space-y-1 pl-5">
-	                                {g.sessions.map((s) => {
-	                                  const active = s.id === selectedId;
-	                                  const pinned = pinnedSessionIds.includes(s.id);
-	                                  return (
-	                                    <SessionItemRow
-	                                      key={s.id}
-	                                      summary={s}
-	                                      active={active}
-	                                      pinned={pinned}
-	                                      onSelect={() => selectSession(s.id)}
-	                                      onOpenMenu={openSessionMenuAt}
-	                                    />
-	                                  );
-	                                })}
-	                                {!g.sessions.length ? (
-	                                  <div className="px-2 py-2 text-xs text-zinc-500">
-	                                    No sessions
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-
-                      {canLoadMoreWorkspaces ? (
-                        <div className="px-2 py-2">
-                          <Button
-                            variant="ghost"
-                            className="w-full justify-center text-xs"
-                            onClick={() =>
-                              setWorkspacesVisible((v) => v + LIST_PAGE_SIZE)
-                            }
-                          >
-                            Load more
-                          </Button>
-                        </div>
-                      ) : null}
-
-                      {!workspaceGroups.length ? (
-                        <div className="px-2 py-6 text-center text-sm text-zinc-500">
-                          No workspaces
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-
-                <Separator />
-
-                <div className="flex items-center justify-between gap-2 px-2">
-                  <button
-                    className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-700"
-                    onClick={() => setSessionsPaneOpen((v) => !v)}
-                  >
-                    {sessionsPaneOpen ? (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    )}
-                    Sessions
-                  </button>
-                </div>
-
-                {sessionsPaneOpen ? (
-                  <div className="min-h-0 flex-1 overflow-auto px-1">
-                    <div className="space-y-1">
-	                      {visibleSessions.map((s) => {
-	                        const active = s.id === selectedId;
-	                        const pinned = pinnedSessionIds.includes(s.id);
-	                        return (
-	                          <SessionItemRow
-	                            key={s.id}
-	                            summary={s}
-	                            active={active}
-	                            pinned={pinned}
-	                            onSelect={() => selectSession(s.id)}
-	                            onOpenMenu={openSessionMenuAt}
-	                          />
-	                        );
-	                      })}
-
-                      {canLoadMoreSessions ? (
-                        <div className="px-2 py-2">
-                          <Button
-                            variant="ghost"
-                            className="w-full justify-center text-xs"
-                            onClick={() =>
-                              setSessionsVisible((v) => v + LIST_PAGE_SIZE)
-                            }
-                          >
-                            Load more
-                          </Button>
-                        </div>
-                      ) : null}
-                      {!tmpSessions.length ? (
-                        <div className="px-2 py-6 text-center text-sm text-zinc-500">
-                          No sessions
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <Separator />
-
-            <div className="p-3">
-              <Button
-                variant="ghost"
-                className="w-full justify-start gap-2"
-                onClick={openSettings}
-              >
-                <Settings className="h-4 w-4 text-blue-600" />
-                Settings
-              </Button>
-            </div>
+        {isNarrowViewport ? (
+          <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+            <SheetContent side="left" showClose={false} className="border-r border-zinc-200 bg-zinc-50">
+              {sidebarPane}
+            </SheetContent>
+          </Sheet>
+        ) : sidebarOpen ? (
+          <aside className="flex w-[280px] flex-col border-r border-zinc-200 bg-zinc-50">
+            {sidebarPane}
           </aside>
-          </>
         ) : null}
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -2835,9 +2918,14 @@ export default function App() {
                     <Badge variant="idle">idle</Badge>
                   )}
                   {session ? (
-                    <span className="truncate">
+                    <button
+                      type="button"
+                      className="truncate hover:text-zinc-800 active:opacity-80"
+                      title={session.settings.model_id}
+                      onClick={() => copyWithToast(session.settings.model_id, "Model id")}
+                    >
                       {session.settings.agent} · {modelLabel(session.settings.model_id)}
-                    </span>
+                    </button>
                   ) : null}
                 </div>
               </div>
@@ -2902,12 +2990,16 @@ export default function App() {
                     <span className="hidden shrink-0 text-xs text-zinc-600 sm:inline">
                       workspace
                     </span>
-                    <span
-                      className="min-w-0 truncate font-mono text-xs text-zinc-800"
+                    <button
+                      type="button"
+                      className="min-w-0 truncate font-mono text-xs text-zinc-800 hover:text-zinc-900 active:opacity-80"
                       title={session.settings.workspace_root ?? ""}
+                      onClick={() =>
+                        copyWithToast(session.settings.workspace_root ?? "", "Workspace path")
+                      }
                     >
                       {workspaceDisplayName(session.settings.workspace_root ?? "")}
-                    </span>
+                    </button>
                   </div>
 
                   <Button
@@ -3080,7 +3172,7 @@ export default function App() {
             </div>
           ) : null}
 
-          <div className="border-t border-zinc-200 bg-white px-3 py-3 sm:px-4">
+          <div className="border-t border-zinc-200 bg-white px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
             <div className="mx-auto w-full max-w-4xl">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <div className="flex min-w-0 flex-1 items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
@@ -3170,7 +3262,7 @@ export default function App() {
       </div>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="w-[min(1080px,calc(100vw-24px))] max-w-none">
+        <DialogContent className="md:w-[min(1080px,calc(100vw-24px))] md:max-w-none">
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
             <DialogDescription className="truncate">
@@ -3928,7 +4020,106 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {sessionMenu ? (
+      {isNarrowViewport ? (
+        <ActionSheet
+          open={Boolean(sessionActionSheet)}
+          onOpenChange={(open) => !open && setSessionActionSheet(null)}
+          title="Session actions"
+          description={sessionActionSheetLabel}
+        >
+          <div className="space-y-2">
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
+              onClick={() => {
+                const id = sessionActionSheet?.sessionId;
+                if (!id) return;
+                setSessionActionSheet(null);
+                forkSessionCopy(id);
+              }}
+            >
+              <GitFork className="h-5 w-5 text-violet-600" />
+              Fork
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
+              onClick={() => {
+                const id = sessionActionSheet?.sessionId;
+                if (!id) return;
+                togglePinnedSession(id);
+                setSessionActionSheet(null);
+              }}
+            >
+              <Pin className="h-5 w-5 text-violet-600" />
+              {sessionActionSheet?.sessionId && pinnedSessionIds.includes(sessionActionSheet.sessionId)
+                ? "Unpin"
+                : "Pin"}
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 rounded-md border border-rose-200 bg-white px-3 py-3 text-left text-base text-rose-700 active:opacity-80"
+              onClick={() => {
+                const id = sessionActionSheet?.sessionId;
+                if (!id) return;
+                setDeleteConfirm({ sessionId: id });
+                setSessionActionSheet(null);
+              }}
+            >
+              <Trash2 className="h-5 w-5" />
+              Delete
+            </button>
+            <Button variant="outline" className="w-full" onClick={() => setSessionActionSheet(null)}>
+              Cancel
+            </Button>
+          </div>
+        </ActionSheet>
+      ) : null}
+
+      {isNarrowViewport ? (
+        <ActionSheet
+          open={Boolean(workspaceActionSheet)}
+          onOpenChange={(open) => !open && setWorkspaceActionSheet(null)}
+          title="Workspace actions"
+          description={workspaceActionSheetLabel}
+        >
+          <div className="space-y-2">
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
+              onClick={() => {
+                const root = workspaceActionSheet?.workspaceRoot;
+                if (!root) return;
+                togglePinnedWorkspace(root);
+                setWorkspaceActionSheet(null);
+              }}
+            >
+              <Pin className="h-5 w-5 text-violet-600" />
+              {workspaceActionSheet?.workspaceRoot && pinnedWorkspaceRoots.includes(workspaceActionSheet.workspaceRoot)
+                ? "Unpin"
+                : "Pin"}
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 rounded-md border border-rose-200 bg-white px-3 py-3 text-left text-base text-rose-700 active:opacity-80"
+              onClick={() => {
+                const root = workspaceActionSheet?.workspaceRoot;
+                if (!root) return;
+                setWorkspaceDeleteConfirm({ workspaceRoot: root });
+                setWorkspaceActionSheet(null);
+              }}
+            >
+              <Trash2 className="h-5 w-5" />
+              Delete
+            </button>
+            <Button variant="outline" className="w-full" onClick={() => setWorkspaceActionSheet(null)}>
+              Cancel
+            </Button>
+          </div>
+        </ActionSheet>
+      ) : null}
+
+      {sessionMenu && !isNarrowViewport ? (
         <div
           ref={sessionMenuRef}
           style={{ left: sessionMenu.x, top: sessionMenu.y }}
@@ -3969,7 +4160,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {workspaceMenu ? (
+      {workspaceMenu && !isNarrowViewport ? (
         <div
           ref={workspaceMenuRef}
           style={{ left: workspaceMenu.x, top: workspaceMenu.y }}

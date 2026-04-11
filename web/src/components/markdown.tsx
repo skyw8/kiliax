@@ -695,7 +695,7 @@ export function Markdown({
     [deferMermaid, messageId, onMermaidError],
   );
   return (
-    <div className={cn("space-y-2 leading-relaxed", className)}>
+    <div className={cn("space-y-2 break-words leading-relaxed", className)}>
       {blocks.map((b, idx) => renderBlock(b, `b:${idx}`, opts))}
     </div>
   );
