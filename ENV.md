@@ -12,11 +12,16 @@ isig icanon iexten echo echoe echok -echonl -noflsh -xcase -tostop -echoprt echo
 echoke -flusho -extproc
 ```
 
+```
+echo $TERM
+xterm-256color
+```
+
 
 VSCode WSL2 ubuntu terminal
 
 ```
-(base) skywo@skyw:~/github/kiliax$ stty -a
+stty -a
 speed 38400 baud; rows 55; columns 89; line = 0;
 intr = ^C; quit = ^\; erase = ^?; kill = ^U; eof = ^D; eol = M-^?; eol2 = M-^?;
 swtch = <undef>; start = ^Q; stop = ^S; susp = ^Z; rprnt = ^R; werase = ^W; lnext = ^V;
@@ -27,6 +32,9 @@ ixany imaxbel iutf8
 opost -oluc -ocrnl onlcr -onocr -onlret -ofill -ofdel nl0 cr0 tab0 bs0 vt0 ff0
 isig icanon iexten echo echoe echok -echonl -noflsh -xcase -tostop -echoprt echoctl
 echoke -flusho -extproc
-(base) skywo@skyw:~/github/kiliax$ echo $TERM
+```
+
+```
+echo $TERM
 xterm-256color
 ```

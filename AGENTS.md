@@ -93,7 +93,7 @@ Subsequent modifications must remain consistent:
 
 ## dev ENV
 
-[tui env](./ENV.md)
+[tui env](./ENV.md)  to check stty and $TERM
 
 ## ATTENTION
 
