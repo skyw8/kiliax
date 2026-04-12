@@ -3173,88 +3173,86 @@ export default function App() {
           ) : null}
 
           <div className="border-t border-zinc-200 bg-white px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
-            <div className="mx-auto w-full max-w-4xl">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
-                  <Textarea
-                    ref={composerRef}
-                    value={composerText}
-                    onChange={(e) => setComposerText(e.target.value)}
-                    placeholder="Ask anything…"
-                    className="min-h-[44px] max-h-[240px] min-w-0 flex-1 resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        onSend();
+            <div className="relative mx-auto w-full max-w-4xl">
+              <div className="flex min-w-0 items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
+                <Textarea
+                  ref={composerRef}
+                  value={composerText}
+                  onChange={(e) => setComposerText(e.target.value)}
+                  placeholder="Ask anything…"
+                  className="min-h-[44px] max-h-[240px] min-w-0 flex-1 resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      onSend();
+                    }
+                  }}
+                />
+
+                {showInterrupt ? (
+                  <Button
+                    size="icon"
+                    aria-label="Interrupt"
+                    className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
+                    onClick={async () => {
+                      if (!cancellableRunId) return;
+                      try {
+                        await api.cancelRun(cancellableRunId);
+                        await refreshSessions();
+                      } catch (err) {
+                        handleApiError(err);
                       }
                     }}
-                  />
+                  >
+                    <Square className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    size="icon"
+                    aria-label="Send"
+                    onClick={onSend}
+                    disabled={!composerHasText}
+                    className="shrink-0 rounded-full"
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
 
-                  {showInterrupt ? (
-                    <Button
-                      size="icon"
-                      aria-label="Interrupt"
-                      className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
-                      onClick={async () => {
-                        if (!cancellableRunId) return;
-                        try {
-                          await api.cancelRun(cancellableRunId);
-                          await refreshSessions();
-                        } catch (err) {
-                          handleApiError(err);
-                        }
-                      }}
-                    >
-                      <Square className="h-4 w-4" />
-                    </Button>
-                  ) : (
-                    <Button
-                      size="icon"
-                      aria-label="Send"
-                      onClick={onSend}
-                      disabled={!composerHasText}
-                      className="shrink-0 rounded-full"
-                    >
-                      <ArrowUp className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1 self-end rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm sm:self-auto">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9"
-                    aria-label="Open workspace in VS Code"
-                    title="Open workspace in VS Code"
-                    disabled={!session}
-                    onClick={() => openWorkspace("vscode")}
-                  >
-                    <Code className="h-4 w-4 text-blue-600" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9"
-                    aria-label="Open workspace in file manager"
-                    title="Open workspace in file manager"
-                    disabled={!session}
-                    onClick={() => openWorkspace("file_manager")}
-                  >
-                    <FolderOpen className="h-4 w-4 text-violet-600" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9"
-                    aria-label="Open workspace in terminal"
-                    title="Open workspace in terminal"
-                    disabled={!session}
-                    onClick={() => openWorkspace("terminal")}
-                  >
-                    <Terminal className="h-4 w-4 text-emerald-600" />
-                  </Button>
-                </div>
+              <div className="absolute left-full top-1/2 hidden -translate-y-1/2 translate-x-2 items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm xl:flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label="Open workspace in VS Code"
+                  title="Open workspace in VS Code"
+                  disabled={!session}
+                  onClick={() => openWorkspace("vscode")}
+                >
+                  <Code className="h-4 w-4 text-blue-600" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label="Open workspace in file manager"
+                  title="Open workspace in file manager"
+                  disabled={!session}
+                  onClick={() => openWorkspace("file_manager")}
+                >
+                  <FolderOpen className="h-4 w-4 text-violet-600" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label="Open workspace in terminal"
+                  title="Open workspace in terminal"
+                  disabled={!session}
+                  onClick={() => openWorkspace("terminal")}
+                >
+                  <Terminal className="h-4 w-4 text-emerald-600" />
+                </Button>
               </div>
             </div>
           </div>
