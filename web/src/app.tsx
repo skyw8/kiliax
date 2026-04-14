@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle2, ChevronDown
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, fmtTokenUsage, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, stringifyUnknown, useOverlaySidebarViewport } from "./lib/app-utils";
+import { loadPinnedSessionIds, loadPinnedWorkspaceRoots, loadSidebarOpen, loadSessionsPaneOpen, loadWorkspacesPaneOpen, savePinnedSessionIds, savePinnedWorkspaceRoots, saveSidebarOpen, saveSessionsPaneOpen, saveWorkspacesPaneOpen } from "./lib/preferences";
 import { useWsEvents } from "./lib/use-ws-events";
 import { cn } from "./lib/utils";
 import type {
@@ -71,11 +72,6 @@ type ProviderDraft = {
   modelDraft: string;
 };
 
-const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
-const PINNED_WORKSPACES_KEY = "kiliax:pinned_workspace_roots";
-const SIDEBAR_OPEN_KEY = "kiliax:sidebar_open";
-const WORKSPACES_OPEN_KEY = "kiliax:sidebar_workspaces_open";
-const SESSIONS_OPEN_KEY = "kiliax:sidebar_sessions_open";
 const LIST_PAGE_SIZE = 6;
 const PROVIDERS_PANE_DEFAULT_MODEL = "__default_model__";
 const PROVIDERS_PANE_NEW_PROVIDER = "__new_provider__";
@@ -149,83 +145,6 @@ function AlertStack({
       ))}
     </div>
   );
-}
-
-function loadPinnedSessionIds(): string[] {
-  try {
-    const raw = localStorage.getItem(PINNED_SESSIONS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((v) => typeof v === "string");
-  } catch {
-    return [];
-  }
-}
-
-function savePinnedSessionIds(ids: string[]) {
-  try {
-    localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(ids));
-  } catch {
-    // ignore
-  }
-}
-
-function loadPinnedWorkspaceRoots(): string[] {
-  try {
-    const raw = localStorage.getItem(PINNED_WORKSPACES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((v) => typeof v === "string");
-  } catch {
-    return [];
-  }
-}
-
-function savePinnedWorkspaceRoots(roots: string[]) {
-  try {
-    localStorage.setItem(PINNED_WORKSPACES_KEY, JSON.stringify(roots));
-  } catch {
-    // ignore
-  }
-}
-
-function loadSidebarOpen(): boolean {
-  if (isOverlaySidebarViewport()) return false;
-  try {
-    const raw = localStorage.getItem(SIDEBAR_OPEN_KEY);
-    if (!raw) return true;
-    return raw !== "0" && raw !== "false";
-  } catch {
-    return true;
-  }
-}
-
-function saveSidebarOpen(open: boolean) {
-  try {
-    localStorage.setItem(SIDEBAR_OPEN_KEY, open ? "1" : "0");
-  } catch {
-    // ignore
-  }
-}
-
-function loadSidebarSectionOpen(key: string, defaultValue = true): boolean {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return defaultValue;
-    return raw !== "0" && raw !== "false";
-  } catch {
-    return defaultValue;
-  }
-}
-
-function saveSidebarSectionOpen(key: string, open: boolean) {
-  try {
-    localStorage.setItem(key, open ? "1" : "0");
-  } catch {
-    // ignore
-  }
 }
 
 function statusBadge(summary: SessionSummary): {
@@ -764,10 +683,10 @@ export default function App() {
   );
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => loadSidebarOpen());
   const [workspacesPaneOpen, setWorkspacesPaneOpen] = useState<boolean>(() =>
-    loadSidebarSectionOpen(WORKSPACES_OPEN_KEY, true),
+    loadWorkspacesPaneOpen(true),
   );
   const [sessionsPaneOpen, setSessionsPaneOpen] = useState<boolean>(() =>
-    loadSidebarSectionOpen(SESSIONS_OPEN_KEY, true),
+    loadSessionsPaneOpen(true),
   );
   const [sessionsVisible, setSessionsVisible] = useState<number>(LIST_PAGE_SIZE);
   const [workspacesVisible, setWorkspacesVisible] = useState<number>(LIST_PAGE_SIZE);
@@ -2195,11 +2114,11 @@ export default function App() {
   }, [sidebarOpen, isNarrowViewport]);
 
   useEffect(() => {
-    saveSidebarSectionOpen(WORKSPACES_OPEN_KEY, workspacesPaneOpen);
+    saveWorkspacesPaneOpen(workspacesPaneOpen);
   }, [workspacesPaneOpen]);
 
   useEffect(() => {
-    saveSidebarSectionOpen(SESSIONS_OPEN_KEY, sessionsPaneOpen);
+    saveSessionsPaneOpen(sessionsPaneOpen);
   }, [sessionsPaneOpen]);
 
   useEffect(() => {
