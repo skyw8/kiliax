@@ -45,7 +45,7 @@ minimal
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/session actions: `crates/kiliax-server/src/http/`
-- State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state.rs`
+- State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Infra (path validation/tmp workspace helpers/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes message `usage` and session default writes): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
