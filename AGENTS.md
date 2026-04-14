@@ -40,7 +40,7 @@ minimal
 ### crates/kiliax-cli (TUI)
 
 - UI + event loop + slash commands + session bootstrap: `crates/kiliax-cli/src/main.rs`
-- App state + render pipeline + session-local settings changes: `crates/kiliax-cli/src/app.rs`
+- App state + render pipeline + session-local settings changes: `crates/kiliax-cli/src/app/`
 - Terminal init + backend: `crates/kiliax-cli/src/terminal.rs`
 - Server daemon control: `crates/kiliax-cli/src/daemon.rs`
 
