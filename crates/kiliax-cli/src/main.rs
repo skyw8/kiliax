@@ -10,6 +10,7 @@ mod markdown;
 mod mcp_picker;
 mod model_picker;
 mod slash_command;
+mod server_run_args;
 mod style;
 mod terminal;
 mod ui;
@@ -154,10 +155,10 @@ async fn main() -> Result<()> {
             }
             Some("run") => {
                 if args.iter().any(|a| a == "-h" || a == "--help") {
-                    kiliax_server::runner::print_run_help();
+                    server_run_args::print_run_help();
                     return Ok(());
                 }
-                let opts = kiliax_server::runner::parse_run_args(&args[2..]);
+                let opts = server_run_args::parse_run_args(&args[2..]);
                 kiliax_server::runner::run_server(opts).await?;
             }
             Some("stop") => match daemon::stop().await? {
