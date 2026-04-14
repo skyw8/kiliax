@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod config;
 pub mod llm;
+pub mod paths;
 pub mod prompt;
 pub mod protocol;
 pub mod runtime;

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use kiliax_core::paths::PathError;
 use kiliax_core::session::SessionId;
 use tokio::process::Command;
 
@@ -29,34 +30,18 @@ pub(crate) fn is_tmp_workspace_root(root: &Path) -> Result<bool, ApiError> {
     Ok(name.starts_with("tmp_"))
 }
 
-fn expand_tilde(path: &str) -> Result<PathBuf, ApiError> {
-    let trimmed = path.trim();
-    if trimmed == "~" {
-        return dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"));
-    }
-    let Some(rest) = trimmed.strip_prefix("~/") else {
-        return Ok(PathBuf::from(trimmed));
-    };
-    let home = dirs::home_dir().ok_or_else(|| ApiError::internal("failed to resolve home dir"))?;
-    Ok(home.join(rest))
-}
-
 pub(crate) fn validate_client_workspace_root(input: &str) -> Result<PathBuf, ApiError> {
-    let candidate = expand_tilde(input)?;
-    if !candidate.is_absolute() {
-        return Err(ApiError::invalid_argument(
+    match kiliax_core::paths::validate_absolute_path(input) {
+        Ok(p) => Ok(p),
+        Err(PathError::HomeDirUnavailable) => Err(ApiError::internal("failed to resolve home dir")),
+        Err(PathError::NotAbsolute) => Err(ApiError::invalid_argument(
             "workspace_root must be an absolute path",
-        ));
+        )),
+        Err(PathError::ContainsParentDir) => Err(ApiError::invalid_argument(
+            "workspace_root must not contain `..`",
+        )),
+        Err(other) => Err(ApiError::internal_error(other)),
     }
-    for c in candidate.components() {
-        if matches!(c, std::path::Component::ParentDir) {
-            return Err(ApiError::invalid_argument(
-                "workspace_root must not contain `..`",
-            ));
-        }
-    }
-
-    Ok(candidate)
 }
 
 pub(crate) fn validate_client_extra_workspace_roots(
@@ -73,25 +58,38 @@ pub(crate) fn validate_client_extra_workspace_roots(
         if trimmed.is_empty() {
             continue;
         }
-        let candidate = validate_client_workspace_root(trimmed)?;
-        let meta = std::fs::metadata(&candidate).map_err(|_| {
-            ApiError::invalid_argument(format!(
-                "extra workspace root not found: {}",
-                candidate.display()
-            ))
-        })?;
-        if !meta.is_dir() {
-            return Err(ApiError::invalid_argument(format!(
-                "extra workspace root must be a directory: {}",
-                candidate.display()
-            )));
-        }
-        let canonical = std::fs::canonicalize(&candidate).map_err(|_| {
-            ApiError::invalid_argument(format!(
-                "extra workspace root not accessible: {}",
-                candidate.display()
-            ))
-        })?;
+        let canonical = match kiliax_core::paths::validate_existing_dir(trimmed) {
+            Ok(p) => p,
+            Err(PathError::HomeDirUnavailable) => {
+                return Err(ApiError::internal("failed to resolve home dir"))
+            }
+            Err(PathError::NotAbsolute) => {
+                return Err(ApiError::invalid_argument(
+                    "extra workspace root must be an absolute path",
+                ))
+            }
+            Err(PathError::ContainsParentDir) => {
+                return Err(ApiError::invalid_argument(
+                    "extra workspace root must not contain `..`",
+                ))
+            }
+            Err(PathError::NotFound { path }) => {
+                return Err(ApiError::invalid_argument(format!(
+                    "extra workspace root not found: {path}"
+                )))
+            }
+            Err(PathError::NotDir { path }) => {
+                return Err(ApiError::invalid_argument(format!(
+                    "extra workspace root must be a directory: {path}"
+                )))
+            }
+            Err(PathError::NotAccessible { path }) => {
+                return Err(ApiError::invalid_argument(format!(
+                    "extra workspace root not accessible: {path}"
+                )))
+            }
+            Err(other) => return Err(ApiError::internal_error(other)),
+        };
         if canonical == workspace_root {
             continue;
         }

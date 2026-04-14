@@ -28,6 +28,7 @@ minimal
 
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
 - Config + model/agent defaults + routing: `crates/kiliax-core/src/config.rs`
+- Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
 - Protocol types (messages/tool-calls/usage): `crates/kiliax-core/src/protocol.rs`
 - OpenAI-compatible client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-core/src/llm.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`

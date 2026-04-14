@@ -2663,35 +2663,8 @@ fn render_dir_list_lines(workspace_root: &PathBuf, extra_roots: &[PathBuf]) -> V
     out
 }
 
-fn expand_tilde_path(path: &str) -> Result<PathBuf> {
-    let trimmed = path.trim();
-    if trimmed == "~" {
-        return dirs::home_dir().ok_or_else(|| anyhow::anyhow!("failed to resolve home dir"));
-    }
-    let Some(rest) = trimmed.strip_prefix("~/") else {
-        return Ok(PathBuf::from(trimmed));
-    };
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("failed to resolve home dir"))?;
-    Ok(home.join(rest))
-}
-
 fn validate_extra_workspace_root(input: &str) -> Result<PathBuf> {
-    let candidate = expand_tilde_path(input)?;
-    if !candidate.is_absolute() {
-        anyhow::bail!("dir must be an absolute path");
-    }
-    if candidate
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        anyhow::bail!("dir must not contain `..`");
-    }
-    let meta = std::fs::metadata(&candidate)
-        .map_err(|_| anyhow::anyhow!("dir not found: {}", candidate.display()))?;
-    if !meta.is_dir() {
-        anyhow::bail!("dir must be a directory: {}", candidate.display());
-    }
-    Ok(std::fs::canonicalize(&candidate).unwrap_or(candidate))
+    kiliax_core::paths::validate_existing_dir(input).map_err(|err| anyhow::anyhow!(err))
 }
 
 fn render_error_lines(text: &str) -> Vec<Line<'static>> {
