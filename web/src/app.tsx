@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Bookmark, CheckCircle2, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Terminal, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Star, Terminal, Trash2, X } from "lucide-react";
 import { api, ApiError, wsUrl } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { cn } from "./lib/utils";
@@ -2983,7 +2983,7 @@ export default function App() {
                       )
                     }
                   >
-                    <Bookmark className="h-4 w-4 text-violet-600" />
+                    <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
                   </Button>
 
                   <div className="flex min-w-0 max-w-full items-center gap-2 rounded-md px-2 py-1 lg:max-w-[420px]">
