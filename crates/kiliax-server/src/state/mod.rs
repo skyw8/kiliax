@@ -390,23 +390,17 @@ fn config_with_mcp_overrides(
     servers: &[api::McpServerSetting],
 ) -> Result<Config, ApiError> {
     let mut cfg = base.clone();
-    let known: HashSet<&str> = base.mcp.servers.iter().map(|s| s.name.as_str()).collect();
-    let mut map: HashMap<String, bool> = HashMap::new();
-    for s in servers {
-        if !known.contains(s.id.as_str()) {
-            return Err(ApiError::new(
-                StatusCode::NOT_FOUND,
-                ApiErrorCode::McpServerNotFound,
-                format!("mcp server not found: {}", s.id),
-            ));
-        }
-        map.insert(s.id.clone(), s.enable);
-    }
-    for server in &mut cfg.mcp.servers {
-        if let Some(enable) = map.get(&server.name) {
-            server.enable = *enable;
-        }
-    }
+    kiliax_core::mcp_overrides::apply_mcp_enable_overrides(
+        &mut cfg,
+        servers.iter().map(|s| (s.id.as_str(), s.enable)),
+    )
+    .map_err(|err| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            ApiErrorCode::McpServerNotFound,
+            err.to_string(),
+        )
+    })?;
     Ok(cfg)
 }
 

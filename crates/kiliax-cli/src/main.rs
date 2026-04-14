@@ -23,9 +23,10 @@ use kiliax_core::{
     agents::AgentProfile,
     config,
     llm::LlmClient,
+    mcp_overrides::{config_with_session_mcp_overrides, session_mcp_servers_from_config},
     prompt::PromptBuilder,
     runtime::AgentRuntimeOptions,
-    session::{FileSessionStore, SessionId, SessionMcpServerSetting},
+    session::{FileSessionStore, SessionId},
     tools::{self, ToolEngine},
 };
 
@@ -74,37 +75,6 @@ fn print_help() {
     println!("  1) ~/.kiliax/kiliax.yaml");
     println!();
     println!("If no config is found, {bin} will write a template and exit.");
-}
-
-fn session_mcp_servers_from_config(
-    config: &kiliax_core::config::Config,
-) -> Vec<SessionMcpServerSetting> {
-    config
-        .mcp
-        .servers
-        .iter()
-        .map(|server| SessionMcpServerSetting {
-            id: server.name.clone(),
-            enable: server.enable,
-        })
-        .collect()
-}
-
-fn config_with_session_mcp_overrides(
-    base: &kiliax_core::config::Config,
-    overrides: &[SessionMcpServerSetting],
-) -> kiliax_core::config::Config {
-    let mut config = base.clone();
-    let enabled_by_id: std::collections::HashMap<&str, bool> = overrides
-        .iter()
-        .map(|server| (server.id.as_str(), server.enable))
-        .collect();
-    for server in &mut config.mcp.servers {
-        if let Some(enable) = enabled_by_id.get(server.name.as_str()) {
-            server.enable = *enable;
-        }
-    }
-    config
 }
 
 fn print_version() {
@@ -336,7 +306,7 @@ async fn main() -> Result<()> {
 
     let runtime = kiliax_core::runtime::AgentRuntime::new(llm, tool_engine);
     let session_config =
-        config_with_session_mcp_overrides(&loaded.config, &session.meta.mcp_servers);
+        config_with_session_mcp_overrides(&loaded.config, &session.meta.mcp_servers)?;
     runtime
         .tools()
         .set_config(session_config)

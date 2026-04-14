@@ -15,6 +15,7 @@ use serde::Deserialize;
 use kiliax_core::{
     agents::AgentProfile,
     config::Config,
+    mcp_overrides::{config_with_session_mcp_overrides, session_mcp_servers_from_config},
     protocol::{Message, TokenUsage, UserContentPart, UserMessageContent},
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions},
     session::{FileSessionStore, SessionMcpServerSetting, SessionState},
@@ -33,35 +34,6 @@ pub enum AppAction {
     Submitted(String),
     ModelPicked(String),
     McpToggled { server: String, enable: bool },
-}
-
-fn session_mcp_servers_from_config(config: &Config) -> Vec<SessionMcpServerSetting> {
-    config
-        .mcp
-        .servers
-        .iter()
-        .map(|server| SessionMcpServerSetting {
-            id: server.name.clone(),
-            enable: server.enable,
-        })
-        .collect()
-}
-
-fn config_with_session_mcp_overrides(
-    base: &Config,
-    overrides: &[SessionMcpServerSetting],
-) -> Config {
-    let mut config = base.clone();
-    let enabled_by_id: HashMap<&str, bool> = overrides
-        .iter()
-        .map(|server| (server.id.as_str(), server.enable))
-        .collect();
-    for server in &mut config.mcp.servers {
-        if let Some(enable) = enabled_by_id.get(server.name.as_str()) {
-            server.enable = *enable;
-        }
-    }
-    config
 }
 
 impl Default for AppAction {
@@ -561,8 +533,11 @@ impl App {
         }
     }
 
-    fn session_config(&self) -> Config {
-        config_with_session_mcp_overrides(&self.config, &self.session_mcp_servers())
+    fn session_config(&self) -> Result<Config> {
+        Ok(config_with_session_mcp_overrides(
+            &self.config,
+            &self.session_mcp_servers(),
+        )?)
     }
 
     pub fn has_user_messages(&self) -> bool {
@@ -1487,7 +1462,7 @@ impl App {
 
         let res: Result<()> = async {
             self.config.resolve_model(&model_id)?;
-            let session_config = self.session_config();
+            let session_config = self.session_config()?;
             let llm = kiliax_core::llm::LlmClient::from_config(&session_config, Some(&model_id))?
                 .with_prompt_cache_key(self.session.meta.prompt_cache_key.clone());
             let tools = self.runtime.tools().clone();
@@ -1547,7 +1522,9 @@ impl App {
             self.options = prev_options;
             self.session = prev_session;
             self.messages = prev_messages;
-            let _ = self.runtime.tools().set_config(self.session_config());
+            if let Ok(cfg) = self.session_config() {
+                let _ = self.runtime.tools().set_config(cfg);
+            }
             return Err(err);
         }
 
@@ -1604,7 +1581,7 @@ impl App {
 
         let res: Result<()> = async {
             self.session.meta.mcp_servers = next_servers;
-            let session_config = self.session_config();
+            let session_config = self.session_config()?;
             let tools = self.runtime.tools().clone();
             tools
                 .set_config(session_config)
@@ -1660,7 +1637,9 @@ impl App {
         if let Err(err) = res {
             self.session = prev_session;
             self.messages = prev_messages;
-            let _ = self.runtime.tools().set_config(self.session_config());
+            if let Ok(cfg) = self.session_config() {
+                let _ = self.runtime.tools().set_config(cfg);
+            }
             return Err(err);
         }
 
@@ -3292,7 +3271,8 @@ mod tests {
                 id: "filesystem".to_string(),
                 enable: true,
             }],
-        );
+        )
+        .unwrap();
 
         assert!(session_config
             .mcp
