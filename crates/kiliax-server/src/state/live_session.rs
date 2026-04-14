@@ -7,7 +7,7 @@ use arc_swap::ArcSwap;
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::config::Config;
-use kiliax_core::llm::{Message as CoreMessage, UserMessageContent};
+use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
 use kiliax_core::session::{FileSessionStore, SessionId, SessionState};
 use kiliax_core::tools::ToolEngine;
@@ -1417,7 +1417,7 @@ pub(super) async fn build_preamble(
 mod tests {
     use super::*;
     use kiliax_core::config::ProviderConfig;
-    use kiliax_core::llm::{Message as CoreMessage, UserMessageContent};
+    use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
     use tempfile::TempDir;
 
     fn test_config() -> Config {

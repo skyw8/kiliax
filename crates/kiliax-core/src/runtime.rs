@@ -6,9 +6,10 @@ use tracing::Instrument;
 use crate::agents::{AgentKind, AgentProfile};
 use async_openai::types::FinishReason;
 
-use crate::llm::{
-    ChatRequest, ChatStreamChunk, LlmClient, LlmError, Message, TokenUsage, ToolCall,
-    ToolCallDelta, ToolChoice,
+use crate::llm::{LlmClient, LlmError};
+use crate::protocol::{
+    ChatRequest, ChatStreamChunk, Message, TokenUsage, ToolCall, ToolCallDelta, ToolChoice,
+    ToolDefinition,
 };
 use crate::telemetry;
 use crate::tools::{policy, tool_parallelism, ToolEngine, ToolError, ToolParallelism};
@@ -347,7 +348,7 @@ impl AgentRuntime {
                         }
 
                         let mut req = ChatRequest::new(messages.clone());
-                        req.tools = tool_definitions_for(&profile, &tools, &model_id).await;
+            req.tools = tool_definitions_for(&profile, &tools, &model_id).await;
                         req.tool_choice = options.tool_choice.clone();
                         req.parallel_tool_calls = options.parallel_tool_calls;
                         req.temperature = options.temperature;
@@ -755,7 +756,7 @@ async fn tool_definitions_for(
     profile: &AgentProfile,
     tools: &ToolEngine,
     model_id: &str,
-) -> Vec<crate::llm::ToolDefinition> {
+) -> Vec<ToolDefinition> {
     policy::tool_definitions_for_agent(profile, tools, model_id).await
 }
 
@@ -1031,12 +1032,13 @@ async fn drive_stream_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::UserMessageContent;
 
     #[test]
     fn sanitize_tool_call_history_reorders_tool_messages() {
         let mut messages = vec![
             Message::User {
-                content: crate::llm::UserMessageContent::Text("hi".to_string()),
+                content: UserMessageContent::Text("hi".to_string()),
             },
             Message::Assistant {
                 content: None,
@@ -1143,7 +1145,7 @@ mod tests {
                 content: "A".to_string(),
             },
             Message::User {
-                content: crate::llm::UserMessageContent::Text("[img]".to_string()),
+                content: UserMessageContent::Text("[img]".to_string()),
             },
             Message::Tool {
                 tool_call_id: "b".to_string(),

@@ -3,8 +3,9 @@ use std::io::{self, Write};
 use kiliax_core::{
     agents::AgentProfile,
     config,
-    llm::{LlmClient, Message, UserMessageContent},
+    llm::LlmClient,
     prompt::PromptBuilder,
+    protocol::{Message, UserMessageContent},
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeOptions},
     session::{FileSessionStore, SessionId},
     tools::{self, ToolEngine},
@@ -145,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             AgentEvent::ToolResult { message } => {
                 store.record_message(&mut session, message.clone()).await?;
-                if let kiliax_core::llm::Message::Tool {
+                if let kiliax_core::protocol::Message::Tool {
                     tool_call_id,
                     content,
                 } = message

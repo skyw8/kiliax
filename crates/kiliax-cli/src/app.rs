@@ -15,7 +15,7 @@ use serde::Deserialize;
 use kiliax_core::{
     agents::AgentProfile,
     config::Config,
-    llm::{Message, TokenUsage, UserContentPart, UserMessageContent},
+    protocol::{Message, TokenUsage, UserContentPart, UserMessageContent},
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions},
     session::{FileSessionStore, SessionMcpServerSetting, SessionState},
 };
@@ -2786,7 +2786,7 @@ fn extract_patch_files(patch: &str) -> Vec<String> {
     out
 }
 
-fn classify_tool_call(call: &kiliax_core::llm::ToolCall) -> PendingToolCallKind {
+fn classify_tool_call(call: &kiliax_core::protocol::ToolCall) -> PendingToolCallKind {
     match call.name.as_str() {
         "read_file" => serde_json::from_str::<ReadFileArgs>(&call.arguments)
             .ok()

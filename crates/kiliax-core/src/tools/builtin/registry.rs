@@ -1,4 +1,4 @@
-use crate::llm::ToolDefinition;
+use crate::protocol::ToolDefinition;
 
 use super::{
     apply_patch_tool_definition, edit_file_tool_definition, grep_files_tool_definition,

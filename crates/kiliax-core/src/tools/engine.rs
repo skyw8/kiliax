@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::Instrument;
 
-use crate::llm::{Message, ToolCall, ToolDefinition};
+use crate::protocol::{Message, ToolCall, ToolDefinition};
 use crate::telemetry;
 use crate::tools::{builtin, Permissions, ToolError};
 

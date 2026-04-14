@@ -3,7 +3,8 @@ use std::io::{self, Write};
 
 use kiliax_core::{
     config,
-    llm::{ChatRequest, LlmClient, Message, ToolCallDelta, UserMessageContent},
+    llm::LlmClient,
+    protocol::{ChatRequest, Message, ToolCallDelta, UserMessageContent},
 };
 use tokio_stream::StreamExt;
 

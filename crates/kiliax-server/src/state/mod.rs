@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::config::Config;
-use kiliax_core::llm::Message as CoreMessage;
+use kiliax_core::protocol::Message as CoreMessage;
 use kiliax_core::runtime::AgentRuntimeError;
 use kiliax_core::session::{FileSessionStore, SessionError, SessionId, SessionMeta};
 use kiliax_core::tools::McpServerConnectionState;

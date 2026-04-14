@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::llm::{ToolCall, ToolDefinition};
+use crate::protocol::{ToolCall, ToolDefinition};
 use crate::tools::{Permissions, ShellPermissions, ToolError};
 
 use super::common::{parse_args, resolve_workspace_path};

@@ -1,6 +1,7 @@
 use kiliax_core::{
     config,
-    llm::{ChatRequest, LlmClient, Message, UserMessageContent},
+    llm::LlmClient,
+    protocol::{ChatRequest, Message, UserMessageContent},
 };
 
 #[tokio::main(flavor = "current_thread")]

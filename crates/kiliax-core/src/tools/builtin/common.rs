@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::llm::ToolCall;
+use crate::protocol::ToolCall;
 use crate::tools::ToolError;
 
 pub(super) fn parse_args<T: for<'de> Deserialize<'de>>(

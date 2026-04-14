@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{ToolCall, ToolDefinition};
+use crate::protocol::{ToolCall, ToolDefinition};
 use crate::tools::ToolError;
 
 use super::common::parse_args;

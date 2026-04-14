@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::config::SkillsConfig;
-use crate::llm::Message;
+use crate::protocol::Message;
 
 const SESSION_SCHEMA_VERSION: u32 = 4;
 const DEFAULT_CHECKPOINT_EVERY: u64 = 32;
@@ -760,7 +760,7 @@ mod tests {
                 None,
                 Vec::new(),
                 vec![Message::User {
-                    content: crate::llm::UserMessageContent::Text("hello".to_string()),
+                    content: crate::protocol::UserMessageContent::Text("hello".to_string()),
                 }],
             )
             .await
@@ -814,7 +814,7 @@ mod tests {
                         content: "sys".to_string(),
                     },
                     Message::User {
-                        content: crate::llm::UserMessageContent::Text("u1".to_string()),
+                        content: crate::protocol::UserMessageContent::Text("u1".to_string()),
                     },
                 ],
             )

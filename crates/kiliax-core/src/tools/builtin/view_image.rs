@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::llm::{Message, ToolCall, ToolDefinition, UserContentPart, UserMessageContent};
+use crate::protocol::{Message, ToolCall, ToolDefinition, UserContentPart, UserMessageContent};
 use crate::tools::{Permissions, ToolError};
 
 use super::common::{parse_args, resolve_read_path};

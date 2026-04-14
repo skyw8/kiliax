@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use tracing::Instrument;
 
 use crate::config::McpServerConfig;
-use crate::llm::ToolDefinition;
+use crate::protocol::ToolDefinition;
 use crate::telemetry;
 use crate::tools::ToolError;
 

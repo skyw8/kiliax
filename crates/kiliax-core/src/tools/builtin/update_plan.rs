@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::llm::{ToolCall, ToolDefinition};
+use crate::protocol::{ToolCall, ToolDefinition};
 use crate::tools::ToolError;
 
 use super::common::parse_args;

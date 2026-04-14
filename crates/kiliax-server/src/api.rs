@@ -12,8 +12,8 @@ pub struct TokenUsage {
     pub cached_tokens: Option<u32>,
 }
 
-impl From<kiliax_core::llm::TokenUsage> for TokenUsage {
-    fn from(value: kiliax_core::llm::TokenUsage) -> Self {
+impl From<kiliax_core::protocol::TokenUsage> for TokenUsage {
+    fn from(value: kiliax_core::protocol::TokenUsage) -> Self {
         Self {
             prompt_tokens: value.prompt_tokens,
             completion_tokens: value.completion_tokens,

@@ -1,5 +1,5 @@
 use crate::agents::AgentProfile;
-use crate::llm::ToolDefinition;
+use crate::protocol::ToolDefinition;
 use crate::tools::builtin::{BuiltinToolId, TOOL_APPLY_PATCH, TOOL_EDIT_FILE, TOOL_WRITE_FILE};
 use crate::tools::ToolEngine;
 

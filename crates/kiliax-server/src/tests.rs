@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
 use kiliax_core::config::{Config, ProviderConfig};
-use kiliax_core::llm::{Message, TokenUsage, UserMessageContent};
+use kiliax_core::protocol::{Message, TokenUsage, UserMessageContent};
 use kiliax_core::session::FileSessionStore;
 use kiliax_core::session::SessionId;
 use tempfile::TempDir;

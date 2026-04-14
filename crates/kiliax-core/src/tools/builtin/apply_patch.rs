@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{ToolCall, ToolDefinition};
+use crate::protocol::{ToolCall, ToolDefinition};
 use crate::tools::{Permissions, ToolError};
 
 use super::common::{parse_args, resolve_workspace_path};
@@ -757,7 +757,7 @@ fn diff_hunks(ops: &[DiffOp<'_>], change_indices: &[usize], context: usize) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::ToolCall;
+    use crate::protocol::ToolCall;
     use crate::tools::ShellPermissions;
 
     #[test]

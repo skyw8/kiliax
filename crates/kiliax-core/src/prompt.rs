@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::agents::AgentProfile;
-use crate::llm::{Message, ToolDefinition, UserMessageContent};
+use crate::protocol::{Message, ToolDefinition, UserMessageContent};
 use crate::tools::skills::Skill;
 use crate::tools::{tool_parallelism, ToolParallelism};
 

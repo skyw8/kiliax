@@ -29,7 +29,7 @@ pub use write_file::write_file_tool_definition;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::llm::ToolCall;
+use crate::protocol::ToolCall;
 use crate::tools::{Permissions, ToolError};
 
 pub const TOOL_READ_FILE: &str = "read_file";
