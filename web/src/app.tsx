@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Star, Terminal, Trash2, X } from "lucide-react";
-import { api, ApiError, wsUrl } from "./lib/api";
+import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, fmtTokenUsage, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, stringifyUnknown, useOverlaySidebarViewport } from "./lib/app-utils";
+import { useWsEvents } from "./lib/use-ws-events";
 import { cn } from "./lib/utils";
 import type {
   Capabilities,
@@ -879,9 +880,6 @@ export default function App() {
   const alertTimersRef = useRef<Record<string, number>>({});
   const seenMermaidAlertKeysRef = useRef<Set<string>>(new Set());
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const wsReconnectAttemptRef = useRef(0);
-  const wsReconnectTimerRef = useRef<number | null>(null);
   const lastEventIdRef = useRef(0);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -889,6 +887,11 @@ export default function App() {
   const selectedIdRef = useRef<string | null>(selectedId);
   const skipNextFetchRef = useRef<string | null>(null);
   const isAtBottomRef = useRef(true);
+  const wsEvents = useWsEvents({
+    onEvent: handleEvent,
+    isSessionCurrent: (id) => selectedIdRef.current === id,
+    getAfterEventId: () => lastEventIdRef.current,
+  });
 
   const sortedSessions = useMemo(
     () => sortSessions(sessions, pinnedSessionIds),
@@ -1191,68 +1194,11 @@ export default function App() {
       nextThinkingDurationMsRef.current = null;
 
       lastEventIdRef.current = s.status.last_event_id ?? 0;
-      wsReconnectAttemptRef.current = 0;
-      clearWsReconnectTimer();
-      connectWs(sessionId, lastEventIdRef.current);
+      wsEvents.resetReconnectAttempt();
+      wsEvents.connect(sessionId, lastEventIdRef.current);
     } catch (err) {
       handleApiError(err);
     }
-  }
-
-  function clearWsReconnectTimer() {
-    if (wsReconnectTimerRef.current != null) {
-      window.clearTimeout(wsReconnectTimerRef.current);
-      wsReconnectTimerRef.current = null;
-    }
-  }
-
-  function scheduleWsReconnect(sessionId: string) {
-    if (wsReconnectTimerRef.current != null) return;
-    const attempt = wsReconnectAttemptRef.current;
-    const delay = Math.min(10_000, 250 * Math.pow(2, attempt));
-    wsReconnectAttemptRef.current = Math.min(attempt + 1, 10);
-
-    wsReconnectTimerRef.current = window.setTimeout(() => {
-      wsReconnectTimerRef.current = null;
-      if (selectedIdRef.current !== sessionId) return;
-      connectWs(sessionId, lastEventIdRef.current);
-    }, delay);
-  }
-
-  function connectWs(sessionId: string, afterEventId: number) {
-    clearWsReconnectTimer();
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    const url = wsUrl(
-      `/v1/sessions/${sessionId}/events/ws?after_event_id=${afterEventId}`,
-    );
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      wsReconnectAttemptRef.current = 0;
-    };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data as string);
-        handleEvent(msg);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("ws parse error", e);
-      }
-    };
-    ws.onerror = () => {
-      // eslint-disable-next-line no-console
-      console.error("ws error");
-    };
-    ws.onclose = () => {
-      if (wsRef.current !== ws) return;
-      wsRef.current = null;
-      scheduleWsReconnect(sessionId);
-    };
   }
 
   async function handleEvent(ev: any) {
@@ -2381,12 +2327,8 @@ export default function App() {
         assistantStarted: false,
         toolCalls: [],
       });
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      clearWsReconnectTimer();
-      wsReconnectAttemptRef.current = 0;
+      wsEvents.close();
+      wsEvents.resetReconnectAttempt();
       lastEventIdRef.current = 0;
       setToolDurationsMs({});
       setAssistantDurationsMs({});
