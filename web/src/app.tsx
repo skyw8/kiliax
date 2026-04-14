@@ -4,8 +4,10 @@ import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, fmtTokenUsage, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, stringifyUnknown, useOverlaySidebarViewport } from "./lib/app-utils";
 import { loadPinnedSessionIds, loadPinnedWorkspaceRoots, loadSidebarOpen, loadSessionsPaneOpen, loadWorkspacesPaneOpen, savePinnedSessionIds, savePinnedWorkspaceRoots, saveSidebarOpen, saveSessionsPaneOpen, saveWorkspacesPaneOpen } from "./lib/preferences";
+import { statusBadge, sortSessions } from "./lib/session-utils";
 import { useWsEvents } from "./lib/use-ws-events";
 import { cn } from "./lib/utils";
+import { isTmpWorkspaceRoot, workspaceBasename, workspaceDisplayName } from "./lib/workspace-utils";
 import type {
   Capabilities,
   ConfigProviderSummary,
@@ -145,70 +147,6 @@ function AlertStack({
       ))}
     </div>
   );
-}
-
-function statusBadge(summary: SessionSummary): {
-  label: string;
-  variant: "idle" | "step" | "done" | "error";
-} {
-  const runState = summary.status.run_state;
-  if (runState === "running" || runState === "tooling") {
-    const step = summary.status.step > 0 ? summary.status.step : 1;
-    return { label: `step ${step}`, variant: "step" };
-  }
-  if (summary.last_outcome === "error") return { label: "error", variant: "error" };
-  if (summary.last_outcome === "done") return { label: "done", variant: "done" };
-  return { label: "idle", variant: "idle" };
-}
-
-function sortSessions(items: SessionSummary[], pinnedIds: string[]): SessionSummary[] {
-  const pinnedRank = new Map(pinnedIds.map((id, idx) => [id, idx]));
-  return [...items].sort((a, b) => {
-    const aPinned = pinnedRank.has(a.id);
-    const bPinned = pinnedRank.has(b.id);
-    if (aPinned !== bPinned) return aPinned ? -1 : 1;
-    if (aPinned && bPinned) {
-      return (pinnedRank.get(a.id) ?? 0) - (pinnedRank.get(b.id) ?? 0);
-    }
-
-    const aRunning =
-      a.status.run_state === "running" || a.status.run_state === "tooling";
-    const bRunning =
-      b.status.run_state === "running" || b.status.run_state === "tooling";
-    if (aRunning !== bRunning) return aRunning ? -1 : 1;
-    return b.updated_at.localeCompare(a.updated_at);
-  });
-}
-
-function normalizePathForMatch(p: string): string {
-  return (p ?? "").replaceAll("\\", "/");
-}
-
-function workspaceBasename(root: string): string {
-  const normalized = normalizePathForMatch(root).replace(/\/+$/, "");
-  if (!normalized) return root;
-  if (normalized === "/") return "/";
-  const idx = normalized.lastIndexOf("/");
-  const base = idx === -1 ? normalized : normalized.slice(idx + 1);
-  return base || normalized;
-}
-
-function isTmpWorkspaceRoot(root: string): boolean {
-  const p = normalizePathForMatch(root).toLowerCase();
-  return p.includes("/.kiliax/workspace/tmp_");
-}
-
-function middleEllipsis(text: string, headChars: number, tailChars: number): string {
-  const s = text ?? "";
-  if (s.length <= headChars + tailChars + 1) return s;
-  return `${s.slice(0, Math.max(0, headChars))}…${s.slice(Math.max(0, s.length - tailChars))}`;
-}
-
-function workspaceDisplayName(root: string): string {
-  const base = workspaceBasename(root);
-  if (!base) return base;
-  if (!isTmpWorkspaceRoot(root)) return base;
-  return middleEllipsis(base, 22, 6);
 }
 
 function renderToolCalls(
