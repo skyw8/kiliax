@@ -13,11 +13,11 @@ import type {
   Message,
   Session,
   SessionSummary,
-  SkillLoadError,
-  SkillSummary,
 } from "./lib/types";
 import { AlertStack, type AlertItem } from "./components/alert-stack";
 import { SettingsDialog } from "./components/settings-dialog";
+import { SkillsDialog } from "./components/skills-dialog";
+import { McpDialog } from "./components/mcp-dialog";
 import { ActionSheet } from "./components/ui/action-sheet";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -99,15 +99,7 @@ export default function App() {
   const [editSaving, setEditSaving] = useState(false);
 
   const [skillsOpen, setSkillsOpen] = useState(false);
-  const [skills, setSkills] = useState<SkillSummary[]>([]);
-  const [skillsDefaultEnable, setSkillsDefaultEnable] = useState(true);
-  const [skillsOverrides, setSkillsOverrides] = useState<Record<string, boolean>>({});
-  const [skillsLoadErrors, setSkillsLoadErrors] = useState<SkillLoadError[]>([]);
-  const [skillsSaving, setSkillsSaving] = useState(false);
-  const [skillsDefaultsSaving, setSkillsDefaultsSaving] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
-  const [mcpSaving, setMcpSaving] = useState(false);
-  const [mcpDefaultsSaving, setMcpDefaultsSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelDefaultsSaving, setModelDefaultsSaving] = useState(false);
 
@@ -931,29 +923,9 @@ export default function App() {
     });
   }
 
-  async function openSkills() {
+  function openSkills() {
     if (isNarrowViewport) setSidebarOpen(false);
-    try {
-      const skillsRes = selectedId
-        ? await api.listSkills(selectedId)
-        : await api.listGlobalSkills();
-      setSkills(skillsRes.items);
-      setSkillsLoadErrors(skillsRes.errors ?? []);
-
-      const activeSkillsSettings = selectedId
-        ? (session?.settings.skills ?? selectedSummary?.settings.skills)
-        : null;
-      setSkillsDefaultEnable(activeSkillsSettings?.default_enable ?? true);
-      const nextOverrides: Record<string, boolean> = {};
-      for (const s of activeSkillsSettings?.overrides ?? []) {
-        if (!s?.id) continue;
-        nextOverrides[s.id] = Boolean(s.enable);
-      }
-      setSkillsOverrides(nextOverrides);
-      setSkillsOpen(true);
-    } catch (err) {
-      handleApiError(err);
-    }
+    setSkillsOpen(true);
   }
 
   async function refreshAfterConfigChange() {
@@ -992,11 +964,9 @@ export default function App() {
 
   async function saveSelectedSessionDefaults(
     req: { model: boolean; agent?: boolean; mcp: boolean; skills?: boolean },
-    onSaving: (saving: boolean) => void,
     message: string,
-  ) {
-    if (!selectedId) return;
-    onSaving(true);
+  ): Promise<boolean> {
+    if (!selectedId) return false;
     try {
       await api.saveSessionDefaults(selectedId, req);
       await refreshAfterConfigChange();
@@ -1007,10 +977,10 @@ export default function App() {
         message,
         autoCloseMs: 3000,
       });
+      return true;
     } catch (err) {
       handleApiError(err);
-    } finally {
-      onSaving(false);
+      return false;
     }
   }
 
@@ -1686,13 +1656,17 @@ export default function App() {
                     disabled={modelDefaultsSaving}
                     title="Set agent & model defaults for new sessions"
                     aria-label="Set agent & model defaults for new sessions"
-                    onClick={() =>
-                      saveSelectedSessionDefaults(
-                        { model: true, agent: true, mcp: false },
-                        setModelDefaultsSaving,
-                        "Saved current session agent and model as the defaults for new sessions.",
-                      )
-                    }
+                    onClick={async () => {
+                      setModelDefaultsSaving(true);
+                      try {
+                        await saveSelectedSessionDefaults(
+                          { model: true, agent: true, mcp: false },
+                          "Saved current session agent and model as the defaults for new sessions.",
+                        );
+                      } finally {
+                        setModelDefaultsSaving(false);
+                      }
+                    }}
                   >
                     <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
                   </Button>
@@ -1978,198 +1952,25 @@ export default function App() {
         pushAlert={pushAlert}
       />
 
-      <Dialog open={skillsOpen} onOpenChange={setSkillsOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Skills</DialogTitle>
-            <DialogDescription>
-              {session ? "Current session skills" : "Select a session to edit skills"}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            {skillsLoadErrors.length ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                <div className="font-medium">Some skills failed to load</div>
-                <div className="mt-1 max-h-[180px] space-y-2 overflow-auto pr-1">
-                  {skillsLoadErrors.slice(0, 6).map((e) => (
-                    <div key={`${e.id}:${e.path}`} className="rounded-md border border-amber-200 bg-white/70 px-2 py-1">
-                      <div className="font-mono text-xs text-amber-900">{e.id}</div>
-                      <div className="mt-0.5 break-all font-mono text-[11px] text-amber-700">
-                        {e.path}
-                      </div>
-                      <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] text-amber-900">
-                        {e.error}
-                      </div>
-                    </div>
-                  ))}
-                  {skillsLoadErrors.length > 6 ? (
-                    <div className="text-amber-700">
-                      +{skillsLoadErrors.length - 6} more…
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-            <label className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2">
-              <div className="text-sm text-zinc-900">Enable by default</div>
-              <input
-                type="checkbox"
-                checked={skillsDefaultEnable}
-                disabled={skillsSaving || !session}
-                onChange={async (e) => {
-                  const next = e.target.checked;
-                  const prev = skillsDefaultEnable;
-                  setSkillsDefaultEnable(next);
-                  setSkillsSaving(true);
-                  try {
-                    const ok = await patchSession({ skills: { default_enable: next } });
-                    if (!ok) setSkillsDefaultEnable(prev);
-                  } finally {
-                    setSkillsSaving(false);
-                  }
-                }}
-              />
-            </label>
+      <SkillsDialog
+        open={skillsOpen}
+        onOpenChange={setSkillsOpen}
+        selectedSessionId={selectedId}
+        session={session}
+        sessionSummary={selectedSummary}
+        patchSession={patchSession}
+        saveSelectedSessionDefaults={saveSelectedSessionDefaults}
+        onApiError={handleApiError}
+      />
 
-            <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
-              {skills.length ? (
-                <div className="divide-y divide-zinc-200">
-                  {skills.map((s) => {
-                    const enabled = skillsOverrides[s.id] ?? skillsDefaultEnable;
-                    return (
-                      <label
-                        key={s.id}
-                        className="flex items-center justify-between gap-3 bg-white px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-zinc-900">
-                            {s.name}
-                          </div>
-                          <div className="mt-0.5 truncate text-xs text-zinc-600">
-                            <span className="font-mono">{s.id}</span>
-                            {s.description ? ` · ${s.description}` : ""}
-                          </div>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={enabled}
-                          disabled={skillsSaving || !session}
-                          onChange={async (e) => {
-                            if (!session) return;
-                            const next = e.target.checked;
-                            const prev = skillsOverrides[s.id];
-                            setSkillsOverrides((o) => ({ ...o, [s.id]: next }));
-                            setSkillsSaving(true);
-                            try {
-                              const ok = await patchSession({
-                                skills: { overrides: [{ id: s.id, enable: next }] },
-                              });
-                              if (!ok) {
-                                setSkillsOverrides((o) => {
-                                  const copy = { ...o };
-                                  if (prev === undefined) delete copy[s.id];
-                                  else copy[s.id] = prev;
-                                  return copy;
-                                });
-                              }
-                            } finally {
-                              setSkillsSaving(false);
-                            }
-                          }}
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="bg-white px-3 py-6 text-center text-sm text-zinc-500">
-                  No skills
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!session || skillsDefaultsSaving}
-                onClick={() =>
-                  saveSelectedSessionDefaults(
-                    { model: false, mcp: false, skills: true },
-                    setSkillsDefaultsSaving,
-                    "Saved current session skills as the default.",
-                  )
-                }
-              >
-                Save skills defaults
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={mcpOpen} onOpenChange={setMcpOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>MCP</DialogTitle>
-            <DialogDescription>Current session MCP servers</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            {(session?.mcp_status ?? capabilities?.mcp_servers ?? []).map((s) => (
-              <label
-                key={s.id}
-                className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-sm">{s.id}</div>
-                  <div className="mt-0.5 truncate text-xs text-zinc-600">
-                    {s.state?.toString() ?? "unknown"}
-                    {s.last_error ? ` · ${s.last_error}` : ""}
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={s.enable}
-                  disabled={mcpSaving || !session}
-                  onChange={async (e) => {
-                    if (!session) return;
-                    const next = e.target.checked;
-                    setMcpSaving(true);
-                    try {
-                      await patchSession({
-                        mcp: { servers: [{ id: s.id, enable: next }] },
-                      });
-                    } catch (err) {
-                      handleApiError(err);
-                    } finally {
-                      setMcpSaving(false);
-                    }
-                  }}
-                />
-              </label>
-            ))}
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!session || mcpDefaultsSaving}
-                onClick={() =>
-                  saveSelectedSessionDefaults(
-                    { model: false, mcp: true },
-                    setMcpDefaultsSaving,
-                    "Saved current session MCP enablement as the default.",
-                  )
-                }
-              >
-                Save MCP defaults
-              </Button>
-            </div>
-            {!(session?.mcp_status ?? capabilities?.mcp_servers)?.length ? (
-              <div className="text-center text-sm text-zinc-500">No MCP servers</div>
-            ) : null}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <McpDialog
+        open={mcpOpen}
+        onOpenChange={setMcpOpen}
+        session={session}
+        capabilities={capabilities}
+        patchSession={patchSession}
+        saveSelectedSessionDefaults={saveSelectedSessionDefaults}
+      />
 
       {isNarrowViewport ? (
         <ActionSheet
