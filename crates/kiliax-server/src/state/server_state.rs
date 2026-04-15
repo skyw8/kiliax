@@ -20,7 +20,7 @@ use crate::infra::{
 use super::preamble::build_preamble;
 use super::{
     apply_settings_patch, config_with_mcp_overrides, default_settings, list_models,
-    load_settings_for_meta, map_core_message_to_api, map_mcp_status, map_session_err,
+    map_core_message_to_api, map_mcp_status, map_session_err, resolve_session_settings,
     mcp_status_from_settings, now_ms, read_events_after, read_last_event_id, read_run_file,
     session_events_api_path, skills_config_from_settings, ts_ms_to_rfc3339, write_text_atomic,
     LiveSession,
@@ -579,7 +579,7 @@ impl ServerState {
             let state = self.store.load(session_id).await.map_err(map_session_err)?;
             let config = self.config_snapshot();
             let settings =
-                load_settings_for_meta(&self.store, &state.meta, config.as_ref()).await?;
+                resolve_session_settings(&state.meta, config.as_ref(), &self.workspace_root)?;
             settings.workspace_root
         };
 
@@ -689,7 +689,7 @@ impl ServerState {
             None => {
                 let config = self.config_snapshot();
                 let session = self.store.load(session_id).await.map_err(map_session_err)?;
-                load_settings_for_meta(&self.store, &session.meta, config.as_ref()).await?
+                resolve_session_settings(&session.meta, config.as_ref(), &self.workspace_root)?
             }
         };
         if settings.workspace_root.trim().is_empty() {
@@ -761,7 +761,8 @@ impl ServerState {
     ) -> Result<api::ForkSessionResponse, ApiError> {
         let config = self.config_snapshot();
         let source = self.store.load(session_id).await.map_err(map_session_err)?;
-        let settings = load_settings_for_meta(&self.store, &source.meta, config.as_ref()).await?;
+        let settings =
+            resolve_session_settings(&source.meta, config.as_ref(), &self.workspace_root)?;
 
         let message_id = req
             .message_id
@@ -1002,7 +1003,8 @@ impl ServerState {
                     continue;
                 }
 
-                let settings = load_settings_for_meta(&self.store, &meta, config.as_ref()).await?;
+                let settings =
+                    resolve_session_settings(&meta, config.as_ref(), &self.workspace_root)?;
                 let last_event_id =
                     read_last_event_id(&session_events_api_path(&self.store, &meta.id)).await?;
                 let last_outcome = if meta.last_error.is_some() {
@@ -1055,7 +1057,8 @@ impl ServerState {
         }
 
         let state = self.store.load(session_id).await.map_err(map_session_err)?;
-        let settings = load_settings_for_meta(&self.store, &state.meta, config.as_ref()).await?;
+        let settings =
+            resolve_session_settings(&state.meta, config.as_ref(), &self.workspace_root)?;
         let last_event_id =
             read_last_event_id(&session_events_api_path(&self.store, session_id)).await?;
         let last_outcome = if state.meta.last_error.is_some() {

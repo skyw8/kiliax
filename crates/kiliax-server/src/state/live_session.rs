@@ -9,7 +9,7 @@ use kiliax_core::agents::AgentProfile;
 use kiliax_core::config::Config;
 use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
-use kiliax_core::session::{FileSessionStore, SessionId, SessionState};
+use kiliax_core::session::{FileSessionStore, SessionId, SessionMcpServerSetting, SessionState};
 use kiliax_core::tools::ToolEngine;
 use tokio::sync::{broadcast, watch, Mutex, Notify};
 use tokio_stream::StreamExt;
@@ -24,11 +24,10 @@ use crate::infra::{
 
 use super::{
     append_event, apply_settings_patch, config_with_mcp_overrides, error_chain_vec,
-    format_error_chain_text, load_settings_for_meta, map_core_message_to_api_event_message,
-    map_mcp_status, map_session_err, merge_mcp_settings, new_run_id, normalize_settings,
-    now_rfc3339, read_last_event_id, runtime_error_code, runtime_error_hint,
-    session_events_api_path, session_settings_path, skills_config_from_settings, ts_ms_to_rfc3339,
-    write_run_file, write_settings_file, ServerState,
+    format_error_chain_text, map_core_message_to_api_event_message, map_mcp_status,
+    map_session_err, merge_mcp_settings, new_run_id, now_rfc3339, read_last_event_id,
+    resolve_session_settings, runtime_error_code, runtime_error_hint, session_events_api_path,
+    skills_config_from_settings, ts_ms_to_rfc3339, write_run_file, ServerState,
 };
 use super::preamble::{
     build_preamble, insert_preamble_updates_before_last_user, preamble_updates,
@@ -42,6 +41,7 @@ pub struct LiveSession {
     store: FileSessionStore,
     config: Arc<ArcSwap<Config>>,
     runs_dir: PathBuf,
+    fallback_workspace_root: PathBuf,
 
     session: Mutex<SessionState>,
     settings: Mutex<api::SessionSettings>,
@@ -57,7 +57,6 @@ pub struct LiveSession {
     active_cancel: Mutex<Option<watch::Sender<bool>>>,
 
     events_api_path: PathBuf,
-    settings_path: PathBuf,
     events_tx: broadcast::Sender<api::Event>,
     events_ring: Mutex<VecDeque<api::Event>>,
     events_ring_size: AtomicUsize,
@@ -103,16 +102,12 @@ impl LiveSession {
             }
         }
 
-        let mut settings = self.settings.lock().await.clone();
-        normalize_settings(&mut settings, &meta, config.as_ref())?;
+        let mut settings =
+            resolve_session_settings(&meta, config.as_ref(), &self.fallback_workspace_root)?;
 
-        let workspace_root = if settings.workspace_root.trim().is_empty() {
-            default_tmp_workspace_root()?
-        } else {
-            match validate_client_workspace_root(&settings.workspace_root) {
-                Ok(p) => p,
-                Err(_) => default_tmp_workspace_root()?,
-            }
+        let workspace_root = match validate_client_workspace_root(&settings.workspace_root) {
+            Ok(p) => p,
+            Err(_) => default_tmp_workspace_root()?,
         };
         settings.workspace_root = workspace_root.display().to_string();
         tokio::fs::create_dir_all(&workspace_root)
@@ -120,7 +115,6 @@ impl LiveSession {
             .map_err(ApiError::internal_error)?;
 
         *self.settings.lock().await = settings.clone();
-        write_settings_file(&self.settings_path, &settings).await?;
 
         self.settings_dirty.store(true, Ordering::SeqCst);
         let is_idle = { self.status.lock().await.run_state == api::SessionRunState::Idle };
@@ -146,16 +140,8 @@ impl LiveSession {
             .load(session_id)
             .await
             .map_err(map_session_err)?;
-        let mut settings =
-            load_settings_for_meta(&server.store, &session.meta, config.as_ref()).await?;
-
-        if settings.workspace_root.trim().is_empty() {
-            settings.workspace_root = session
-                .meta
-                .workspace_root
-                .clone()
-                .unwrap_or_else(|| server.workspace_root.display().to_string());
-        }
+        let settings =
+            resolve_session_settings(&session.meta, config.as_ref(), &server.workspace_root)?;
         let workspace_root = PathBuf::from(settings.workspace_root.trim());
         tokio::fs::create_dir_all(&workspace_root)
             .await
@@ -187,7 +173,6 @@ impl LiveSession {
         rebuild_preamble: bool,
     ) -> Result<Arc<Self>, ApiError> {
         let events_api_path = session_events_api_path(&server.store, session.id());
-        let settings_path = session_settings_path(&server.store, session.id());
         let last_event_id = read_last_event_id(&events_api_path).await?;
         let (events_tx, _) = broadcast::channel(2048);
         let events_ring_size = server.config_snapshot().server.events_ring_size;
@@ -197,6 +182,7 @@ impl LiveSession {
             store: server.store.clone(),
             config: server.config.clone(),
             runs_dir: server.runs_dir.clone(),
+            fallback_workspace_root: server.workspace_root.clone(),
             session: Mutex::new(session),
             settings: Mutex::new(settings.clone()),
             settings_dirty: AtomicBool::new(false),
@@ -215,14 +201,11 @@ impl LiveSession {
             notify: Notify::new(),
             active_cancel: Mutex::new(None),
             events_api_path,
-            settings_path,
             events_tx,
             events_ring: Mutex::new(VecDeque::new()),
             events_ring_size: AtomicUsize::new(events_ring_size),
             next_event_id: AtomicU64::new(last_event_id),
         });
-
-        write_settings_file(&live.settings_path, &settings).await?;
 
         // Ensure meta reflects current defaults for compatibility with TUI resume.
         {
@@ -231,6 +214,15 @@ impl LiveSession {
             session.meta.model_id = Some(settings.model_id.clone());
             session.meta.workspace_root = Some(settings.workspace_root.clone());
             session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+            session.meta.mcp_servers = settings
+                .mcp
+                .servers
+                .iter()
+                .map(|s| SessionMcpServerSetting {
+                    id: s.id.clone(),
+                    enable: s.enable,
+                })
+                .collect();
             session.meta.skills = Some(skills_config_from_settings(&settings.skills));
             live.store
                 .checkpoint(&mut session)
@@ -356,7 +348,6 @@ impl LiveSession {
 
     pub async fn patch_settings(&self, patch: api::SessionSettingsPatch) -> Result<(), ApiError> {
         let config = self.config_snapshot();
-        let meta = { self.session.lock().await.meta.clone() };
         let mut settings = self.settings.lock().await.clone();
         let mut patch = patch;
         if let Some(roots) = patch.extra_workspace_roots.take() {
@@ -368,9 +359,29 @@ impl LiveSession {
         }
 
         apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
-        normalize_settings(&mut settings, &meta, config.as_ref())?;
         *self.settings.lock().await = settings.clone();
-        write_settings_file(&self.settings_path, &settings).await?;
+
+        {
+            let mut session = self.session.lock().await;
+            session.meta.agent = settings.agent.clone();
+            session.meta.model_id = Some(settings.model_id.clone());
+            session.meta.workspace_root = Some(settings.workspace_root.clone());
+            session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+            session.meta.mcp_servers = settings
+                .mcp
+                .servers
+                .iter()
+                .map(|s| SessionMcpServerSetting {
+                    id: s.id.clone(),
+                    enable: s.enable,
+                })
+                .collect();
+            session.meta.skills = Some(skills_config_from_settings(&settings.skills));
+            self.store
+                .checkpoint(&mut session)
+                .await
+                .map_err(map_session_err)?;
+        }
 
         self.settings_dirty.store(true, Ordering::SeqCst);
 
@@ -1113,6 +1124,15 @@ impl LiveSession {
         session.meta.model_id = Some(settings.model_id.clone());
         session.meta.workspace_root = Some(settings.workspace_root.clone());
         session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+        session.meta.mcp_servers = settings
+            .mcp
+            .servers
+            .iter()
+            .map(|s| SessionMcpServerSetting {
+                id: s.id.clone(),
+                enable: s.enable,
+            })
+            .collect();
         session.meta.skills = Some(skills_config_from_settings(&settings.skills));
         self.store
             .checkpoint(&mut session)

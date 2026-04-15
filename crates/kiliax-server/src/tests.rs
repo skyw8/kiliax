@@ -381,19 +381,13 @@ async fn create_session_accepts_empty_body_and_persists_settings() {
         .expect("session id")
         .to_string();
 
-    let settings_path = dir
-        .path()
-        .join(".kiliax")
-        .join("sessions")
-        .join(&session_id)
-        .join("settings.json");
-    let settings_text = tokio::fs::read_to_string(&settings_path)
-        .await
-        .expect("settings.json");
-    let parsed: serde_json::Value = serde_json::from_str(&settings_text).expect("settings json");
+    let store = FileSessionStore::project(dir.path());
+    let id = SessionId::parse(&session_id).expect("session id");
+    let session = store.load(&id).await.expect("load session");
     assert_eq!(
-        parsed.get("model_id").and_then(|v| v.as_str()),
-        Some("test/test-model")
+        session.meta.model_id.as_deref(),
+        Some("test/test-model"),
+        "meta should persist model_id"
     );
 }
 
@@ -1173,17 +1167,10 @@ async fn patch_settings_persists_and_emits_event() {
         Some("plan")
     );
 
-    let settings_path = dir
-        .path()
-        .join(".kiliax")
-        .join("sessions")
-        .join(&session_id)
-        .join("settings.json");
-    let settings_text = tokio::fs::read_to_string(&settings_path)
-        .await
-        .expect("settings.json");
-    let parsed: serde_json::Value = serde_json::from_str(&settings_text).expect("settings json");
-    assert_eq!(parsed.get("agent").and_then(|v| v.as_str()), Some("plan"));
+    let store = FileSessionStore::project(dir.path());
+    let id = SessionId::parse(&session_id).expect("session id");
+    let session = store.load(&id).await.expect("load session");
+    assert_eq!(session.meta.agent.as_str(), "plan", "meta should persist agent");
 
     let resp = app
         .clone()

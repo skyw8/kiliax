@@ -15,7 +15,6 @@ use kiliax_core::protocol::Message as CoreMessage;
 use kiliax_core::runtime::AgentRuntimeError;
 use kiliax_core::session::{FileSessionStore, SessionError, SessionId, SessionMeta};
 use kiliax_core::tools::McpServerConnectionState;
-use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 
 use crate::api;
@@ -30,124 +29,53 @@ fn map_session_err(err: SessionError) -> ApiError {
     }
 }
 
-fn session_settings_path(store: &FileSessionStore, session_id: &SessionId) -> PathBuf {
-    store.session_dir(session_id).join("settings.json")
-}
-
-fn session_events_api_path(store: &FileSessionStore, session_id: &SessionId) -> PathBuf {
-    store.session_dir(session_id).join("events_api.jsonl")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SettingsFile {
-    agent: String,
-    model_id: String,
-    #[serde(default)]
-    skills: Option<api::SkillsSettings>,
-    mcp: api::McpServers,
-    #[serde(default)]
-    workspace_root: String,
-    #[serde(default)]
-    extra_workspace_roots: Option<Vec<String>>,
-}
-
-async fn read_settings_file(path: &Path) -> Result<Option<SettingsFile>, ApiError> {
-    let text = match tokio::fs::read_to_string(path).await {
-        Ok(t) => t,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(ApiError::internal_error(err)),
-    };
-    let parsed: SettingsFile = serde_json::from_str(&text).map_err(ApiError::internal_error)?;
-    Ok(Some(parsed))
-}
-
-async fn write_settings_file(path: &Path, settings: &api::SessionSettings) -> Result<(), ApiError> {
-    let file = SettingsFile {
-        agent: settings.agent.clone(),
-        model_id: settings.model_id.clone(),
-        skills: Some(settings.skills.clone()),
-        mcp: settings.mcp.clone(),
-        workspace_root: settings.workspace_root.clone(),
-        extra_workspace_roots: Some(settings.extra_workspace_roots.clone()),
-    };
-    let text = serde_json::to_string_pretty(&file).map_err(ApiError::internal_error)?;
-    tokio::fs::write(path, text)
-        .await
-        .map_err(ApiError::internal_error)?;
-    Ok(())
-}
-
-async fn load_settings_for_meta(
-    store: &FileSessionStore,
+fn resolve_session_settings(
     meta: &SessionMeta,
     config: &Config,
+    fallback_workspace_root: &Path,
 ) -> Result<api::SessionSettings, ApiError> {
-    let path = session_settings_path(store, &meta.id);
+    let agent = AgentProfile::from_name(&meta.agent)
+        .or_else(|| {
+            config
+                .default_agent
+                .as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .and_then(AgentProfile::from_name)
+        })
+        .unwrap_or_else(AgentProfile::general)
+        .name
+        .to_string();
 
-    if let Some(file) = read_settings_file(&path).await? {
-        let mut settings = api::SessionSettings {
-            agent: file.agent,
-            model_id: file.model_id,
-            skills: file
-                .skills
-                .unwrap_or_else(|| skills_settings_from_config(&config.skills)),
-            mcp: file.mcp,
-            workspace_root: file.workspace_root,
-            extra_workspace_roots: file.extra_workspace_roots.unwrap_or_default(),
-        };
-        normalize_settings(&mut settings, meta, config)?;
-        return Ok(settings);
-    }
+    let mut model_id = meta
+        .model_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .or_else(|| config.default_model.clone())
+        .ok_or_else(|| ApiError::invalid_argument("missing model id"))?;
 
-    let mut settings = default_settings(config, Some(meta))?;
-    normalize_settings(&mut settings, meta, config)?;
-    write_settings_file(&path, &settings).await?;
-    Ok(settings)
-}
-
-fn normalize_settings(
-    settings: &mut api::SessionSettings,
-    meta: &SessionMeta,
-    config: &Config,
-) -> Result<(), ApiError> {
-    if AgentProfile::from_name(&settings.agent).is_none() {
-        settings.agent = AgentProfile::from_name(&meta.agent)
-            .unwrap_or_else(AgentProfile::general)
-            .name
-            .to_string();
-    } else {
-        settings.agent = AgentProfile::from_name(&settings.agent)
-            .unwrap_or_else(AgentProfile::general)
-            .name
-            .to_string();
-    }
-
-    if settings.model_id.trim().is_empty() {
-        settings.model_id = meta
-            .model_id
-            .clone()
-            .or_else(|| config.default_model.clone())
-            .ok_or_else(|| ApiError::invalid_argument("missing model id"))?;
-    }
-    if config.resolve_model(&settings.model_id).is_err() {
-        settings.model_id = config
+    if config.resolve_model(&model_id).is_err() {
+        model_id = config
             .default_model
             .clone()
             .ok_or_else(|| ApiError::invalid_argument("missing default_model in config"))?;
     }
 
-    let ws = settings.workspace_root.trim().to_string();
-    settings.workspace_root = if !ws.is_empty() {
-        ws
-    } else {
-        meta.workspace_root.clone().unwrap_or_default()
-    };
+    let workspace_root = meta
+        .workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback_workspace_root.display().to_string());
 
-    let main_root = PathBuf::from(settings.workspace_root.trim());
+    let main_root = PathBuf::from(workspace_root.trim());
     let main_root = std::fs::canonicalize(&main_root).unwrap_or_else(|_| main_root.to_path_buf());
     let mut extras: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for raw in settings.extra_workspace_roots.iter() {
+    for raw in meta.extra_workspace_roots.iter() {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             continue;
@@ -175,12 +103,40 @@ fn normalize_settings(
             extras.push(display);
         }
     }
-    settings.extra_workspace_roots = extras;
 
-    let mut mcp_servers = settings.mcp.servers.clone();
-    merge_mcp_settings(&mut mcp_servers, &[], config, true)?;
-    settings.mcp.servers = mcp_servers;
-    Ok(())
+    let skills = meta
+        .skills
+        .as_ref()
+        .unwrap_or_else(|| &config.skills);
+    let skills = skills_settings_from_config(skills);
+
+    let by_id: HashMap<&str, bool> = meta
+        .mcp_servers
+        .iter()
+        .map(|s| (s.id.as_str(), s.enable))
+        .collect();
+    let servers = config
+        .mcp
+        .servers
+        .iter()
+        .map(|s| api::McpServerSetting {
+            id: s.name.clone(),
+            enable: by_id.get(s.name.as_str()).copied().unwrap_or(s.enable),
+        })
+        .collect();
+
+    Ok(api::SessionSettings {
+        agent,
+        model_id,
+        skills,
+        mcp: api::McpServers { servers },
+        workspace_root,
+        extra_workspace_roots: extras,
+    })
+}
+
+fn session_events_api_path(store: &FileSessionStore, session_id: &SessionId) -> PathBuf {
+    store.session_dir(session_id).join("events_api.jsonl")
 }
 
 fn default_settings(
