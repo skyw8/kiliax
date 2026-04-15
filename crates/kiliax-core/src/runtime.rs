@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use tokio_stream::{Stream, StreamExt};
 use tracing::Instrument;
@@ -16,7 +16,9 @@ use crate::tools::{policy, ToolEngine, ToolError};
 
 mod tool_calls;
 
-use tool_calls::{group_tool_calls, sanitize_tool_call_history, ToolCallGroup};
+use tool_calls::{
+    group_tool_calls, normalize_tool_call_ids, sanitize_tool_call_history, ToolCallGroup,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentRuntimeError {
@@ -799,22 +801,6 @@ fn merge_tool_call_delta(buf: &mut ToolCallBuf, delta: ToolCallDelta) {
     }
     if let Some(args) = delta.arguments {
         buf.arguments.push_str(&args);
-    }
-}
-
-fn normalize_tool_call_ids(step: usize, tool_calls: &mut Vec<ToolCall>) {
-    let mut used: HashSet<String> = HashSet::with_capacity(tool_calls.len());
-
-    for (idx, call) in tool_calls.iter_mut().enumerate() {
-        let trimmed = call.id.trim();
-        if trimmed != call.id {
-            call.id = trimmed.to_string();
-        }
-
-        if call.id.is_empty() || used.contains(&call.id) {
-            call.id = format!("call_step{}_{}", step + 1, idx);
-        }
-        used.insert(call.id.clone());
     }
 }
 

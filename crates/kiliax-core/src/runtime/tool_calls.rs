@@ -102,3 +102,19 @@ pub(super) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
     *messages = out;
 }
 
+pub(super) fn normalize_tool_call_ids(step: usize, tool_calls: &mut Vec<ToolCall>) {
+    let mut used: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(tool_calls.len());
+
+    for (idx, call) in tool_calls.iter_mut().enumerate() {
+        let trimmed = call.id.trim();
+        if trimmed != call.id {
+            call.id = trimmed.to_string();
+        }
+
+        if call.id.is_empty() || used.contains(&call.id) {
+            call.id = format!("call_step{}_{}", step + 1, idx);
+        }
+        used.insert(call.id.clone());
+    }
+}
