@@ -67,6 +67,7 @@ minimal
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + explicit session default persistence: `web/src/lib/api.ts`
+- Alert/toast state: `web/src/lib/use-alerts.ts`
 - Types (includes message `usage` and session default writes): `web/src/lib/types.ts`
 
 ## constraints

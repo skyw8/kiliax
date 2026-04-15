@@ -5,6 +5,7 @@ import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
 import { loadPinnedSessionIds, loadPinnedWorkspaceRoots, loadSidebarOpen, loadSessionsPaneOpen, loadWorkspacesPaneOpen, savePinnedSessionIds, savePinnedWorkspaceRoots, saveSidebarOpen, saveSessionsPaneOpen, saveWorkspacesPaneOpen } from "./lib/preferences";
 import { statusBadge, sortSessions } from "./lib/session-utils";
+import { useAlerts } from "./lib/use-alerts";
 import { useWsEvents } from "./lib/use-ws-events";
 import { cn } from "./lib/utils";
 import { isTmpWorkspaceRoot, workspaceBasename, workspaceDisplayName } from "./lib/workspace-utils";
@@ -14,7 +15,7 @@ import type {
   Session,
   SessionSummary,
 } from "./lib/types";
-import { AlertStack, type AlertItem } from "./components/alert-stack";
+import { AlertStack } from "./components/alert-stack";
 import { DeleteSessionDialog } from "./components/delete-session-dialog";
 import { DeleteWorkspaceDialog } from "./components/delete-workspace-dialog";
 import { EditMessageDialog } from "./components/edit-message-dialog";
@@ -143,8 +144,7 @@ export default function App() {
   const [extraFolderSaving, setExtraFolderSaving] = useState(false);
 
   const [authError, setAuthError] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const alertTimersRef = useRef<Record<string, number>>({});
+  const { alerts, pushAlert, closeAlert, clearAlerts } = useAlerts();
   const seenMermaidAlertKeysRef = useRef<Set<string>>(new Set());
 
   const lastEventIdRef = useRef(0);
@@ -218,7 +218,7 @@ export default function App() {
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
       setAuthError("Unauthorized. Re-open the URL printed by `kiliax server start`.");
-      setAlerts([]);
+      clearAlerts();
       return;
     }
     if (err instanceof ApiError) {
@@ -245,26 +245,6 @@ export default function App() {
     }
     // eslint-disable-next-line no-console
     console.error(err);
-  }
-
-  function closeAlert(id: string) {
-    const timerId = alertTimersRef.current[id];
-    if (timerId != null) {
-      window.clearTimeout(timerId);
-      delete alertTimersRef.current[id];
-    }
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
-  }
-
-  function pruneAlerts(items: AlertItem[]): AlertItem[] {
-    const autoClose = items.filter((a) => a.autoCloseMs != null);
-    if (autoClose.length <= 3) return items;
-    const keep = new Set(autoClose.slice(-3).map((a) => a.id));
-    return items.filter((a) => a.autoCloseMs == null || keep.has(a.id));
-  }
-
-  function pushAlert(alert: AlertItem) {
-    setAlerts((prev) => pruneAlerts([...prev, alert]));
   }
 
   async function copyWithToast(value: string, label: string) {
@@ -304,33 +284,6 @@ export default function App() {
       autoCloseMs: 6000,
     });
   }
-
-  useEffect(() => {
-    const activeIds = new Set(alerts.map((a) => a.id));
-    for (const [id, timerId] of Object.entries(alertTimersRef.current)) {
-      if (activeIds.has(id)) continue;
-      window.clearTimeout(timerId);
-      delete alertTimersRef.current[id];
-    }
-
-    for (const a of alerts) {
-      const autoCloseMs = a.autoCloseMs;
-      if (autoCloseMs == null) continue;
-      if (alertTimersRef.current[a.id] != null) continue;
-      alertTimersRef.current[a.id] = window.setTimeout(() => {
-        setAlerts((prev) => prev.filter((item) => item.id !== a.id));
-      }, autoCloseMs);
-    }
-  }, [alerts]);
-
-  useEffect(() => {
-    return () => {
-      for (const timerId of Object.values(alertTimersRef.current)) {
-        window.clearTimeout(timerId);
-      }
-      alertTimersRef.current = {};
-    };
-  }, []);
 
   async function refreshCapabilities() {
     try {
