@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Star, Terminal, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, RefreshCcw, Settings, Sparkles, Square, Star, Terminal, Trash2, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
-import { copyToClipboard, fmtDurationCompact, fmtTokenUsage, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, stringifyUnknown, useOverlaySidebarViewport } from "./lib/app-utils";
+import { copyToClipboard, fmtDurationCompact, fmtTokenUsage, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
 import { loadPinnedSessionIds, loadPinnedWorkspaceRoots, loadSidebarOpen, loadSessionsPaneOpen, loadWorkspacesPaneOpen, savePinnedSessionIds, savePinnedWorkspaceRoots, saveSidebarOpen, saveSessionsPaneOpen, saveWorkspacesPaneOpen } from "./lib/preferences";
 import { statusBadge, sortSessions } from "./lib/session-utils";
 import { useWsEvents } from "./lib/use-ws-events";
@@ -21,7 +21,7 @@ import type {
   SkillSummary,
   ToolCall,
 } from "./lib/types";
-import { Alert } from "./components/ui/alert";
+import { AlertStack, type AlertItem } from "./components/alert-stack";
 import { ActionSheet } from "./components/ui/action-sheet";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -54,17 +54,6 @@ type StreamState = {
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
 };
 
-type AlertItem = {
-  id: string;
-  title: string;
-  subtitle?: string;
-  message: string;
-  traceId?: string;
-  details?: unknown;
-  autoCloseMs?: number;
-  level?: "success" | "error";
-};
-
 type ProviderDraft = {
   id: string;
   baseUrl: string;
@@ -77,77 +66,6 @@ type ProviderDraft = {
 const LIST_PAGE_SIZE = 6;
 const PROVIDERS_PANE_DEFAULT_MODEL = "__default_model__";
 const PROVIDERS_PANE_NEW_PROVIDER = "__new_provider__";
-
-function AlertStack({
-  items,
-  onClose,
-}: {
-  items: AlertItem[];
-  onClose: (id: string) => void;
-}) {
-  if (!items.length) return null;
-
-  return (
-    <div className="fixed bottom-6 right-6 z-[1000] flex w-[min(560px,calc(100vw-24px))] flex-col gap-3">
-      {items.map((a) => (
-        <Alert
-          key={a.id}
-          variant={a.level === "success" ? "success" : "destructive"}
-          className="shadow-lg"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-2">
-              {a.level === "success" ? (
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-              ) : (
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-              )}
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-zinc-900">
-                  {a.title}
-                </div>
-                {a.subtitle ? (
-                  <div className="mt-0.5 truncate text-xs text-zinc-600">
-                    {a.subtitle}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            <button
-              type="button"
-              className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
-              aria-label="Close"
-              onClick={() => onClose(a.id)}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          <pre className="mt-3 max-h-[32vh] overflow-auto whitespace-pre-wrap rounded-md bg-zinc-50 p-3 text-xs text-zinc-800">
-            {a.message}
-          </pre>
-
-          {a.traceId ? (
-            <div className="mt-2 text-xs text-zinc-600">
-              trace_id: <span className="font-mono">{a.traceId}</span>
-            </div>
-          ) : null}
-
-          {a.details != null ? (
-            <details className="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-2">
-              <summary className="cursor-pointer select-none text-xs text-zinc-700">
-                details
-              </summary>
-              <pre className="mt-2 max-h-[32vh] overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-800">
-                {stringifyUnknown(a.details)}
-              </pre>
-            </details>
-          ) : null}
-        </Alert>
-      ))}
-    </div>
-  );
-}
 
 function renderToolCalls(
   toolCalls: ToolCall[] | undefined,
