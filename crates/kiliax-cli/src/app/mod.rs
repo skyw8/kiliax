@@ -39,8 +39,8 @@ use tokens::OutputTokenCounter;
 use render::{
     classify_tool_call, format_error_chain_text, render_dir_list_lines, render_error_lines,
     render_thinking_start_line, render_token_usage_line, render_tool_result_fallback_lines,
-    render_tool_result_lines, render_user_message_lines, summarize_shell_command_argv,
-    tool_status_label, turn_divider_marker,
+    render_tool_result_lines, render_user_message_lines, tool_status_label,
+    turn_divider_marker,
 };
 use preamble::{build_preamble, preamble_updates};
 
@@ -1504,6 +1504,7 @@ fn validate_extra_workspace_root(input: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::render::summarize_shell_command_argv;
     use kiliax_core::config::ResolvedModel;
     use kiliax_core::config::{Config, ProviderConfig};
     use kiliax_core::llm::LlmClient;
