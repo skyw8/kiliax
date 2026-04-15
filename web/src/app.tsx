@@ -24,9 +24,11 @@ import { ActionSheet } from "./components/ui/action-sheet";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { CodeBlock } from "./components/code-block";
+import { EmptyState } from "./components/empty-state";
 import { FolderPickerDialog } from "./components/folder-picker";
 import { Markdown, type MermaidErrorInfo } from "./components/markdown";
 import { MessageRow } from "./components/message-row";
+import { SessionItemRow } from "./components/session-item-row";
 import { Input } from "./components/ui/input";
 import { Separator } from "./components/ui/separator";
 import { Sheet, SheetClose, SheetContent } from "./components/ui/sheet";
@@ -59,69 +61,6 @@ type ProviderDraft = {
 const LIST_PAGE_SIZE = 6;
 const PROVIDERS_PANE_DEFAULT_MODEL = "__default_model__";
 const PROVIDERS_PANE_NEW_PROVIDER = "__new_provider__";
-
-function SessionItemRow({
-  summary,
-  active,
-  pinned,
-  onSelect,
-  onOpenMenu,
-}: {
-  summary: SessionSummary;
-  active: boolean;
-  pinned: boolean;
-  onSelect: () => void;
-  onOpenMenu: (sessionId: string, anchor: DOMRect) => void;
-}) {
-  const badge = statusBadge(summary);
-  return (
-    <div
-      className={[
-        "group flex items-start gap-1 rounded-md px-2 py-2",
-        active ? "bg-white shadow-sm" : "hover:bg-white/70",
-      ].join(" ")}
-    >
-      <button onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0 flex items-center gap-1 text-sm text-zinc-900">
-            {pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-violet-600" /> : null}
-            <div className="truncate">{summary.title || summary.id}</div>
-          </div>
-          <Badge variant={badge.variant}>{badge.label}</Badge>
-        </div>
-        <div className="mt-1 truncate text-xs text-zinc-500">
-          {modelLabel(summary.settings.model_id)}
-        </div>
-      </button>
-
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8"
-        aria-label="Session actions"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-          onOpenMenu(summary.id, rect);
-        }}
-      >
-        <MoreHorizontal className="h-4 w-4 text-zinc-500" />
-      </Button>
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex h-full w-full items-center justify-center">
-      <div className="text-center">
-        <div className="text-xl font-semibold text-zinc-900">Let&apos;s build</div>
-        <div className="mt-1 text-sm text-zinc-600">Start typing below to create a session</div>
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
