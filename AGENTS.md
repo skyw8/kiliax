@@ -63,6 +63,7 @@ minimal
 
 - Main UI (responsive layout + WS streaming/session actions): `web/src/app.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
+- Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + explicit session default persistence: `web/src/lib/api.ts`

@@ -19,9 +19,10 @@ import { DeleteSessionDialog } from "./components/delete-session-dialog";
 import { DeleteWorkspaceDialog } from "./components/delete-workspace-dialog";
 import { EditMessageDialog } from "./components/edit-message-dialog";
 import { SettingsDialog } from "./components/settings-dialog";
+import { SessionActionSheet, SessionContextMenu } from "./components/session-actions";
 import { SkillsDialog } from "./components/skills-dialog";
 import { McpDialog } from "./components/mcp-dialog";
-import { ActionSheet } from "./components/ui/action-sheet";
+import { WorkspaceActionSheet, WorkspaceContextMenu } from "./components/workspace-actions";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { CodeBlock } from "./components/code-block";
@@ -1975,174 +1976,114 @@ export default function App() {
       />
 
       {isNarrowViewport ? (
-        <ActionSheet
+        <SessionActionSheet
           open={Boolean(sessionActionSheet)}
           onOpenChange={(open) => !open && setSessionActionSheet(null)}
-          title="Session actions"
           description={sessionActionSheetLabel}
-        >
-          <div className="space-y-2">
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
-              onClick={() => {
-                const id = sessionActionSheet?.sessionId;
-                if (!id) return;
-                setSessionActionSheet(null);
-                forkSessionCopy(id);
-              }}
-            >
-              <GitFork className="h-5 w-5 text-violet-600" />
-              Fork
-            </button>
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
-              onClick={() => {
-                const id = sessionActionSheet?.sessionId;
-                if (!id) return;
-                togglePinnedSession(id);
-                setSessionActionSheet(null);
-              }}
-            >
-              <Pin className="h-5 w-5 text-violet-600" />
-              {sessionActionSheet?.sessionId && pinnedSessionIds.includes(sessionActionSheet.sessionId)
-                ? "Unpin"
-                : "Pin"}
-            </button>
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 rounded-md border border-rose-200 bg-white px-3 py-3 text-left text-base text-rose-700 active:opacity-80"
-              onClick={() => {
-                const id = sessionActionSheet?.sessionId;
-                if (!id) return;
-                setDeleteConfirm({ sessionId: id });
-                setSessionActionSheet(null);
-              }}
-            >
-              <Trash2 className="h-5 w-5" />
-              Delete
-            </button>
-            <Button variant="outline" className="w-full" onClick={() => setSessionActionSheet(null)}>
-              Cancel
-            </Button>
-          </div>
-        </ActionSheet>
+          pinLabel={
+            sessionActionSheet?.sessionId &&
+            pinnedSessionIds.includes(sessionActionSheet.sessionId)
+              ? "Unpin"
+              : "Pin"
+          }
+          onFork={() => {
+            const id = sessionActionSheet?.sessionId;
+            if (!id) return;
+            setSessionActionSheet(null);
+            forkSessionCopy(id);
+          }}
+          onTogglePinned={() => {
+            const id = sessionActionSheet?.sessionId;
+            if (!id) return;
+            togglePinnedSession(id);
+            setSessionActionSheet(null);
+          }}
+          onDelete={() => {
+            const id = sessionActionSheet?.sessionId;
+            if (!id) return;
+            setDeleteConfirm({ sessionId: id });
+            setSessionActionSheet(null);
+          }}
+        />
       ) : null}
 
       {isNarrowViewport ? (
-        <ActionSheet
+        <WorkspaceActionSheet
           open={Boolean(workspaceActionSheet)}
           onOpenChange={(open) => !open && setWorkspaceActionSheet(null)}
-          title="Workspace actions"
           description={workspaceActionSheetLabel}
-        >
-          <div className="space-y-2">
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
-              onClick={() => {
-                const root = workspaceActionSheet?.workspaceRoot;
-                if (!root) return;
-                togglePinnedWorkspace(root);
-                setWorkspaceActionSheet(null);
-              }}
-            >
-              <Pin className="h-5 w-5 text-violet-600" />
-              {workspaceActionSheet?.workspaceRoot && pinnedWorkspaceRoots.includes(workspaceActionSheet.workspaceRoot)
-                ? "Unpin"
-                : "Pin"}
-            </button>
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 rounded-md border border-rose-200 bg-white px-3 py-3 text-left text-base text-rose-700 active:opacity-80"
-              onClick={() => {
-                const root = workspaceActionSheet?.workspaceRoot;
-                if (!root) return;
-                setWorkspaceDeleteConfirm({ workspaceRoot: root });
-                setWorkspaceActionSheet(null);
-              }}
-            >
-              <Trash2 className="h-5 w-5" />
-              Delete
-            </button>
-            <Button variant="outline" className="w-full" onClick={() => setWorkspaceActionSheet(null)}>
-              Cancel
-            </Button>
-          </div>
-        </ActionSheet>
+          pinLabel={
+            workspaceActionSheet?.workspaceRoot &&
+            pinnedWorkspaceRoots.includes(workspaceActionSheet.workspaceRoot)
+              ? "Unpin"
+              : "Pin"
+          }
+          onTogglePinned={() => {
+            const root = workspaceActionSheet?.workspaceRoot;
+            if (!root) return;
+            togglePinnedWorkspace(root);
+            setWorkspaceActionSheet(null);
+          }}
+          onDelete={() => {
+            const root = workspaceActionSheet?.workspaceRoot;
+            if (!root) return;
+            setWorkspaceDeleteConfirm({ workspaceRoot: root });
+            setWorkspaceActionSheet(null);
+          }}
+        />
       ) : null}
 
-      {sessionMenu && !isNarrowViewport ? (
-        <div
-          ref={sessionMenuRef}
-          style={{ left: sessionMenu.x, top: sessionMenu.y }}
-          className="fixed z-50 mt-1 w-44 -translate-x-full rounded-md border border-zinc-200 bg-white p-1 shadow-lg"
-        >
-          <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
-            onClick={() => {
-              const id = sessionMenu.sessionId;
-              setSessionMenu(null);
-              forkSessionCopy(id);
-            }}
-          >
-            <GitFork className="h-4 w-4 text-violet-600" />
-            Fork
-          </button>
-          <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
-            onClick={() => {
-              const id = sessionMenu.sessionId;
-              togglePinnedSession(id);
-              setSessionMenu(null);
-            }}
-          >
-            <Pin className="h-4 w-4 text-violet-600" />
-            {pinnedSessionIds.includes(sessionMenu.sessionId) ? "Unpin" : "Pin"}
-          </button>
-          <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-            onClick={() => {
-              setDeleteConfirm({ sessionId: sessionMenu.sessionId });
-              setSessionMenu(null);
-            }}
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete
-          </button>
-        </div>
-      ) : null}
+      <SessionContextMenu
+        open={Boolean(sessionMenu && !isNarrowViewport)}
+        menuRef={sessionMenuRef}
+        x={sessionMenu?.x ?? 0}
+        y={sessionMenu?.y ?? 0}
+        pinLabel={
+          sessionMenu && pinnedSessionIds.includes(sessionMenu.sessionId) ? "Unpin" : "Pin"
+        }
+        onFork={() => {
+          const id = sessionMenu?.sessionId;
+          if (!id) return;
+          setSessionMenu(null);
+          forkSessionCopy(id);
+        }}
+        onTogglePinned={() => {
+          const id = sessionMenu?.sessionId;
+          if (!id) return;
+          togglePinnedSession(id);
+          setSessionMenu(null);
+        }}
+        onDelete={() => {
+          const id = sessionMenu?.sessionId;
+          if (!id) return;
+          setDeleteConfirm({ sessionId: id });
+          setSessionMenu(null);
+        }}
+      />
 
-      {workspaceMenu && !isNarrowViewport ? (
-        <div
-          ref={workspaceMenuRef}
-          style={{ left: workspaceMenu.x, top: workspaceMenu.y }}
-          className="fixed z-50 mt-1 w-44 -translate-x-full rounded-md border border-zinc-200 bg-white p-1 shadow-lg"
-        >
-          <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
-            onClick={() => {
-              const root = workspaceMenu.workspaceRoot;
-              togglePinnedWorkspace(root);
-              setWorkspaceMenu(null);
-            }}
-          >
-            <Pin className="h-4 w-4 text-violet-600" />
-            {pinnedWorkspaceRoots.includes(workspaceMenu.workspaceRoot) ? "Unpin" : "Pin"}
-          </button>
-          <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-            onClick={() => {
-              setWorkspaceDeleteConfirm({ workspaceRoot: workspaceMenu.workspaceRoot });
-              setWorkspaceMenu(null);
-            }}
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete
-          </button>
-        </div>
-      ) : null}
+      <WorkspaceContextMenu
+        open={Boolean(workspaceMenu && !isNarrowViewport)}
+        menuRef={workspaceMenuRef}
+        x={workspaceMenu?.x ?? 0}
+        y={workspaceMenu?.y ?? 0}
+        pinLabel={
+          workspaceMenu && pinnedWorkspaceRoots.includes(workspaceMenu.workspaceRoot)
+            ? "Unpin"
+            : "Pin"
+        }
+        onTogglePinned={() => {
+          const root = workspaceMenu?.workspaceRoot;
+          if (!root) return;
+          togglePinnedWorkspace(root);
+          setWorkspaceMenu(null);
+        }}
+        onDelete={() => {
+          const root = workspaceMenu?.workspaceRoot;
+          if (!root) return;
+          setWorkspaceDeleteConfirm({ workspaceRoot: root });
+          setWorkspaceMenu(null);
+        }}
+      />
 
       <DeleteSessionDialog
         open={Boolean(deleteConfirm)}
