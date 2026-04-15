@@ -61,9 +61,7 @@ minimal
 ### web (React UI)
 
 - Main UI (responsive layout + WS streaming/session actions): `web/src/app.tsx`
-- Settings dialog: `web/src/components/settings-dialog.tsx`
-- Skills dialog: `web/src/components/skills-dialog.tsx`
-- MCP dialog: `web/src/components/mcp-dialog.tsx`
+- Dialog components: `web/src/components/*-dialog.tsx`
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + explicit session default persistence: `web/src/lib/api.ts`

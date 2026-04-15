@@ -15,13 +15,15 @@ import type {
   SessionSummary,
 } from "./lib/types";
 import { AlertStack, type AlertItem } from "./components/alert-stack";
+import { DeleteSessionDialog } from "./components/delete-session-dialog";
+import { DeleteWorkspaceDialog } from "./components/delete-workspace-dialog";
+import { EditMessageDialog } from "./components/edit-message-dialog";
 import { SettingsDialog } from "./components/settings-dialog";
 import { SkillsDialog } from "./components/skills-dialog";
 import { McpDialog } from "./components/mcp-dialog";
 import { ActionSheet } from "./components/ui/action-sheet";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { CodeBlock } from "./components/code-block";
 import { EmptyState } from "./components/empty-state";
 import { FolderPickerDialog } from "./components/folder-picker";
@@ -2142,77 +2144,31 @@ export default function App() {
         </div>
       ) : null}
 
-      <Dialog open={Boolean(deleteConfirm)} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete session?</DialogTitle>
-            <DialogDescription className="truncate">
-              {deleteSessionSummary?.title ?? deleteSessionSummary?.id ?? ""}
-            </DialogDescription>
-          </DialogHeader>
-          {isTmpWorkspaceRoot(deleteSessionSummary?.settings.workspace_root ?? "") ? (
-            <div className="mt-3 text-sm text-zinc-600">
-              This also deletes the temporary workspace directory on disk.
-            </div>
-          ) : null}
-          <div className="mt-3 flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-red-600 text-zinc-50 hover:bg-red-500"
-              onClick={async () => {
-                const id = deleteConfirm?.sessionId;
-                if (!id) return;
-                setDeleteConfirm(null);
-                await deleteSession(id);
-              }}
-            >
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <DeleteSessionDialog
+        open={Boolean(deleteConfirm)}
+        onClose={() => setDeleteConfirm(null)}
+        description={deleteSessionSummary?.title ?? deleteSessionSummary?.id ?? ""}
+        showTmpWorkspaceWarning={isTmpWorkspaceRoot(deleteSessionSummary?.settings.workspace_root ?? "")}
+        onDelete={async () => {
+          const sessionId = deleteConfirm?.sessionId;
+          if (!sessionId) return;
+          await deleteSession(sessionId);
+        }}
+      />
 
-      <Dialog
+      <DeleteWorkspaceDialog
         open={Boolean(workspaceDeleteConfirm)}
-        onOpenChange={(open) => !open && setWorkspaceDeleteConfirm(null)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete workspace?</DialogTitle>
-            <DialogDescription className="truncate">
-              {workspaceDeleteConfirm?.workspaceRoot ?? ""}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-3 text-sm text-zinc-600">
-            {isTmpWorkspaceRoot(workspaceDeleteConfirm?.workspaceRoot ?? "") ? (
-              <>This deletes all sessions and removes the temporary workspace directory on disk.</>
-            ) : (
-              <>This deletes all sessions under this workspace (directory is not removed).</>
-            )}
-          </div>
-          <div className="mt-3 flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setWorkspaceDeleteConfirm(null)}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-red-600 text-zinc-50 hover:bg-red-500"
-              onClick={async () => {
-                const root = workspaceDeleteConfirm?.workspaceRoot;
-                if (!root) return;
-                setWorkspaceDeleteConfirm(null);
-                await deleteWorkspace(root);
-              }}
-            >
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        onClose={() => setWorkspaceDeleteConfirm(null)}
+        workspaceRoot={workspaceDeleteConfirm?.workspaceRoot ?? ""}
+        isTmpWorkspaceRoot={isTmpWorkspaceRoot(workspaceDeleteConfirm?.workspaceRoot ?? "")}
+        onDelete={async () => {
+          const root = workspaceDeleteConfirm?.workspaceRoot;
+          if (!root) return;
+          await deleteWorkspace(root);
+        }}
+      />
 
-
-      <Dialog
+      <EditMessageDialog
         open={editMessageOpen}
         onOpenChange={(open) => {
           if (open) {
@@ -2223,41 +2179,17 @@ export default function App() {
           setEditMessageId(null);
           setEditDraft("");
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit message</DialogTitle>
-            <DialogDescription>Edits history and regenerates from here.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Textarea
-              value={editDraft}
-              onChange={(e) => setEditDraft(e.target.value)}
-              className="min-h-[140px] resize-none"
-              placeholder="Update the user message…"
-            />
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setEditMessageOpen(false);
-                  setEditMessageId(null);
-                  setEditDraft("");
-                }}
-                disabled={editSaving}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={saveEditAndSend}
-                disabled={!historyMutable || editSaving || !editDraft.trim() || !editMessageId}
-              >
-                {editSaving ? "Saving…" : "Save & Send"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+        draft={editDraft}
+        onDraftChange={setEditDraft}
+        saving={editSaving}
+        canSave={historyMutable && !editSaving && Boolean(editDraft.trim()) && Boolean(editMessageId)}
+        onCancel={() => {
+          setEditMessageOpen(false);
+          setEditMessageId(null);
+          setEditDraft("");
+        }}
+        onSave={saveEditAndSend}
+      />
 
       <FolderPickerDialog
         open={workspaceCreateOpen}
