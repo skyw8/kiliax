@@ -13,7 +13,7 @@ use async_openai::{
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType,
-        CompletionUsage, CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName,
+        CompletionUsage, CreateChatCompletionRequestArgs, FunctionCall, FunctionName,
         FunctionObject, ImageDetail, ImageUrl,
     },
     Client,
@@ -29,10 +29,17 @@ use tracing::Instrument;
 
 use crate::config::{Config, ConfigError, ResolvedModel};
 use crate::protocol::{
-    ChatRequest, ChatResponse, ChatStreamChunk, Message, TokenUsage, ToolCall, ToolCallDelta,
-    ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
+    ChatRequest, ChatResponse, ChatStreamChunk, Message, ToolChoice, ToolDefinition,
+    UserContentPart, UserMessageContent,
 };
 use crate::telemetry;
+
+mod byot;
+
+use byot::{
+    chat_response_from_byot, chat_stream_chunk_from_byot, ByotCreateChatCompletionResponse,
+    ByotCreateChatCompletionStreamResponse,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
@@ -1176,241 +1183,10 @@ fn guess_image_mime_type(path: &std::path::Path) -> Option<&'static str> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct ByotCreateChatCompletionResponse {
-    pub id: String,
-    pub created: u32,
-    pub model: String,
-    #[serde(default)]
-    pub choices: Vec<ByotChatChoice>,
-    #[serde(default)]
-    pub usage: Option<CompletionUsage>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ByotChatChoice {
-    pub message: ByotChatCompletionMessage,
-    #[serde(default)]
-    pub finish_reason: Option<FinishReason>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-struct ByotChatCompletionMessage {
-    #[serde(default)]
-    pub content: Option<String>,
-
-    #[serde(default, rename = "reasoning_content")]
-    pub reasoning_content: Option<String>,
-
-    #[serde(default)]
-    pub thinking: Option<String>,
-
-    #[serde(default)]
-    pub reasoning: Option<String>,
-
-    #[serde(default)]
-    pub tool_calls: Option<Vec<ByotToolCall>>,
-
-    #[serde(default)]
-    pub function_call: Option<ByotFunctionCall>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-struct ByotToolCall {
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub function: Option<ByotFunctionCall>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-struct ByotFunctionCall {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub arguments: Option<String>,
-}
-
-fn chat_response_from_byot(
-    resp: ByotCreateChatCompletionResponse,
-) -> Result<ChatResponse, LlmError> {
-    let ByotCreateChatCompletionResponse {
-        id,
-        created,
-        model,
-        choices,
-        usage,
-    } = resp;
-
-    let choice = choices.into_iter().next().ok_or(LlmError::NoChoices)?;
-    let ByotChatChoice {
-        message,
-        finish_reason,
-    } = choice;
-    let ByotChatCompletionMessage {
-        content,
-        reasoning_content,
-        thinking,
-        reasoning,
-        tool_calls,
-        function_call,
-    } = message;
-
-    let tool_calls = if let Some(calls) = tool_calls {
-        calls
-            .into_iter()
-            .map(|c| ToolCall {
-                id: c.id.unwrap_or_default(),
-                name: c
-                    .function
-                    .as_ref()
-                    .and_then(|f| f.name.clone())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                arguments: c
-                    .function
-                    .as_ref()
-                    .and_then(|f| f.arguments.clone())
-                    .unwrap_or_default(),
-            })
-            .collect()
-    } else if let Some(call) = function_call {
-        vec![ToolCall {
-            id: String::new(),
-            name: call.name.unwrap_or_else(|| "unknown".to_string()),
-            arguments: call.arguments.unwrap_or_default(),
-        }]
-    } else {
-        Vec::new()
-    };
-
-    let reasoning_content = if tool_calls.is_empty() {
-        None
-    } else {
-        reasoning_content.or(thinking).or(reasoning)
-    };
-
-    let message_usage = usage.as_ref().map(TokenUsage::from_completion_usage);
-    Ok(ChatResponse {
-        id,
-        created,
-        model,
-        message: Message::Assistant {
-            content,
-            reasoning_content,
-            tool_calls,
-            usage: message_usage,
-        },
-        finish_reason,
-        usage,
-    })
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ByotCreateChatCompletionStreamResponse {
-    pub id: String,
-    pub created: u32,
-    pub model: String,
-    #[serde(default)]
-    pub choices: Vec<ByotChatChoiceStream>,
-    #[serde(default)]
-    pub usage: Option<CompletionUsage>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ByotChatChoiceStream {
-    #[serde(default)]
-    pub delta: ByotChatCompletionStreamDelta,
-    #[serde(default)]
-    pub finish_reason: Option<FinishReason>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-struct ByotChatCompletionStreamDelta {
-    #[serde(default)]
-    pub content: Option<String>,
-
-    #[serde(default, rename = "reasoning_content")]
-    pub reasoning_content: Option<String>,
-
-    #[serde(default)]
-    pub thinking: Option<String>,
-
-    #[serde(default)]
-    pub reasoning: Option<String>,
-
-    #[serde(default)]
-    pub tool_calls: Option<Vec<ByotToolCallChunk>>,
-
-    #[serde(default)]
-    pub function_call: Option<ByotFunctionCallStream>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ByotToolCallChunk {
-    pub index: u32,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub function: Option<ByotFunctionCallStream>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ByotFunctionCallStream {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub arguments: Option<String>,
-}
-
-fn chat_stream_chunk_from_byot(resp: ByotCreateChatCompletionStreamResponse) -> ChatStreamChunk {
-    let mut content_delta = None;
-    let mut thinking_delta = None;
-    let mut tool_calls = Vec::new();
-    let mut finish_reason = None;
-
-    if let Some(choice) = resp.choices.into_iter().next() {
-        content_delta = choice.delta.content;
-        thinking_delta = choice
-            .delta
-            .reasoning_content
-            .or(choice.delta.thinking)
-            .or(choice.delta.reasoning);
-        finish_reason = choice.finish_reason;
-
-        if let Some(calls) = choice.delta.tool_calls {
-            tool_calls = calls
-                .into_iter()
-                .map(|c| ToolCallDelta {
-                    index: c.index,
-                    id: c.id,
-                    name: c.function.as_ref().and_then(|f| f.name.clone()),
-                    arguments: c.function.as_ref().and_then(|f| f.arguments.clone()),
-                })
-                .collect();
-        } else if let Some(function_call) = choice.delta.function_call {
-            tool_calls = vec![ToolCallDelta {
-                index: 0,
-                id: None,
-                name: function_call.name,
-                arguments: function_call.arguments,
-            }];
-        }
-    }
-
-    ChatStreamChunk {
-        id: resp.id,
-        created: resp.created,
-        model: resp.model,
-        content_delta,
-        thinking_delta,
-        tool_calls,
-        finish_reason,
-        usage: resp.usage,
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::protocol::ToolCall;
+
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
