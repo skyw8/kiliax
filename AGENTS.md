@@ -47,6 +47,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
+- Domain types (events/status/session meta): `crates/kiliax-server/src/domain.rs`
 - HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/session actions: `crates/kiliax-server/src/http/`
 - State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Infra (path validation/tmp workspace helpers/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
@@ -59,7 +60,8 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + WS streaming/session actions/settings): `web/src/app.tsx`
+- Main UI (responsive layout + WS streaming/session actions): `web/src/app.tsx`
+- Settings dialog: `web/src/components/settings-dialog.tsx`
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + explicit session default persistence: `web/src/lib/api.ts`
