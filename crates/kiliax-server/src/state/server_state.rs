@@ -17,7 +17,7 @@ use crate::infra::{
     validate_client_extra_workspace_roots, validate_client_workspace_root,
 };
 
-use super::live_session::build_preamble;
+use super::preamble::build_preamble;
 use super::{
     apply_settings_patch, config_with_mcp_overrides, default_settings, list_models,
     load_settings_for_meta, map_core_message_to_api, map_mcp_status, map_session_err,

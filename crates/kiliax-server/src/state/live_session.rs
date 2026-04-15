@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -29,6 +29,9 @@ use super::{
     now_rfc3339, read_last_event_id, runtime_error_code, runtime_error_hint,
     session_events_api_path, session_settings_path, skills_config_from_settings, ts_ms_to_rfc3339,
     write_run_file, write_settings_file, ServerState,
+};
+use super::preamble::{
+    build_preamble, insert_preamble_updates_before_last_user, preamble_updates,
 };
 
 #[cfg(test)]
@@ -1334,83 +1337,6 @@ fn apply_run_overrides(
         }
     }
     Ok(out)
-}
-
-fn preamble_updates(messages: &[CoreMessage], new_preamble: Vec<CoreMessage>) -> Vec<CoreMessage> {
-    const HEADER: &str =
-        "Session update: the following system messages override earlier system context.";
-
-    let mut seen: HashSet<String> = messages
-        .iter()
-        .filter_map(|m| match m {
-            CoreMessage::System { content } => Some(content.clone()),
-            _ => None,
-        })
-        .collect();
-    let header_seen = seen.contains(HEADER);
-
-    let mut updates: Vec<CoreMessage> = Vec::new();
-    for msg in new_preamble {
-        let CoreMessage::System { content } = &msg else {
-            continue;
-        };
-        if seen.insert(content.clone()) {
-            updates.push(msg);
-        }
-    }
-
-    if updates.is_empty() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::with_capacity(updates.len().saturating_add(1));
-    if !header_seen {
-        out.push(CoreMessage::System {
-            content: HEADER.to_string(),
-        });
-    }
-    out.extend(updates);
-    out
-}
-
-fn insert_preamble_updates_before_last_user(
-    messages: &mut Vec<CoreMessage>,
-    new_preamble: Vec<CoreMessage>,
-) {
-    let updates = preamble_updates(messages.as_slice(), new_preamble);
-    if updates.is_empty() {
-        return;
-    }
-    let idx = messages
-        .iter()
-        .rposition(|m| matches!(m, CoreMessage::User { .. }))
-        .unwrap_or(messages.len());
-    messages.splice(idx..idx, updates);
-}
-
-pub(super) async fn build_preamble(
-    profile: &AgentProfile,
-    model_id: &str,
-    workspace_root: &PathBuf,
-    tools: &ToolEngine,
-    skills_config: &kiliax_core::config::SkillsConfig,
-) -> Vec<CoreMessage> {
-    let mut builder = kiliax_core::prompt::PromptBuilder::for_agent(profile)
-        .with_tools({
-            kiliax_core::tools::policy::tool_definitions_for_agent(profile, tools, model_id).await
-        })
-        .with_model_id(model_id.to_string())
-        .with_workspace_root(workspace_root);
-    let discovered = kiliax_core::tools::skills::discover_skills(workspace_root);
-    let filtered = discovered.items.into_iter().filter(|s| {
-        skills_config
-            .overrides
-            .get(&s.id)
-            .copied()
-            .unwrap_or(skills_config.default_enable)
-    });
-    builder = builder.add_skills(filtered);
-    builder.build()
 }
 
 #[cfg(test)]
