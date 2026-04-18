@@ -187,6 +187,9 @@ pub mod metrics {
     static LLM_TOKENS_PROMPT_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
     static LLM_TOKENS_PROMPT_CACHED_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
     static LLM_TOKENS_COMPLETION_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
+    static LLM_TTFT_MS: OnceLock<Histogram<f64>> = OnceLock::new();
+    static LLM_OUTPUT_TPS: OnceLock<Histogram<f64>> = OnceLock::new();
+    static LLM_OUTPUT_TPS_AFTER_TTFT: OnceLock<Histogram<f64>> = OnceLock::new();
 
     static TOOL_CALLS_TOTAL: OnceLock<Counter<u64>> = OnceLock::new();
     static TOOL_LATENCY_MS: OnceLock<Histogram<f64>> = OnceLock::new();
@@ -247,6 +250,36 @@ pub mod metrics {
         })
     }
 
+    fn llm_ttft_ms() -> &'static Histogram<f64> {
+        LLM_TTFT_MS.get_or_init(|| {
+            meter()
+                .f64_histogram("kiliax_llm_ttft_ms")
+                .with_description("Time to first token (streaming) in milliseconds")
+                .with_unit("ms")
+                .build()
+        })
+    }
+
+    fn llm_output_tps() -> &'static Histogram<f64> {
+        LLM_OUTPUT_TPS.get_or_init(|| {
+            meter()
+                .f64_histogram("kiliax_llm_output_tps")
+                .with_description("Completion tokens per second over the whole request")
+                .with_unit("tokens/s")
+                .build()
+        })
+    }
+
+    fn llm_output_tps_after_ttft() -> &'static Histogram<f64> {
+        LLM_OUTPUT_TPS_AFTER_TTFT.get_or_init(|| {
+            meter()
+                .f64_histogram("kiliax_llm_output_tps_after_ttft")
+                .with_description("Completion tokens per second excluding TTFT (generation phase)")
+                .with_unit("tokens/s")
+                .build()
+        })
+    }
+
     pub fn record_llm_call(
         provider: &str,
         model: &str,
@@ -276,6 +309,42 @@ pub mod metrics {
         if let Some(tokens) = completion_tokens {
             llm_tokens_completion_total().add(tokens, tags);
         }
+    }
+
+    pub fn record_llm_ttft(provider: &str, model: &str, stream: bool, outcome: &str, ttft: Duration) {
+        let tags = &[
+            KeyValue::new("provider", provider.to_string()),
+            KeyValue::new("model", model.to_string()),
+            KeyValue::new("stream", stream.to_string()),
+            KeyValue::new("outcome", outcome.to_string()),
+        ];
+        llm_ttft_ms().record(ttft.as_secs_f64() * 1000.0, tags);
+    }
+
+    pub fn record_llm_output_tps(provider: &str, model: &str, stream: bool, outcome: &str, tps: f64) {
+        let tags = &[
+            KeyValue::new("provider", provider.to_string()),
+            KeyValue::new("model", model.to_string()),
+            KeyValue::new("stream", stream.to_string()),
+            KeyValue::new("outcome", outcome.to_string()),
+        ];
+        llm_output_tps().record(tps, tags);
+    }
+
+    pub fn record_llm_output_tps_after_ttft(
+        provider: &str,
+        model: &str,
+        stream: bool,
+        outcome: &str,
+        tps: f64,
+    ) {
+        let tags = &[
+            KeyValue::new("provider", provider.to_string()),
+            KeyValue::new("model", model.to_string()),
+            KeyValue::new("stream", stream.to_string()),
+            KeyValue::new("outcome", outcome.to_string()),
+        ];
+        llm_output_tps_after_ttft().record(tps, tags);
     }
 
     fn tool_calls_total() -> &'static Counter<u64> {

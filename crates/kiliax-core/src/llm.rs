@@ -270,6 +270,13 @@ impl LlmClient {
                     if total_s > 0.0 {
                         let output_tps = usage.completion_tokens as f64 / total_s;
                         telemetry::spans::set_attribute(&span, "kiliax.llm.output_tps", output_tps);
+                        telemetry::metrics::record_llm_output_tps(
+                            &self.route.provider,
+                            &self.route.model,
+                            false,
+                            "ok",
+                            output_tps,
+                        );
                     }
                 }
                 telemetry::metrics::record_llm_call(
@@ -620,6 +627,7 @@ impl LlmClient {
 
                     let current_span = tracing::Span::current();
                     if let Some(ttft) = ttft {
+                        telemetry::metrics::record_llm_ttft(&provider, &model, true, outcome, ttft);
                         telemetry::spans::set_attribute(
                             &current_span,
                             "kiliax.llm.ttft_ms",
@@ -663,6 +671,13 @@ impl LlmClient {
                         let total_s = latency.as_secs_f64();
                         if total_s > 0.0 {
                             let output_tps = usage.completion_tokens as f64 / total_s;
+                            telemetry::metrics::record_llm_output_tps(
+                                &provider,
+                                &model,
+                                true,
+                                outcome,
+                                output_tps,
+                            );
                             telemetry::spans::set_attribute(
                                 &current_span,
                                 "kiliax.llm.output_tps",
@@ -674,6 +689,13 @@ impl LlmClient {
                             let gen_s = gen.as_secs_f64();
                             if gen_s > 0.0 {
                                 let output_tps = usage.completion_tokens as f64 / gen_s;
+                                telemetry::metrics::record_llm_output_tps_after_ttft(
+                                    &provider,
+                                    &model,
+                                    true,
+                                    outcome,
+                                    output_tps,
+                                );
                                 telemetry::spans::set_attribute(
                                     &current_span,
                                     "kiliax.llm.output_tps_after_ttft",
