@@ -49,9 +49,10 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- Domain types (events/status/session meta): `crates/kiliax-server/src/domain.rs`
 - HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/session actions: `crates/kiliax-server/src/http/`
+- HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- State domain types (events/status/snapshots/runs/messages): `crates/kiliax-server/src/state/domain.rs`
 - Infra (path validation/tmp workspace helpers/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes message `usage` and session default writes): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`

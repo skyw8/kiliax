@@ -55,6 +55,7 @@ async fn list_events(
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let limit = q.limit.unwrap_or(50);
     let out = state.list_events(&id, limit, q.after).await?;
+    let out: crate::api::EventListResponse = out.into();
     Ok(axum::Json(out))
 }
 
@@ -132,7 +133,7 @@ async fn stream_events_sse(
     );
 
     let out = backlog_stream.chain(live_stream).map(|item| {
-        let ev = item.unwrap();
+        let ev: crate::api::Event = item.unwrap().into();
         let json = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".to_string());
         Ok::<SseEvent, std::convert::Infallible>(
             SseEvent::default()
@@ -175,6 +176,7 @@ async fn stream_events_ws(
 
     Ok(ws.on_upgrade(move |mut socket| async move {
         for ev in backlog {
+            let ev: crate::api::Event = ev.into();
             if let Ok(text) = serde_json::to_string(&ev) {
                 let _ = socket
                     .send(axum::extract::ws::Message::Text(text.into()))
@@ -186,6 +188,7 @@ async fn stream_events_ws(
                 _ = shutdown.notified() => break,
                 received = rx.recv() => match received {
                     Ok(ev) => {
+                        let ev: crate::api::Event = ev.into();
                         if let Ok(text) = serde_json::to_string(&ev) {
                             if socket
                                 .send(axum::extract::ws::Message::Text(text.into()))
@@ -199,6 +202,7 @@ async fn stream_events_ws(
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
                         let last_event_id = live.last_event_id().await;
                         let ev = events_lagged_event(&session_id, missed, last_event_id);
+                        let ev: crate::api::Event = ev.into();
                         if let Ok(text) = serde_json::to_string(&ev) {
                             let _ = socket
                                 .send(axum::extract::ws::Message::Text(text.into()))
@@ -214,15 +218,19 @@ async fn stream_events_ws(
 }
 
 struct LiveSseState {
-    rx: broadcast::Receiver<crate::api::Event>,
+    rx: broadcast::Receiver<crate::state::domain::Event>,
     live: Arc<crate::state::LiveSession>,
     session_id: String,
     shutdown: Arc<tokio::sync::Notify>,
     done: bool,
 }
 
-fn events_lagged_event(session_id: &str, missed: u64, last_event_id: u64) -> crate::api::Event {
-    crate::api::Event {
+fn events_lagged_event(
+    session_id: &str,
+    missed: u64,
+    last_event_id: u64,
+) -> crate::state::domain::Event {
+    crate::state::domain::Event {
         event_id: last_event_id,
         ts: now_rfc3339(),
         session_id: session_id.to_string(),

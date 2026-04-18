@@ -48,7 +48,8 @@ async fn create_run(
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let req: crate::api::RunCreateRequest =
         serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-    let out = state.create_run(&id, idem_key(&headers), req).await?;
+    let out = state.create_run(&id, idem_key(&headers), req.into()).await?;
+    let out: crate::api::Run = out.into();
     Ok((StatusCode::CREATED, Json(out)))
 }
 
@@ -69,6 +70,7 @@ async fn get_run(
     Path(run_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let out = state.get_run(&run_id).await?;
+    let out: crate::api::Run = out.into();
     Ok(Json(out))
 }
 
@@ -89,5 +91,6 @@ async fn cancel_run(
     Path(run_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let out = state.cancel_run(&run_id).await?;
+    let out: crate::api::Run = out.into();
     Ok(Json(out))
 }

@@ -15,16 +15,14 @@ use tokio::sync::{broadcast, watch, Mutex, Notify};
 use tokio_stream::StreamExt;
 use tracing::{Instrument, Span};
 
-use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{
-    default_tmp_workspace_root, validate_client_extra_workspace_roots,
-    validate_client_workspace_root,
+    validate_client_extra_workspace_roots, validate_client_workspace_root,
 };
 
 use super::{
     append_event, apply_settings_patch, config_with_mcp_overrides, error_chain_vec,
-    format_error_chain_text, map_core_message_to_api_event_message, map_mcp_status,
+    format_error_chain_text, map_core_message_to_domain_event_message, map_mcp_status,
     map_session_err, merge_mcp_settings, new_run_id, now_rfc3339, read_last_event_id,
     resolve_session_settings, runtime_error_code, runtime_error_hint, session_events_api_path,
     skills_config_from_settings, ts_ms_to_rfc3339, write_run_file, ServerState,
@@ -35,6 +33,7 @@ use super::preamble::{
 
 #[cfg(test)]
 use super::{default_settings, read_events_after};
+use super::domain;
 
 pub struct LiveSession {
     session_id: SessionId,
@@ -42,30 +41,31 @@ pub struct LiveSession {
     config: Arc<ArcSwap<Config>>,
     runs_dir: PathBuf,
     fallback_workspace_root: PathBuf,
+    runner_enabled: bool,
 
     session: Mutex<SessionState>,
-    settings: Mutex<api::SessionSettings>,
+    settings: Mutex<domain::SessionSettings>,
     settings_dirty: AtomicBool,
     closing: AtomicBool,
     worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
 
     tools: Mutex<ToolEngine>,
 
-    status: Mutex<api::SessionStatus>,
+    status: Mutex<domain::SessionStatus>,
     queue: Mutex<VecDeque<QueuedRun>>,
     notify: Notify,
     active_cancel: Mutex<Option<watch::Sender<bool>>>,
 
     events_api_path: PathBuf,
-    events_tx: broadcast::Sender<api::Event>,
-    events_ring: Mutex<VecDeque<api::Event>>,
+    events_tx: broadcast::Sender<domain::Event>,
+    events_ring: Mutex<VecDeque<domain::Event>>,
     events_ring_size: AtomicUsize,
     next_event_id: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
 struct QueuedRun {
-    run: api::Run,
+    run: domain::Run,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,11 +79,11 @@ impl LiveSession {
         self.config.load_full()
     }
 
-    pub(super) async fn settings_snapshot(&self) -> api::SessionSettings {
+    pub(super) async fn settings_snapshot(&self) -> domain::SessionSettings {
         self.settings.lock().await.clone()
     }
 
-    pub(super) async fn workspace_root(&self) -> String {
+    pub(super) async fn workspace_root(&self) -> PathBuf {
         self.settings.lock().await.workspace_root.clone()
     }
 
@@ -105,11 +105,15 @@ impl LiveSession {
         let mut settings =
             resolve_session_settings(&meta, config.as_ref(), &self.fallback_workspace_root)?;
 
-        let workspace_root = match validate_client_workspace_root(&settings.workspace_root) {
-            Ok(p) => p,
-            Err(_) => default_tmp_workspace_root()?,
+        let workspace_root = match settings
+            .workspace_root
+            .to_str()
+            .and_then(|s| validate_client_workspace_root(s).ok())
+        {
+            Some(p) => p,
+            None => self.default_tmp_workspace_root()?,
         };
-        settings.workspace_root = workspace_root.display().to_string();
+        settings.workspace_root = workspace_root.clone();
         tokio::fs::create_dir_all(&workspace_root)
             .await
             .map_err(ApiError::internal_error)?;
@@ -117,7 +121,7 @@ impl LiveSession {
         *self.settings.lock().await = settings.clone();
 
         self.settings_dirty.store(true, Ordering::SeqCst);
-        let is_idle = { self.status.lock().await.run_state == api::SessionRunState::Idle };
+        let is_idle = { self.status.lock().await.run_state == domain::SessionRunState::Idle };
         if is_idle {
             self.apply_settings_now(true).await?;
             self.settings_dirty.store(false, Ordering::SeqCst);
@@ -142,7 +146,7 @@ impl LiveSession {
             .map_err(map_session_err)?;
         let settings =
             resolve_session_settings(&session.meta, config.as_ref(), &server.workspace_root)?;
-        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        let workspace_root = settings.workspace_root.clone();
         tokio::fs::create_dir_all(&workspace_root)
             .await
             .map_err(ApiError::internal_error)?;
@@ -160,7 +164,7 @@ impl LiveSession {
             session_id = %live.session_id,
             agent = %resumed_agent,
             model_id = %resumed_model_id,
-            workspace_root = %resumed_workspace_root,
+            workspace_root = %resumed_workspace_root.display(),
         );
         Ok(live)
     }
@@ -168,7 +172,7 @@ impl LiveSession {
     pub async fn from_state(
         server: &ServerState,
         session: SessionState,
-        settings: api::SessionSettings,
+        settings: domain::SessionSettings,
         tools: ToolEngine,
         rebuild_preamble: bool,
     ) -> Result<Arc<Self>, ApiError> {
@@ -183,14 +187,15 @@ impl LiveSession {
             config: server.config.clone(),
             runs_dir: server.runs_dir.clone(),
             fallback_workspace_root: server.workspace_root.clone(),
+            runner_enabled: server.runner_enabled(),
             session: Mutex::new(session),
             settings: Mutex::new(settings.clone()),
             settings_dirty: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             worker: Mutex::new(None),
             tools: Mutex::new(tools),
-            status: Mutex::new(api::SessionStatus {
-                run_state: api::SessionRunState::Idle,
+            status: Mutex::new(domain::SessionStatus {
+                run_state: domain::SessionRunState::Idle,
                 active_run_id: None,
                 step: 0,
                 active_tool: None,
@@ -212,8 +217,12 @@ impl LiveSession {
             let mut session = live.session.lock().await;
             session.meta.agent = settings.agent.clone();
             session.meta.model_id = Some(settings.model_id.clone());
-            session.meta.workspace_root = Some(settings.workspace_root.clone());
-            session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+            session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+            session.meta.extra_workspace_roots = settings
+                .extra_workspace_roots
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
             session.meta.mcp_servers = settings
                 .mcp
                 .servers
@@ -243,6 +252,18 @@ impl LiveSession {
         }
 
         Ok(live)
+    }
+
+    fn default_tmp_workspace_root(&self) -> Result<PathBuf, ApiError> {
+        if self.runner_enabled {
+            crate::infra::default_tmp_workspace_root()
+        } else {
+            Ok(self
+                .fallback_workspace_root
+                .join(".kiliax")
+                .join("workspace")
+                .join(format!("tmp_{}", SessionId::new())))
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -282,21 +303,21 @@ impl LiveSession {
     pub async fn is_idle_for_eviction(&self) -> bool {
         let q = self.queue.lock().await;
         let st = self.status.lock().await;
-        q.is_empty() && st.run_state == api::SessionRunState::Idle
+        q.is_empty() && st.run_state == domain::SessionRunState::Idle
     }
 
-    pub async fn summary(&self) -> Result<api::SessionSummary, ApiError> {
+    pub async fn summary(&self) -> Result<domain::SessionSummary, ApiError> {
         let session = self.session.lock().await;
         let settings = self.settings.lock().await.clone();
         let status = self.status.lock().await.clone();
         let last_outcome = if session.meta.last_error.is_some() {
-            api::SessionLastOutcome::Error
+            domain::SessionLastOutcome::Error
         } else if session.meta.last_finish_reason.is_some() {
-            api::SessionLastOutcome::Done
+            domain::SessionLastOutcome::Done
         } else {
-            api::SessionLastOutcome::None
+            domain::SessionLastOutcome::None
         };
-        Ok(api::SessionSummary {
+        Ok(domain::SessionSummary {
             id: self.session_id.to_string(),
             title: session
                 .meta
@@ -311,15 +332,15 @@ impl LiveSession {
         })
     }
 
-    pub async fn snapshot(&self) -> Result<api::Session, ApiError> {
+    pub async fn snapshot(&self) -> Result<domain::SessionSnapshot, ApiError> {
         let tools = { self.tools.lock().await.clone() };
-        Ok(api::Session {
+        Ok(domain::SessionSnapshot {
             summary: self.summary().await?,
             mcp_status: map_mcp_status(tools.mcp_status().await),
         })
     }
 
-    pub fn subscribe_events(&self) -> broadcast::Receiver<api::Event> {
+    pub fn subscribe_events(&self) -> broadcast::Receiver<domain::Event> {
         self.events_tx.subscribe()
     }
 
@@ -331,7 +352,7 @@ impl LiveSession {
         &self,
         after_event_id: u64,
         limit: usize,
-    ) -> Option<Vec<api::Event>> {
+    ) -> Option<Vec<domain::Event>> {
         let ring = self.events_ring.lock().await;
         let first = ring.front()?.event_id;
         if after_event_id.saturating_add(1) < first {
@@ -346,16 +367,21 @@ impl LiveSession {
         Some(out)
     }
 
-    pub async fn patch_settings(&self, patch: api::SessionSettingsPatch) -> Result<(), ApiError> {
+    pub async fn patch_settings(
+        &self,
+        patch: domain::SessionSettingsPatch,
+    ) -> Result<(), ApiError> {
         let config = self.config_snapshot();
         let mut settings = self.settings.lock().await.clone();
         let mut patch = patch;
         if let Some(roots) = patch.extra_workspace_roots.take() {
-            let workspace_root = PathBuf::from(settings.workspace_root.trim());
-            patch.extra_workspace_roots = Some(validate_client_extra_workspace_roots(
-                &roots,
-                &workspace_root,
-            )?);
+            let validated = validate_client_extra_workspace_roots(&roots, &settings.workspace_root)?;
+            patch.extra_workspace_roots = Some(
+                validated
+                    .into_iter()
+                    .map(|p| p.display().to_string())
+                    .collect(),
+            );
         }
 
         apply_settings_patch(&mut settings, &patch, config.as_ref(), true)?;
@@ -365,8 +391,12 @@ impl LiveSession {
             let mut session = self.session.lock().await;
             session.meta.agent = settings.agent.clone();
             session.meta.model_id = Some(settings.model_id.clone());
-            session.meta.workspace_root = Some(settings.workspace_root.clone());
-            session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+            session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+            session.meta.extra_workspace_roots = settings
+                .extra_workspace_roots
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
             session.meta.mcp_servers = settings
                 .mcp
                 .servers
@@ -385,7 +415,7 @@ impl LiveSession {
 
         self.settings_dirty.store(true, Ordering::SeqCst);
 
-        let is_idle = { self.status.lock().await.run_state == api::SessionRunState::Idle };
+        let is_idle = { self.status.lock().await.run_state == domain::SessionRunState::Idle };
         if is_idle {
             self.apply_settings_now(true).await?;
             self.settings_dirty.store(false, Ordering::SeqCst);
@@ -398,7 +428,9 @@ impl LiveSession {
         let q = self.queue.lock().await;
         let st = self.status.lock().await;
 
-        let busy = !q.is_empty() || st.queue_len > 0 || st.run_state != api::SessionRunState::Idle;
+        let busy = !q.is_empty()
+            || st.queue_len > 0
+            || st.run_state != domain::SessionRunState::Idle;
         if busy {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
@@ -454,7 +486,7 @@ impl LiveSession {
                 .map_err(map_session_err)?;
         }
 
-        self.emit_event(api::Event {
+        self.emit_event(domain::Event {
             event_id: self.alloc_event_id(),
             ts: now_rfc3339(),
             session_id: self.session_id.to_string(),
@@ -507,7 +539,7 @@ impl LiveSession {
                 .map_err(map_session_err)?;
         }
 
-        self.emit_event(api::Event {
+        self.emit_event(domain::Event {
             event_id: self.alloc_event_id(),
             ts: now_rfc3339(),
             session_id: self.session_id.to_string(),
@@ -525,15 +557,15 @@ impl LiveSession {
     pub async fn enqueue_run(
         &self,
         runs_dir: &Path,
-        req: api::RunCreateRequest,
-    ) -> Result<api::Run, ApiError> {
+        req: domain::RunCreateRequest,
+    ) -> Result<domain::Run, ApiError> {
         match &req.input {
-            api::RunInput::Text { text } => {
+            domain::RunInput::Text { text } => {
                 if text.trim().is_empty() {
                     return Err(ApiError::invalid_argument("input text must not be empty"));
                 }
             }
-            api::RunInput::FromUserMessage { user_message_id } => {
+            domain::RunInput::FromUserMessage { user_message_id } => {
                 if *user_message_id == 0 {
                     return Err(ApiError::invalid_argument("user_message_id must be >= 1"));
                 }
@@ -561,7 +593,7 @@ impl LiveSession {
                     }
                 }
             }
-            api::RunInput::EditUserMessage {
+            domain::RunInput::EditUserMessage {
                 user_message_id,
                 content,
             } => {
@@ -571,7 +603,7 @@ impl LiveSession {
                 self.apply_edit_user_message(*user_message_id, content)
                     .await?;
             }
-            api::RunInput::RegenerateAfterUserMessage { user_message_id } => {
+            domain::RunInput::RegenerateAfterUserMessage { user_message_id } => {
                 if *user_message_id == 0 {
                     return Err(ApiError::invalid_argument("user_message_id must be >= 1"));
                 }
@@ -580,10 +612,10 @@ impl LiveSession {
             }
         }
 
-        let run = api::Run {
+        let run = domain::Run {
             id: new_run_id(),
             session_id: self.session_id.to_string(),
-            state: api::RunState::Queued,
+            state: domain::RunState::Queued,
             created_at: now_rfc3339(),
             started_at: None,
             finished_at: None,
@@ -611,12 +643,12 @@ impl LiveSession {
             let mut q = self.queue.lock().await;
             if let Some(pos) = q.iter().position(|r| r.run.id == run_id) {
                 let mut run = q.remove(pos).expect("pos checked").run;
-                run.state = api::RunState::Cancelled;
+                run.state = domain::RunState::Cancelled;
                 run.finished_at = Some(now_rfc3339());
                 write_run_file(runs_dir, &run).await?;
                 self.status.lock().await.queue_len = q.len();
 
-                self.emit_event(api::Event {
+                self.emit_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -657,7 +689,7 @@ impl LiveSession {
         loop {
             if self.closing.load(Ordering::SeqCst) {
                 let queue_empty = self.queue.lock().await.is_empty();
-                let idle = self.status.lock().await.run_state == api::SessionRunState::Idle;
+                let idle = self.status.lock().await.run_state == domain::SessionRunState::Idle;
                 if queue_empty && idle {
                     break;
                 }
@@ -681,7 +713,7 @@ impl LiveSession {
 
             // Apply deferred session settings once safe.
             if self.settings_dirty.load(Ordering::SeqCst) {
-                if self.status.lock().await.run_state == api::SessionRunState::Idle {
+                if self.status.lock().await.run_state == domain::SessionRunState::Idle {
                     if let Err(err) = self.apply_settings_now(true).await {
                         tracing::error!("apply_settings_now error: {err}");
                     } else {
@@ -692,7 +724,7 @@ impl LiveSession {
         }
     }
 
-    async fn run_one(&self, mut run: api::Run) -> Result<(), ApiError> {
+    async fn run_one(&self, mut run: domain::Run) -> Result<(), ApiError> {
         let span = tracing::info_span!(
             "kiliax.run",
             session_id = %self.session_id,
@@ -710,19 +742,19 @@ impl LiveSession {
 
             {
                 let mut st = self.status.lock().await;
-                st.run_state = api::SessionRunState::Running;
+                st.run_state = domain::SessionRunState::Running;
                 st.active_run_id = Some(run.id.clone());
                 st.step = 0;
                 st.active_tool = None;
             }
 
-            run.state = api::RunState::Running;
+            run.state = domain::RunState::Running;
             run.started_at = Some(now_rfc3339());
             write_run_file(&self.runs_dir, &run).await?;
 
             let (user_text, persist_user) = match &run.input {
-                api::RunInput::Text { text } => (text.clone(), true),
-                api::RunInput::FromUserMessage { user_message_id } => {
+                domain::RunInput::Text { text } => (text.clone(), true),
+                domain::RunInput::FromUserMessage { user_message_id } => {
                     let session = self.session.lock().await;
                     let by_id = session
                         .message_ids
@@ -742,8 +774,8 @@ impl LiveSession {
                     });
                     (by_id.or(last_user).unwrap_or_default(), false)
                 }
-                api::RunInput::EditUserMessage { content, .. } => (content.clone(), false),
-                api::RunInput::RegenerateAfterUserMessage { .. } => {
+                domain::RunInput::EditUserMessage { content, .. } => (content.clone(), false),
+                domain::RunInput::RegenerateAfterUserMessage { .. } => {
                     let session = self.session.lock().await;
                     let last_user = session.messages.iter().rev().find_map(|m| match m {
                         CoreMessage::User { content } => {
@@ -779,7 +811,7 @@ impl LiveSession {
                 run_id = %run.id,
                 agent = %effective.agent,
                 model_id = %effective.model_id,
-                workspace_root = %effective.workspace_root,
+                workspace_root = %effective.workspace_root.display(),
                 mcp_enabled = mcp_enabled as u64,
             );
 
@@ -818,7 +850,7 @@ impl LiveSession {
 
             // Per-run MCP config.
             let cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
-            let workspace_root = PathBuf::from(effective.workspace_root.trim());
+            let workspace_root = effective.workspace_root.clone();
             Span::current().record(
                 "workspace_root",
                 tracing::field::display(workspace_root.display()),
@@ -940,7 +972,7 @@ impl LiveSession {
 
             {
                 let mut st = self.status.lock().await;
-                st.run_state = api::SessionRunState::Idle;
+                st.run_state = domain::SessionRunState::Idle;
                 st.active_run_id = None;
                 st.step = 0;
                 st.active_tool = None;
@@ -951,9 +983,9 @@ impl LiveSession {
             run.finish_reason = finish_reason.clone();
 
             if cancelled {
-                run.state = api::RunState::Cancelled;
+                run.state = domain::RunState::Cancelled;
             } else if let Some(err) = runtime_error {
-                run.state = api::RunState::Error;
+                run.state = domain::RunState::Error;
                 let code = runtime_error_code(&err).to_string();
                 let hint = runtime_error_hint(&code, effective.agent.as_str());
                 let mut meta_error = format_error_chain_text(&err);
@@ -966,7 +998,7 @@ impl LiveSession {
                     meta_error.push_str(hint);
                 }
 
-                run.error = Some(api::RunError {
+                run.error = Some(domain::RunError {
                     code: code.clone(),
                     message: meta_error.clone(),
                 });
@@ -988,7 +1020,7 @@ impl LiveSession {
                     "error_chain": error_chain_vec(&err),
                 }));
             } else {
-                run.state = api::RunState::Done;
+                run.state = domain::RunState::Done;
                 let persisted_finish_reason =
                     finish_reason.clone().or_else(|| Some("done".to_string()));
                 run.finish_reason = persisted_finish_reason.clone();
@@ -1011,9 +1043,9 @@ impl LiveSession {
             write_run_file(&self.runs_dir, &run).await?;
 
             match run.state {
-                api::RunState::Done => {
+                domain::RunState::Done => {
                     let run_id = run.id.clone();
-                    self.emit_event(api::Event {
+                    self.emit_event(domain::Event {
                         event_id: self.alloc_event_id(),
                         ts: now_rfc3339(),
                         session_id: self.session_id.to_string(),
@@ -1023,8 +1055,8 @@ impl LiveSession {
                     })
                     .await?;
                 }
-                api::RunState::Cancelled => {
-                    self.emit_event(api::Event {
+                domain::RunState::Cancelled => {
+                    self.emit_event(domain::Event {
                         event_id: self.alloc_event_id(),
                         ts: now_rfc3339(),
                         session_id: self.session_id.to_string(),
@@ -1034,9 +1066,9 @@ impl LiveSession {
                     })
                     .await?;
                 }
-                api::RunState::Error => {
+                domain::RunState::Error => {
                     let run_id = run.id.clone();
-                    self.emit_event(api::Event {
+                    self.emit_event(domain::Event {
                         event_id: self.alloc_event_id(),
                         ts: now_rfc3339(),
                         session_id: self.session_id.to_string(),
@@ -1059,21 +1091,17 @@ impl LiveSession {
         let config = self.config_snapshot();
         let settings = self.settings.lock().await.clone();
 
-        if settings.workspace_root.trim().is_empty() {
+        if settings.workspace_root.as_os_str().is_empty() {
             return Err(ApiError::invalid_argument(
                 "workspace_root must not be empty",
             ));
         }
-        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        let workspace_root = settings.workspace_root.clone();
         tokio::fs::create_dir_all(&workspace_root)
             .await
             .map_err(ApiError::internal_error)?;
 
-        let extra_workspace_roots: Vec<PathBuf> = settings
-            .extra_workspace_roots
-            .iter()
-            .map(PathBuf::from)
-            .collect();
+        let extra_workspace_roots = settings.extra_workspace_roots.clone();
 
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = {
@@ -1122,8 +1150,12 @@ impl LiveSession {
         }
         session.meta.agent = profile.name.to_string();
         session.meta.model_id = Some(settings.model_id.clone());
-        session.meta.workspace_root = Some(settings.workspace_root.clone());
-        session.meta.extra_workspace_roots = settings.extra_workspace_roots.clone();
+        session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+        session.meta.extra_workspace_roots = settings
+            .extra_workspace_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
         session.meta.mcp_servers = settings
             .mcp
             .servers
@@ -1140,7 +1172,7 @@ impl LiveSession {
             .map_err(map_session_err)?;
 
         if emit_event {
-            self.emit_event(api::Event {
+            self.emit_event(domain::Event {
                 event_id: self.alloc_event_id(),
                 ts: now_rfc3339(),
                 session_id: self.session_id.to_string(),
@@ -1165,13 +1197,13 @@ impl LiveSession {
 
     async fn handle_agent_event(
         &self,
-        run: &api::Run,
+        run: &domain::Run,
         ev: AgentEvent,
     ) -> Result<Option<String>, ApiError> {
         match ev {
             AgentEvent::StepStart { step } => {
                 self.status.lock().await.step = step as u32;
-                self.emit_event(api::Event {
+                self.emit_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -1182,7 +1214,7 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::StepEnd { step } => {
-                self.emit_event(api::Event {
+                self.emit_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -1193,7 +1225,7 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantThinkingDelta { delta } => {
-                self.emit_ephemeral_event(api::Event {
+                self.emit_ephemeral_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -1204,7 +1236,7 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantDelta { delta } => {
-                self.emit_ephemeral_event(api::Event {
+                self.emit_ephemeral_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -1217,9 +1249,12 @@ impl LiveSession {
             AgentEvent::AssistantMessage { message } => {
                 let seq = self.record_message(message.clone()).await?;
                 let created_at = now_rfc3339();
-                let api_msg =
-                    map_core_message_to_api_event_message(seq, created_at.clone(), message)
-                        .unwrap_or(api::Message::Assistant {
+                let msg = map_core_message_to_domain_event_message(
+                    seq,
+                    created_at.clone(),
+                    message,
+                )
+                .unwrap_or(domain::Message::Assistant {
                             id: seq.to_string(),
                             created_at: created_at.clone(),
                             content: String::new(),
@@ -1227,23 +1262,23 @@ impl LiveSession {
                             tool_calls: Vec::new(),
                             usage: None,
                         });
-                self.emit_event(api::Event {
+                self.emit_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: created_at,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
                     event_type: "assistant_message".to_string(),
-                    data: serde_json::json!({ "message": api_msg }),
+                    data: serde_json::json!({ "message": msg }),
                 })
                 .await?;
             }
             AgentEvent::ToolCall { call } => {
                 {
                     let mut st = self.status.lock().await;
-                    st.run_state = api::SessionRunState::Tooling;
+                    st.run_state = domain::SessionRunState::Tooling;
                     st.active_tool = Some(call.name.clone());
                 }
-                self.emit_event(api::Event {
+                self.emit_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: now_rfc3339(),
                     session_id: self.session_id.to_string(),
@@ -1257,25 +1292,28 @@ impl LiveSession {
                 let seq = self.record_message(message.clone()).await?;
                 {
                     let mut st = self.status.lock().await;
-                    st.run_state = api::SessionRunState::Running;
+                    st.run_state = domain::SessionRunState::Running;
                     st.active_tool = None;
                 }
                 let created_at = now_rfc3339();
-                let api_msg =
-                    map_core_message_to_api_event_message(seq, created_at.clone(), message)
-                        .unwrap_or(api::Message::Tool {
+                let msg = map_core_message_to_domain_event_message(
+                    seq,
+                    created_at.clone(),
+                    message,
+                )
+                .unwrap_or(domain::Message::Tool {
                             id: seq.to_string(),
                             created_at: created_at.clone(),
                             tool_call_id: "".to_string(),
                             content: "".to_string(),
                         });
-                self.emit_event(api::Event {
+                self.emit_event(domain::Event {
                     event_id: self.alloc_event_id(),
                     ts: created_at,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
                     event_type: "tool_result".to_string(),
-                    data: serde_json::json!({ "message": api_msg }),
+                    data: serde_json::json!({ "message": msg }),
                 })
                 .await?;
             }
@@ -1290,19 +1328,19 @@ impl LiveSession {
         self.next_event_id.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    async fn emit_event(&self, event: api::Event) -> Result<(), ApiError> {
+    async fn emit_event(&self, event: domain::Event) -> Result<(), ApiError> {
         self.emit_event_with_persistence(event, EventPersistence::Durable)
             .await
     }
 
-    async fn emit_ephemeral_event(&self, event: api::Event) -> Result<(), ApiError> {
+    async fn emit_ephemeral_event(&self, event: domain::Event) -> Result<(), ApiError> {
         self.emit_event_with_persistence(event, EventPersistence::Ephemeral)
             .await
     }
 
     async fn emit_event_with_persistence(
         &self,
-        event: api::Event,
+        event: domain::Event,
         persistence: EventPersistence,
     ) -> Result<(), ApiError> {
         if persistence == EventPersistence::Durable {
@@ -1326,10 +1364,10 @@ impl LiveSession {
 }
 
 fn apply_run_overrides(
-    base: &api::SessionSettings,
-    overrides: Option<&api::RunOverrides>,
+    base: &domain::SessionSettings,
+    overrides: Option<&domain::RunOverrides>,
     config: &Config,
-) -> Result<api::SessionSettings, ApiError> {
+) -> Result<domain::SessionSettings, ApiError> {
     let mut out = base.clone();
     if let Some(o) = overrides {
         if let Some(agent) = o.agent.as_deref() {
@@ -1418,7 +1456,7 @@ mod tests {
             .await
             .expect("live session");
 
-        live.emit_ephemeral_event(api::Event {
+        live.emit_ephemeral_event(domain::Event {
             event_id: live.alloc_event_id(),
             ts: now_rfc3339(),
             session_id: live.session_id.to_string(),
@@ -1439,7 +1477,7 @@ mod tests {
         assert_eq!(backlog.len(), 1);
         assert_eq!(backlog[0].event_type, "assistant_delta");
 
-        live.emit_event(api::Event {
+        live.emit_event(domain::Event {
             event_id: live.alloc_event_id(),
             ts: now_rfc3339(),
             session_id: live.session_id.to_string(),

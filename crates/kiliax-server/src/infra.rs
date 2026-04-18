@@ -47,11 +47,11 @@ pub(crate) fn validate_client_workspace_root(input: &str) -> Result<PathBuf, Api
 pub(crate) fn validate_client_extra_workspace_roots(
     inputs: &[String],
     workspace_root: &Path,
-) -> Result<Vec<String>, ApiError> {
+) -> Result<Vec<PathBuf>, ApiError> {
     let workspace_root =
         std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
-    let mut out: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
 
     for raw in inputs {
         let trimmed = raw.trim();
@@ -93,9 +93,8 @@ pub(crate) fn validate_client_extra_workspace_roots(
         if canonical == workspace_root {
             continue;
         }
-        let display = canonical.display().to_string();
-        if seen.insert(display.clone()) {
-            out.push(display);
+        if seen.insert(canonical.clone()) {
+            out.push(canonical);
         }
     }
 

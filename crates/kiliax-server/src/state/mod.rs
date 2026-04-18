@@ -1,4 +1,5 @@
 mod live_session;
+pub mod domain;
 mod preamble;
 mod server_state;
 
@@ -17,7 +18,6 @@ use kiliax_core::session::{FileSessionStore, SessionError, SessionId, SessionMet
 use kiliax_core::tools::McpServerConnectionState;
 use tokio::io::AsyncBufReadExt;
 
-use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::validate_client_workspace_root;
 
@@ -33,7 +33,7 @@ fn resolve_session_settings(
     meta: &SessionMeta,
     config: &Config,
     fallback_workspace_root: &Path,
-) -> Result<api::SessionSettings, ApiError> {
+) -> Result<domain::SessionSettings, ApiError> {
     let agent = AgentProfile::from_name(&meta.agent)
         .or_else(|| {
             config
@@ -68,13 +68,13 @@ fn resolve_session_settings(
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| fallback_workspace_root.display().to_string());
+        .map(PathBuf::from)
+        .unwrap_or_else(|| fallback_workspace_root.to_path_buf());
 
-    let main_root = PathBuf::from(workspace_root.trim());
+    let main_root = workspace_root.clone();
     let main_root = std::fs::canonicalize(&main_root).unwrap_or_else(|_| main_root.to_path_buf());
-    let mut extras: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut extras: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
     for raw in meta.extra_workspace_roots.iter() {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -98,9 +98,8 @@ fn resolve_session_settings(
         if canonical == main_root {
             continue;
         }
-        let display = canonical.display().to_string();
-        if seen.insert(display.clone()) {
-            extras.push(display);
+        if seen.insert(canonical.clone()) {
+            extras.push(canonical);
         }
     }
 
@@ -119,17 +118,17 @@ fn resolve_session_settings(
         .mcp
         .servers
         .iter()
-        .map(|s| api::McpServerSetting {
+        .map(|s| domain::McpServerSetting {
             id: s.name.clone(),
             enable: by_id.get(s.name.as_str()).copied().unwrap_or(s.enable),
         })
         .collect();
 
-    Ok(api::SessionSettings {
+    Ok(domain::SessionSettings {
         agent,
         model_id,
         skills,
-        mcp: api::McpServers { servers },
+        mcp: domain::McpServers { servers },
         workspace_root,
         extra_workspace_roots: extras,
     })
@@ -142,7 +141,7 @@ fn session_events_api_path(store: &FileSessionStore, session_id: &SessionId) -> 
 fn default_settings(
     config: &Config,
     meta: Option<&SessionMeta>,
-) -> Result<api::SessionSettings, ApiError> {
+) -> Result<domain::SessionSettings, ApiError> {
     let agent = meta
         .and_then(|m| AgentProfile::from_name(&m.agent))
         .or_else(|| {
@@ -167,10 +166,16 @@ fn default_settings(
     let workspace_root = meta
         .and_then(|m| m.workspace_root.clone())
         .unwrap_or_default();
+    let workspace_root = PathBuf::from(workspace_root.trim());
 
     let extra_workspace_roots = meta
         .map(|m| m.extra_workspace_roots.clone())
         .unwrap_or_default();
+    let extra_workspace_roots = extra_workspace_roots
+        .into_iter()
+        .map(|p| PathBuf::from(p.trim()))
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect::<Vec<_>>();
 
     let skills = match meta.and_then(|m| m.skills.as_ref()) {
         Some(skills) => skills_settings_from_config(skills),
@@ -181,29 +186,31 @@ fn default_settings(
         .mcp
         .servers
         .iter()
-        .map(|s| api::McpServerSetting {
+        .map(|s| domain::McpServerSetting {
             id: s.name.clone(),
             enable: s.enable,
         })
         .collect();
 
-    Ok(api::SessionSettings {
+    Ok(domain::SessionSettings {
         agent,
         model_id,
         skills,
-        mcp: api::McpServers { servers },
+        mcp: domain::McpServers { servers },
         workspace_root,
         extra_workspace_roots,
     })
 }
 
-fn skills_settings_from_config(skills: &kiliax_core::config::SkillsConfig) -> api::SkillsSettings {
-    api::SkillsSettings {
+fn skills_settings_from_config(
+    skills: &kiliax_core::config::SkillsConfig,
+) -> domain::SkillsSettings {
+    domain::SkillsSettings {
         default_enable: skills.default_enable,
         overrides: skills
             .overrides
             .iter()
-            .map(|(id, enable)| api::SkillEnableSetting {
+            .map(|(id, enable)| domain::SkillEnableSetting {
                 id: id.clone(),
                 enable: *enable,
             })
@@ -211,7 +218,9 @@ fn skills_settings_from_config(skills: &kiliax_core::config::SkillsConfig) -> ap
     }
 }
 
-fn skills_config_from_settings(skills: &api::SkillsSettings) -> kiliax_core::config::SkillsConfig {
+fn skills_config_from_settings(
+    skills: &domain::SkillsSettings,
+) -> kiliax_core::config::SkillsConfig {
     let mut overrides: BTreeMap<String, bool> = BTreeMap::new();
     for s in &skills.overrides {
         let id = s.id.trim();
@@ -227,8 +236,8 @@ fn skills_config_from_settings(skills: &api::SkillsSettings) -> kiliax_core::con
 }
 
 fn apply_settings_patch(
-    settings: &mut api::SessionSettings,
-    patch: &api::SessionSettingsPatch,
+    settings: &mut domain::SessionSettings,
+    patch: &domain::SessionSettingsPatch,
     config: &Config,
     allow_enable: bool,
 ) -> Result<(), ApiError> {
@@ -271,16 +280,16 @@ fn apply_settings_patch(
     if let Some(roots) = patch.extra_workspace_roots.as_ref() {
         settings.extra_workspace_roots = roots
             .iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .map(|s| PathBuf::from(s.trim()))
+            .filter(|p| !p.as_os_str().is_empty())
             .collect();
     }
     Ok(())
 }
 
 fn merge_skill_overrides(
-    existing: &mut Vec<api::SkillEnableSetting>,
-    patch: &[api::SkillEnableSetting],
+    existing: &mut Vec<domain::SkillEnableSetting>,
+    patch: &[domain::SkillEnableSetting],
 ) -> Result<(), ApiError> {
     let mut map: HashMap<String, bool> =
         existing.iter().map(|s| (s.id.clone(), s.enable)).collect();
@@ -299,14 +308,14 @@ fn merge_skill_overrides(
     existing.extend(
         entries
             .into_iter()
-            .map(|(id, enable)| api::SkillEnableSetting { id, enable }),
+            .map(|(id, enable)| domain::SkillEnableSetting { id, enable }),
     );
     Ok(())
 }
 
 fn merge_mcp_settings(
-    existing: &mut Vec<api::McpServerSetting>,
-    patch: &[api::McpServerSetting],
+    existing: &mut Vec<domain::McpServerSetting>,
+    patch: &[domain::McpServerSetting],
     config: &Config,
     allow_enable: bool,
 ) -> Result<(), ApiError> {
@@ -334,7 +343,7 @@ fn merge_mcp_settings(
     existing.clear();
     for server in &config.mcp.servers {
         let enable = map.get(&server.name).copied().unwrap_or(server.enable);
-        existing.push(api::McpServerSetting {
+        existing.push(domain::McpServerSetting {
             id: server.name.clone(),
             enable,
         });
@@ -344,7 +353,7 @@ fn merge_mcp_settings(
 
 fn config_with_mcp_overrides(
     base: &Config,
-    servers: &[api::McpServerSetting],
+    servers: &[domain::McpServerSetting],
 ) -> Result<Config, ApiError> {
     let mut cfg = base.clone();
     kiliax_core::mcp_overrides::apply_mcp_enable_overrides(
@@ -362,9 +371,9 @@ fn config_with_mcp_overrides(
 }
 
 fn mcp_status_from_settings(
-    settings: &api::SessionSettings,
+    settings: &domain::SessionSettings,
     config: &Config,
-) -> Vec<api::McpServerStatus> {
+) -> Vec<domain::McpServerStatus> {
     let by_id: HashMap<String, bool> = settings
         .mcp
         .servers
@@ -377,13 +386,13 @@ fn mcp_status_from_settings(
         .iter()
         .map(|s| {
             let enable = by_id.get(&s.name).copied().unwrap_or(s.enable);
-            api::McpServerStatus {
+            domain::McpServerStatus {
                 id: s.name.clone(),
                 enable,
                 state: if enable {
-                    api::McpConnectionState::Error
+                    domain::McpConnectionState::Error
                 } else {
-                    api::McpConnectionState::Disabled
+                    domain::McpConnectionState::Disabled
                 },
                 last_error: None,
                 tools: None,
@@ -392,22 +401,26 @@ fn mcp_status_from_settings(
         .collect()
 }
 
-fn map_mcp_status(status: Vec<kiliax_core::tools::McpServerStatus>) -> Vec<api::McpServerStatus> {
+fn map_mcp_status(
+    status: Vec<kiliax_core::tools::McpServerStatus>,
+) -> Vec<domain::McpServerStatus> {
     status
         .into_iter()
         .map(|s| {
             let (state, last_error) = match s.state {
-                McpServerConnectionState::Disabled => (api::McpConnectionState::Disabled, None),
-                McpServerConnectionState::Connecting => (api::McpConnectionState::Connecting, None),
-                McpServerConnectionState::Connected => (api::McpConnectionState::Connected, None),
-                McpServerConnectionState::Retry { error, .. } => {
-                    (api::McpConnectionState::Error, Some(error))
+                McpServerConnectionState::Disabled => (domain::McpConnectionState::Disabled, None),
+                McpServerConnectionState::Connecting => {
+                    (domain::McpConnectionState::Connecting, None)
                 }
-                McpServerConnectionState::Disconnected => (api::McpConnectionState::Error, None),
+                McpServerConnectionState::Connected => (domain::McpConnectionState::Connected, None),
+                McpServerConnectionState::Retry { error, .. } => {
+                    (domain::McpConnectionState::Error, Some(error))
+                }
+                McpServerConnectionState::Disconnected => (domain::McpConnectionState::Error, None),
             };
-            api::McpServerStatus {
+            domain::McpServerStatus {
                 id: s.name,
-                enable: state != api::McpConnectionState::Disabled,
+                enable: state != domain::McpConnectionState::Disabled,
                 state,
                 last_error,
                 tools: None,
@@ -466,11 +479,15 @@ fn now_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
-fn map_core_message_to_api(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<api::Message> {
+fn map_core_message_to_domain(
+    seq: u64,
+    ts_ms: u64,
+    msg: CoreMessage,
+) -> Option<domain::Message> {
     let id = seq.to_string();
     let created_at = ts_ms_to_rfc3339(ts_ms);
     match msg {
-        CoreMessage::User { content } => Some(api::Message::User {
+        CoreMessage::User { content } => Some(domain::Message::User {
             id,
             created_at,
             content: content.first_text().unwrap_or("").to_string(),
@@ -480,25 +497,25 @@ fn map_core_message_to_api(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<api
             reasoning_content,
             tool_calls,
             usage,
-        } => Some(api::Message::Assistant {
+        } => Some(domain::Message::Assistant {
             id,
             created_at,
             content: content.unwrap_or_default(),
             reasoning_content,
             tool_calls: tool_calls
                 .into_iter()
-                .map(|c| api::ToolCall {
+                .map(|c| domain::ToolCall {
                     id: c.id,
                     name: c.name,
                     arguments: c.arguments,
                 })
                 .collect(),
-            usage: usage.map(api::TokenUsage::from),
+            usage: usage.map(domain::TokenUsage::from),
         }),
         CoreMessage::Tool {
             tool_call_id,
             content,
-        } => Some(api::Message::Tool {
+        } => Some(domain::Message::Tool {
             id,
             created_at,
             tool_call_id,
@@ -508,14 +525,14 @@ fn map_core_message_to_api(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<api
     }
 }
 
-fn map_core_message_to_api_event_message(
+fn map_core_message_to_domain_event_message(
     seq: u64,
     created_at: String,
     msg: CoreMessage,
-) -> Option<api::Message> {
+) -> Option<domain::Message> {
     let id = seq.to_string();
     match msg {
-        CoreMessage::User { content } => Some(api::Message::User {
+        CoreMessage::User { content } => Some(domain::Message::User {
             id,
             created_at,
             content: content.first_text().unwrap_or("").to_string(),
@@ -525,25 +542,25 @@ fn map_core_message_to_api_event_message(
             reasoning_content,
             tool_calls,
             usage,
-        } => Some(api::Message::Assistant {
+        } => Some(domain::Message::Assistant {
             id,
             created_at,
             content: content.unwrap_or_default(),
             reasoning_content,
             tool_calls: tool_calls
                 .into_iter()
-                .map(|c| api::ToolCall {
+                .map(|c| domain::ToolCall {
                     id: c.id,
                     name: c.name,
                     arguments: c.arguments,
                 })
                 .collect(),
-            usage: usage.map(api::TokenUsage::from),
+            usage: usage.map(domain::TokenUsage::from),
         }),
         CoreMessage::Tool {
             tool_call_id,
             content,
-        } => Some(api::Message::Tool {
+        } => Some(domain::Message::Tool {
             id,
             created_at,
             tool_call_id,
@@ -575,7 +592,7 @@ async fn read_last_event_id(path: &Path) -> Result<u64, ApiError> {
         if raw.is_empty() {
             continue;
         }
-        if let Ok(ev) = serde_json::from_str::<api::Event>(raw) {
+        if let Ok(ev) = serde_json::from_str::<domain::Event>(raw) {
             last = last.max(ev.event_id);
         }
     }
@@ -586,7 +603,7 @@ async fn read_events_after(
     path: &Path,
     after: u64,
     limit: usize,
-) -> Result<Vec<api::Event>, ApiError> {
+) -> Result<Vec<domain::Event>, ApiError> {
     let file = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -608,7 +625,7 @@ async fn read_events_after(
         if raw.is_empty() {
             continue;
         }
-        let ev: api::Event = match serde_json::from_str(raw) {
+        let ev: domain::Event = match serde_json::from_str(raw) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -620,7 +637,7 @@ async fn read_events_after(
     Ok(out)
 }
 
-async fn append_event(path: &Path, event: &api::Event) -> Result<(), ApiError> {
+async fn append_event(path: &Path, event: &domain::Event) -> Result<(), ApiError> {
     use tokio::io::AsyncWriteExt;
     let text = serde_json::to_string(event).map_err(ApiError::internal_error)?;
     let mut file = tokio::fs::OpenOptions::new()
@@ -666,7 +683,7 @@ async fn write_text_atomic(path: &Path, text: &str) -> Result<(), ApiError> {
     }
 }
 
-async fn write_run_file(dir: &Path, run: &api::Run) -> Result<(), ApiError> {
+async fn write_run_file(dir: &Path, run: &domain::Run) -> Result<(), ApiError> {
     tokio::fs::create_dir_all(dir)
         .await
         .map_err(ApiError::internal_error)?;
@@ -678,7 +695,7 @@ async fn write_run_file(dir: &Path, run: &api::Run) -> Result<(), ApiError> {
     Ok(())
 }
 
-async fn read_run_file(dir: &Path, run_id: &str) -> Result<api::Run, ApiError> {
+async fn read_run_file(dir: &Path, run_id: &str) -> Result<domain::Run, ApiError> {
     let path = dir.join(format!("{run_id}.json"));
     let text = tokio::fs::read_to_string(&path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {

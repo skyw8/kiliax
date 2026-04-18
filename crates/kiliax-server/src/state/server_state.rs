@@ -13,14 +13,15 @@ use tokio::sync::{broadcast, Mutex, Notify};
 use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{
-    default_tmp_workspace_root, is_tmp_workspace_root, open_external,
-    validate_client_extra_workspace_roots, validate_client_workspace_root,
+    is_tmp_workspace_root, open_external, validate_client_extra_workspace_roots,
+    validate_client_workspace_root,
 };
 
 use super::preamble::build_preamble;
+use super::domain;
 use super::{
     apply_settings_patch, config_with_mcp_overrides, default_settings, list_models,
-    map_core_message_to_api, map_mcp_status, map_session_err, resolve_session_settings,
+    map_core_message_to_domain, map_mcp_status, map_session_err, resolve_session_settings,
     mcp_status_from_settings, now_ms, read_events_after, read_last_event_id, read_run_file,
     session_events_api_path, skills_config_from_settings, ts_ms_to_rfc3339, write_text_atomic,
     LiveSession,
@@ -114,6 +115,18 @@ impl ServerState {
 
     pub(super) fn runner_enabled(&self) -> bool {
         self.runner_enabled
+    }
+
+    fn default_tmp_workspace_root(&self) -> Result<PathBuf, ApiError> {
+        if self.runner_enabled {
+            crate::infra::default_tmp_workspace_root()
+        } else {
+            Ok(self
+                .workspace_root
+                .join(".kiliax")
+                .join("workspace")
+                .join(format!("tmp_{}", SessionId::new())))
+        }
     }
 
     async fn idempotency_get(&self, key: &str) -> Option<String> {
@@ -583,13 +596,13 @@ impl ServerState {
             settings.workspace_root
         };
 
-        if workspace_root.trim().is_empty() {
+        if workspace_root.as_os_str().is_empty() {
             return Ok(api::SkillListResponse {
                 items: Vec::new(),
                 errors: Vec::new(),
             });
         }
-        let root = PathBuf::from(workspace_root.trim());
+        let root = workspace_root;
 
         let discovered = kiliax_core::tools::skills::discover_skills(&root);
         Ok(api::SkillListResponse {
@@ -692,12 +705,12 @@ impl ServerState {
                 resolve_session_settings(&session.meta, config.as_ref(), &self.workspace_root)?
             }
         };
-        if settings.workspace_root.trim().is_empty() {
+        if settings.workspace_root.as_os_str().is_empty() {
             return Err(ApiError::invalid_argument(
                 "workspace_root must not be empty",
             ));
         }
-        let root = PathBuf::from(settings.workspace_root.trim());
+        let root = settings.workspace_root.clone();
         open_external(&root, target).await
     }
 
@@ -736,8 +749,8 @@ impl ServerState {
     pub async fn create_session(
         &self,
         idem_key: Option<String>,
-        req: api::SessionCreateRequest,
-    ) -> Result<api::Session, ApiError> {
+        req: domain::SessionCreateRequest,
+    ) -> Result<domain::SessionSnapshot, ApiError> {
         if let Some(key) = idem_key {
             let map_key = format!("POST:/v1/sessions:{key}");
             if let Some(existing) = self.idempotency_get(&map_key).await {
@@ -757,8 +770,8 @@ impl ServerState {
     pub async fn fork_session(
         &self,
         session_id: &SessionId,
-        req: api::ForkSessionRequest,
-    ) -> Result<api::ForkSessionResponse, ApiError> {
+        req: domain::ForkSessionRequest,
+    ) -> Result<domain::ForkSessionResponse, ApiError> {
         let config = self.config_snapshot();
         let source = self.store.load(session_id).await.map_err(map_session_err)?;
         let settings =
@@ -787,12 +800,12 @@ impl ServerState {
             source.messages.clone()
         };
 
-        if settings.workspace_root.trim().is_empty() {
+        if settings.workspace_root.as_os_str().is_empty() {
             return Err(ApiError::invalid_argument(
                 "workspace_root must not be empty",
             ));
         }
-        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        let workspace_root = settings.workspace_root.clone();
         tokio::fs::create_dir_all(&workspace_root)
             .await
             .map_err(ApiError::internal_error)?;
@@ -800,13 +813,7 @@ impl ServerState {
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
         tools
-            .set_extra_workspace_roots(
-                settings
-                    .extra_workspace_roots
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect(),
-            )
+            .set_extra_workspace_roots(settings.extra_workspace_roots.clone())
             .map_err(ApiError::internal_error)?;
 
         let mut forked = self
@@ -815,8 +822,12 @@ impl ServerState {
                 settings.agent.clone(),
                 Some(settings.model_id.clone()),
                 Some(self.config_path.display().to_string()),
-                Some(settings.workspace_root.clone()),
-                settings.extra_workspace_roots.clone(),
+                Some(settings.workspace_root.display().to_string()),
+                settings
+                    .extra_workspace_roots
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect(),
                 initial_messages,
             )
             .await
@@ -842,15 +853,15 @@ impl ServerState {
         );
         self.enforce_live_session_limits().await;
 
-        Ok(api::ForkSessionResponse {
+        Ok(domain::ForkSessionResponse {
             session: live.snapshot().await?,
         })
     }
 
     async fn create_session_inner(
         &self,
-        req: api::SessionCreateRequest,
-    ) -> Result<api::Session, ApiError> {
+        req: domain::SessionCreateRequest,
+    ) -> Result<domain::SessionSnapshot, ApiError> {
         let config = self.config_snapshot();
 
         let mut settings = default_settings(config.as_ref(), None)?;
@@ -858,11 +869,11 @@ impl ServerState {
         if let Some(create) = req.settings {
             if let Some(root) = create.workspace_root.as_deref() {
                 let root = validate_client_workspace_root(root)?;
-                settings.workspace_root = root.display().to_string();
+                settings.workspace_root = root;
             }
             extra_workspace_roots = create.extra_workspace_roots;
 
-            let patch = api::SessionSettingsPatch {
+            let patch = domain::SessionSettingsPatch {
                 agent: create.agent,
                 model_id: create.model_id,
                 skills: create.skills,
@@ -888,11 +899,10 @@ impl ServerState {
             )
         })?;
 
-        if settings.workspace_root.trim().is_empty() {
-            let root = default_tmp_workspace_root()?;
-            settings.workspace_root = root.display().to_string();
+        if settings.workspace_root.as_os_str().is_empty() {
+            settings.workspace_root = self.default_tmp_workspace_root()?;
         }
-        let workspace_root = PathBuf::from(settings.workspace_root.trim());
+        let workspace_root = settings.workspace_root.clone();
         tokio::fs::create_dir_all(&workspace_root)
             .await
             .map_err(ApiError::internal_error)?;
@@ -905,13 +915,7 @@ impl ServerState {
         let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
         tools
-            .set_extra_workspace_roots(
-                settings
-                    .extra_workspace_roots
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect(),
-            )
+            .set_extra_workspace_roots(settings.extra_workspace_roots.clone())
             .map_err(ApiError::internal_error)?;
 
         let skills_config = skills_config_from_settings(&settings.skills);
@@ -930,8 +934,12 @@ impl ServerState {
                 profile.name.to_string(),
                 Some(settings.model_id.clone()),
                 Some(self.config_path.display().to_string()),
-                Some(settings.workspace_root.clone()),
-                settings.extra_workspace_roots.clone(),
+                Some(settings.workspace_root.display().to_string()),
+                settings
+                    .extra_workspace_roots
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect(),
                 messages.clone(),
             )
             .await
@@ -970,7 +978,7 @@ impl ServerState {
             session_id = %created_session_id,
             agent = %created_agent,
             model_id = %created_model_id,
-            workspace_root = %created_workspace_root,
+            workspace_root = %created_workspace_root.display(),
         );
         live.snapshot().await
     }
@@ -980,7 +988,7 @@ impl ServerState {
         live_only: bool,
         limit: usize,
         cursor: Option<String>,
-    ) -> Result<api::SessionListResponse, ApiError> {
+    ) -> Result<domain::SessionList, ApiError> {
         let config = self.config_snapshot();
 
         let limit = limit.clamp(1, 200);
@@ -989,7 +997,7 @@ impl ServerState {
             .and_then(|c| c.parse::<usize>().ok())
             .unwrap_or(0);
 
-        let mut items: Vec<api::SessionSummary> = Vec::new();
+        let mut items: Vec<domain::SessionSummary> = Vec::new();
         if live_only {
             let live = self.sessions.lock().await;
             for s in live.values() {
@@ -1008,21 +1016,21 @@ impl ServerState {
                 let last_event_id =
                     read_last_event_id(&session_events_api_path(&self.store, &meta.id)).await?;
                 let last_outcome = if meta.last_error.is_some() {
-                    api::SessionLastOutcome::Error
+                    domain::SessionLastOutcome::Error
                 } else if meta.last_finish_reason.is_some() {
-                    api::SessionLastOutcome::Done
+                    domain::SessionLastOutcome::Done
                 } else {
-                    api::SessionLastOutcome::None
+                    domain::SessionLastOutcome::None
                 };
 
-                items.push(api::SessionSummary {
+                items.push(domain::SessionSummary {
                     id: id.clone(),
                     title: meta.title.clone().unwrap_or_else(|| id.clone()),
                     created_at: ts_ms_to_rfc3339(meta.created_at_ms),
                     updated_at: ts_ms_to_rfc3339(meta.updated_at_ms),
                     last_outcome,
-                    status: api::SessionStatus {
-                        run_state: api::SessionRunState::Idle,
+                    status: domain::SessionStatus {
+                        run_state: domain::SessionRunState::Idle,
                         active_run_id: None,
                         step: 0,
                         active_tool: None,
@@ -1046,10 +1054,13 @@ impl ServerState {
             None
         };
 
-        Ok(api::SessionListResponse { items, next_cursor })
+        Ok(domain::SessionList { items, next_cursor })
     }
 
-    pub async fn get_session(&self, session_id: &SessionId) -> Result<api::Session, ApiError> {
+    pub async fn get_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<domain::SessionSnapshot, ApiError> {
         let config = self.config_snapshot();
 
         if let Some(live) = self.get_live(session_id.as_str()).await {
@@ -1062,15 +1073,15 @@ impl ServerState {
         let last_event_id =
             read_last_event_id(&session_events_api_path(&self.store, session_id)).await?;
         let last_outcome = if state.meta.last_error.is_some() {
-            api::SessionLastOutcome::Error
+            domain::SessionLastOutcome::Error
         } else if state.meta.last_finish_reason.is_some() {
-            api::SessionLastOutcome::Done
+            domain::SessionLastOutcome::Done
         } else {
-            api::SessionLastOutcome::None
+            domain::SessionLastOutcome::None
         };
 
-        Ok(api::Session {
-            summary: api::SessionSummary {
+        Ok(domain::SessionSnapshot {
+            summary: domain::SessionSummary {
                 id: session_id.to_string(),
                 title: state
                     .meta
@@ -1080,8 +1091,8 @@ impl ServerState {
                 created_at: ts_ms_to_rfc3339(state.meta.created_at_ms),
                 updated_at: ts_ms_to_rfc3339(state.meta.updated_at_ms),
                 last_outcome,
-                status: api::SessionStatus {
-                    run_state: api::SessionRunState::Idle,
+                status: domain::SessionStatus {
+                    run_state: domain::SessionRunState::Idle,
                     active_run_id: None,
                     step: 0,
                     active_tool: None,
@@ -1099,9 +1110,9 @@ impl ServerState {
         session_id: &SessionId,
     ) -> Result<Option<PathBuf>, ApiError> {
         if let Some(live) = self.get_live(session_id.as_str()).await {
-            let root = live.workspace_root().await.trim().to_string();
-            if !root.is_empty() {
-                return Ok(Some(PathBuf::from(root)));
+            let root = live.workspace_root().await;
+            if !root.as_os_str().is_empty() {
+                return Ok(Some(root));
             }
         }
 
@@ -1182,8 +1193,8 @@ impl ServerState {
     pub async fn patch_session_settings(
         &self,
         session_id: &SessionId,
-        patch: api::SessionSettingsPatch,
-    ) -> Result<api::Session, ApiError> {
+        patch: domain::SessionSettingsPatch,
+    ) -> Result<domain::SessionSnapshot, ApiError> {
         let live = self.ensure_live(session_id).await?;
         live.patch_settings(patch).await?;
         live.snapshot().await
@@ -1192,7 +1203,7 @@ impl ServerState {
     pub async fn save_session_defaults(
         &self,
         session_id: &SessionId,
-        req: api::SessionSaveDefaultsRequest,
+        req: domain::SessionSaveDefaultsRequest,
     ) -> Result<(), ApiError> {
         let live = self.ensure_live(session_id).await?;
         let settings = live.settings_snapshot().await;
@@ -1250,8 +1261,8 @@ impl ServerState {
         &self,
         session_id: &SessionId,
         idem_key: Option<String>,
-        req: api::RunCreateRequest,
-    ) -> Result<api::Run, ApiError> {
+        req: domain::RunCreateRequest,
+    ) -> Result<domain::Run, ApiError> {
         if let Some(key) = idem_key {
             let map_key = format!("POST:/v1/sessions/{session_id}/runs:{key}");
             if let Some(existing) = self.idempotency_get(&map_key).await {
@@ -1267,8 +1278,8 @@ impl ServerState {
     async fn create_run_inner(
         &self,
         session_id: &SessionId,
-        req: api::RunCreateRequest,
-    ) -> Result<api::Run, ApiError> {
+        req: domain::RunCreateRequest,
+    ) -> Result<domain::Run, ApiError> {
         let live = if req.auto_resume {
             self.ensure_live(session_id).await?
         } else {
@@ -1283,11 +1294,11 @@ impl ServerState {
         live.enqueue_run(&self.runs_dir, req).await
     }
 
-    pub async fn get_run(&self, run_id: &str) -> Result<api::Run, ApiError> {
+    pub async fn get_run(&self, run_id: &str) -> Result<domain::Run, ApiError> {
         read_run_file(&self.runs_dir, run_id).await
     }
 
-    pub async fn cancel_run(&self, run_id: &str) -> Result<api::Run, ApiError> {
+    pub async fn cancel_run(&self, run_id: &str) -> Result<domain::Run, ApiError> {
         let run = read_run_file(&self.runs_dir, run_id).await?;
         let session_id = SessionId::parse(&run.session_id)
             .map_err(|e| ApiError::invalid_argument(e.to_string()))?;
@@ -1304,7 +1315,7 @@ impl ServerState {
         session_id: &SessionId,
         limit: usize,
         before: Option<String>,
-    ) -> Result<api::MessageListResponse, ApiError> {
+    ) -> Result<domain::MessageList, ApiError> {
         let limit = limit.clamp(1, 200);
         let before_seq = before.as_deref().and_then(|v| v.parse::<u64>().ok());
 
@@ -1330,19 +1341,19 @@ impl ServerState {
 
         let base_ts_ms = state.meta.created_at_ms;
         let mut next_before: Option<String> = None;
-        let mut out: Vec<api::Message> = Vec::new();
+        let mut out: Vec<domain::Message> = Vec::new();
         for (seq, msg) in slice {
             let ts_ms = base_ts_ms.saturating_add(seq);
-            let Some(api_msg) = map_core_message_to_api(seq, ts_ms, msg) else {
+            let Some(msg) = map_core_message_to_domain(seq, ts_ms, msg) else {
                 continue;
             };
             if next_before.is_none() {
                 next_before = Some(seq.to_string());
             }
-            out.push(api_msg);
+            out.push(msg);
         }
 
-        Ok(api::MessageListResponse {
+        Ok(domain::MessageList {
             items: out,
             next_before,
         })
@@ -1353,7 +1364,10 @@ impl ServerState {
         Ok(api::Capabilities {
             agents: vec!["general".to_string(), "plan".to_string()],
             models: list_models(config.as_ref()),
-            mcp_servers: map_mcp_status(self.tools_for_caps.mcp_status().await),
+            mcp_servers: map_mcp_status(self.tools_for_caps.mcp_status().await)
+                .into_iter()
+                .map(mcp_status_to_api)
+                .collect(),
         })
     }
 
@@ -1362,14 +1376,14 @@ impl ServerState {
         session_id: &SessionId,
         limit: usize,
         after: Option<u64>,
-    ) -> Result<api::EventListResponse, ApiError> {
+    ) -> Result<domain::EventList, ApiError> {
         self.ensure_on_disk_session_exists(session_id).await?;
         let limit = limit.clamp(1, 200);
         let after = after.unwrap_or(0);
         let path = session_events_api_path(&self.store, session_id);
         let events = read_events_after(&path, after, limit).await?;
         let next_after = events.last().map(|e| e.event_id);
-        Ok(api::EventListResponse {
+        Ok(domain::EventList {
             items: events,
             next_after,
         })
@@ -1380,7 +1394,7 @@ impl ServerState {
         session_id: &SessionId,
         after_event_id: u64,
         limit: usize,
-    ) -> Result<Vec<api::Event>, ApiError> {
+    ) -> Result<Vec<domain::Event>, ApiError> {
         self.ensure_on_disk_session_exists(session_id).await?;
 
         if let Some(live) = self.get_live(session_id.as_str()).await {
@@ -1396,7 +1410,7 @@ impl ServerState {
     pub async fn live_events_stream(
         &self,
         session_id: &SessionId,
-    ) -> Result<broadcast::Receiver<api::Event>, ApiError> {
+    ) -> Result<broadcast::Receiver<domain::Event>, ApiError> {
         let live = self.ensure_live(session_id).await?;
         Ok(live.subscribe_events())
     }
@@ -1411,5 +1425,20 @@ impl ServerState {
             }
         })?;
         Ok(())
+    }
+}
+
+fn mcp_status_to_api(status: domain::McpServerStatus) -> api::McpServerStatus {
+    api::McpServerStatus {
+        id: status.id,
+        enable: status.enable,
+        state: match status.state {
+            domain::McpConnectionState::Disabled => api::McpConnectionState::Disabled,
+            domain::McpConnectionState::Connecting => api::McpConnectionState::Connecting,
+            domain::McpConnectionState::Connected => api::McpConnectionState::Connected,
+            domain::McpConnectionState::Error => api::McpConnectionState::Error,
+        },
+        last_error: status.last_error,
+        tools: status.tools,
     }
 }

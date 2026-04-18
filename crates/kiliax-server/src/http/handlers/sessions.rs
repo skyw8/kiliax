@@ -74,7 +74,8 @@ async fn create_session(
             title: None,
             settings: None,
         });
-    let out = state.create_session(idem_key(&headers), req).await?;
+    let out = state.create_session(idem_key(&headers), req.into()).await?;
+    let out: crate::api::Session = out.into();
     Ok((StatusCode::CREATED, Json(out)))
 }
 
@@ -99,6 +100,7 @@ async fn list_sessions(
     let live_only = q.live.unwrap_or(false);
     let limit = q.limit.unwrap_or(50);
     let out = state.list_sessions(live_only, limit, q.cursor).await?;
+    let out: crate::api::SessionListResponse = out.into();
     Ok(Json(out))
 }
 
@@ -121,6 +123,7 @@ async fn get_session(
     let id =
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let out = state.get_session(&id).await?;
+    let out: crate::api::Session = out.into();
     Ok(Json(out))
 }
 
@@ -176,7 +179,8 @@ async fn fork_session(
 ) -> Result<impl IntoResponse, ApiError> {
     let id =
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-    let out = state.fork_session(&id, req).await?;
+    let out = state.fork_session(&id, req.into()).await?;
+    let out: crate::api::ForkSessionResponse = out.into();
     Ok((StatusCode::CREATED, Json(out)))
 }
 
@@ -231,7 +235,8 @@ async fn patch_settings(
     }
     let patch: crate::api::SessionSettingsPatch =
         serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-    let out = state.patch_session_settings(&id, patch).await?;
+    let out = state.patch_session_settings(&id, patch.into()).await?;
+    let out: crate::api::Session = out.into();
     Ok(Json(out))
 }
 
@@ -255,7 +260,7 @@ async fn save_session_defaults(
 ) -> Result<impl IntoResponse, ApiError> {
     let id =
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-    state.save_session_defaults(&id, req).await?;
+    state.save_session_defaults(&id, req.into()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -290,5 +295,6 @@ async fn get_messages(
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let limit = q.limit.unwrap_or(50);
     let out = state.get_messages(&id, limit, q.before).await?;
+    let out: crate::api::MessageListResponse = out.into();
     Ok(Json(out))
 }

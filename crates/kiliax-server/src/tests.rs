@@ -440,7 +440,8 @@ async fn fork_session_inherits_prompt_cache_key() {
             source.id(),
             crate::api::ForkSessionRequest {
                 message_id: Some(assistant_message_id.clone()),
-            },
+            }
+            .into(),
         )
         .await
         .expect("fork_session");
@@ -1455,18 +1456,6 @@ async fn auth_middleware_enforces_bearer_token() {
     assert_eq!(status, StatusCode::OK);
 }
 
-fn allowed_home_kiliax_dir() -> std::path::PathBuf {
-    dirs::home_dir().expect("home_dir").join(".kiliax")
-}
-
-fn unique_allowed_workspace_root(prefix: &str) -> std::path::PathBuf {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    allowed_home_kiliax_dir().join(format!("{prefix}_{ts}_{}", std::process::id()))
-}
-
 #[tokio::test]
 async fn create_session_sets_workspace_root_and_updated_at() {
     let dir = TempDir::new().expect("tempdir");
@@ -1488,13 +1477,14 @@ async fn create_session_sets_workspace_root_and_updated_at() {
     assert!(!ws.trim().is_empty(), "workspace_root missing: {body}");
 
     let ws_path = std::path::Path::new(ws);
+    let allowed_kiliax_dir = dir.path().join(".kiliax");
     assert!(
-        ws_path.starts_with(&allowed_home_kiliax_dir()),
-        "workspace_root not under ~/.kiliax: {ws}"
+        ws_path.starts_with(&allowed_kiliax_dir),
+        "workspace_root not under test .kiliax dir: {ws}"
     );
     assert!(
-        ws_path.starts_with(&allowed_home_kiliax_dir().join("workspace")),
-        "workspace_root not under ~/.kiliax/workspace: {ws}"
+        ws_path.starts_with(&allowed_kiliax_dir.join("workspace")),
+        "workspace_root not under test .kiliax/workspace: {ws}"
     );
 
     let dir_name = ws_path.file_name().and_then(|v| v.to_str()).unwrap_or("");
@@ -1553,7 +1543,14 @@ async fn list_skills_returns_workspace_skills() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;
 
-    let workspace_root = unique_allowed_workspace_root("kiliax_test_workspace");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let workspace_root = dir.path().join(format!(
+        "kiliax_test_workspace_{ts}_{}",
+        std::process::id()
+    ));
     let skill_dir = workspace_root.join("skills").join("demo_skill");
     tokio::fs::create_dir_all(&skill_dir)
         .await
