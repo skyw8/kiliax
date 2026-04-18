@@ -48,7 +48,7 @@ fn tui_local_logs() -> kiliax_otel::LocalLogs {
 
     if let Some(home) = dirs::home_dir() {
         return kiliax_otel::LocalLogs::File {
-            path: home.join(".kiliax").join("tui.log"),
+            path: home.join(".kiliax").join("tui.jsonl"),
         };
     }
 

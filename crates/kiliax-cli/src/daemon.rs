@@ -340,7 +340,7 @@ pub async fn ensure_running(
         }
     }
 
-    let log_file_path = kiliax_dir.join("server.log");
+    let log_file_path = kiliax_dir.join("server.jsonl");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

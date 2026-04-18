@@ -176,17 +176,29 @@ pub fn init(
         match local_logs {
             LocalLogs::None => {}
             LocalLogs::Stdout => {
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_timer(tracing_subscriber::fmt::time::SystemTime)
+                    .with_ansi(false)
+                    .flatten_event(true)
+                    .with_current_span(true)
+                    .with_span_list(true);
                 tracing_subscriber::registry()
                     .with(env_filter)
-                    .with(tracing_subscriber::fmt::layer())
+                    .with(fmt_layer)
                     .try_init()
                     .ok();
             }
             LocalLogs::File { path } => {
                 if let Ok(writer) = file_writer(&path) {
                     let fmt_layer = tracing_subscriber::fmt::layer()
-                        .with_writer(writer)
-                        .with_ansi(false);
+                        .json()
+                        .with_timer(tracing_subscriber::fmt::time::SystemTime)
+                        .with_ansi(false)
+                        .flatten_event(true)
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_writer(writer);
                     tracing_subscriber::registry()
                         .with(env_filter)
                         .with(fmt_layer)
@@ -218,19 +230,31 @@ pub fn init(
                 .ok();
         }
         LocalLogs::Stdout => {
+            let fmt_layer = tracing_subscriber::fmt::layer()
+                .json()
+                .with_timer(tracing_subscriber::fmt::time::SystemTime)
+                .with_ansi(false)
+                .flatten_event(true)
+                .with_current_span(true)
+                .with_span_list(true);
             tracing_subscriber::registry()
                 .with(env_filter)
                 .with(provider.tracing_layer(service_name))
                 .with(provider.logger_layer())
-                .with(tracing_subscriber::fmt::layer())
+                .with(fmt_layer)
                 .try_init()
                 .ok();
         }
         LocalLogs::File { path } => match file_writer(&path) {
             Ok(writer) => {
                 let fmt_layer = tracing_subscriber::fmt::layer()
-                    .with_writer(writer)
-                    .with_ansi(false);
+                    .json()
+                    .with_timer(tracing_subscriber::fmt::time::SystemTime)
+                    .with_ansi(false)
+                    .flatten_event(true)
+                    .with_current_span(true)
+                    .with_span_list(true)
+                    .with_writer(writer);
                 tracing_subscriber::registry()
                     .with(env_filter)
                     .with(provider.tracing_layer(service_name))
@@ -570,7 +594,7 @@ mod tests {
     fn local_log_file_failure_is_non_fatal() {
         let parent_as_file = unique_tmp_path("kiliax_otel_test_parent_is_file");
         std::fs::write(&parent_as_file, b"not a dir").unwrap();
-        let log_path = parent_as_file.join("tui.log");
+        let log_path = parent_as_file.join("tui.jsonl");
 
         let cfg = kiliax_core::config::Config::default();
         let res = init(
