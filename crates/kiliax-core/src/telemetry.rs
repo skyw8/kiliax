@@ -116,6 +116,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 pub mod spans {
+    use std::borrow::Cow;
+
     use opentelemetry::trace::TraceContextExt as _;
     use opentelemetry::{Key, KeyValue, Value};
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
@@ -132,6 +134,19 @@ pub mod spans {
 
     pub fn current_trace_id() -> Option<String> {
         trace_id_hex(&tracing::Span::current())
+    }
+
+    /// Update the exported OpenTelemetry span name.
+    ///
+    /// Tracing span names are static (callsite-based), but OpenTelemetry allows
+    /// renaming at runtime. This is useful for naming spans by tool/server.
+    pub fn update_name(span: &tracing::Span, name: impl Into<Cow<'static, str>>) {
+        let ctx = span.context();
+        let otel_span = ctx.span();
+        if !otel_span.span_context().is_valid() {
+            return;
+        }
+        otel_span.update_name(name.into());
     }
 
     pub fn set_attributes(span: &tracing::Span, attributes: impl IntoIterator<Item = KeyValue>) {

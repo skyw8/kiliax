@@ -203,7 +203,7 @@ impl ToolEngine {
         .unwrap_or_else(|| ("".to_string(), "".to_string()));
 
         let span = tracing::info_span!(
-            "kiliax.tool.execute",
+            "kiliax.tool",
             tool.name = %call.name,
             tool.call_id = %call.id,
             tool.kind = %kind,
@@ -211,6 +211,16 @@ impl ToolEngine {
             mcp.tool = %mcp_tool,
             tool.duration_ms = tracing::field::Empty,
         );
+        if is_mcp {
+            let server = if mcp_server.is_empty() {
+                "unknown"
+            } else {
+                mcp_server.as_str()
+            };
+            telemetry::spans::update_name(&span, format!("kiliax.mcp.{server}"));
+        } else {
+            telemetry::spans::update_name(&span, format!("kiliax.tool.{}", call.name));
+        }
 
         telemetry::spans::set_attribute(&span, "langfuse.observation.type", "tool");
         if telemetry::capture_full() {
@@ -363,7 +373,7 @@ impl ToolEngine {
             let started = Instant::now();
             let kind = "builtin";
             let span = tracing::info_span!(
-                "kiliax.tool.execute",
+                "kiliax.tool",
                 tool.name = %call.name,
                 tool.call_id = %call.id,
                 tool.kind = %kind,
@@ -371,6 +381,7 @@ impl ToolEngine {
                 mcp.tool = "",
                 tool.duration_ms = tracing::field::Empty,
             );
+            telemetry::spans::update_name(&span, format!("kiliax.tool.{}", call.name));
 
             telemetry::spans::set_attribute(&span, "langfuse.observation.type", "tool");
             if telemetry::capture_full() {

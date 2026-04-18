@@ -36,6 +36,7 @@ minimal
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + session-scoped MCP/skills overrides: `crates/kiliax-core/src/session.rs`
+- Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery): `crates/kiliax-core/src/tools/`
 
 ### crates/kiliax-cli (TUI)

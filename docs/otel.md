@@ -318,7 +318,11 @@ Langfuse 对齐：
 
 ### 5.4 Tool 执行
 
-**span 名称**：`kiliax.tool.execute`  
+**span 名称**：
+
+- builtin tool：`kiliax.tool.{tool_name}`
+- MCP tool：`kiliax.mcp.{mcp_name}`
+
 **位置**：`crates/kiliax-core/src/tools/engine.rs`
 
 字段：
@@ -336,10 +340,7 @@ Langfuse 对齐：
 
 ### 5.5 MCP
 
-**span 名称**：
-
-- `kiliax.mcp.connect`
-- `kiliax.mcp.call`
+**span 名称**：`kiliax.mcp.{mcp_name}`
 
 **位置**：`crates/kiliax-core/src/tools/mcp.rs`
 
@@ -495,7 +496,8 @@ echo -n "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 | tr -d '\n'
 | `kiliax.llm.chat*` | `generation` |
 | `kiliax.agent.run` | `agent` |
 | `kiliax.agent.step` | `chain` |
-| `kiliax.tool.execute` | `tool` |
+| `kiliax.tool.{tool_name}` | `tool` |
+| `kiliax.mcp.{mcp_name}` | `tool` |
 | `kiliax.skills.discover` | `span` |
 
 Tool 还会设置：
@@ -534,7 +536,8 @@ LLM 流式会设置：
 - 发一个简单请求，确认能看到：
   - `http.request` span（server）
   - `kiliax.llm.chat_stream` span（若触发 LLM）
-  - `kiliax.tool.execute` span（若触发 tool）
+  - `kiliax.tool.{tool_name}` span（若触发 builtin tool）
+  - `kiliax.mcp.{mcp_name}` span（若触发 MCP tool）
   - 以及对应 metrics 增量
 
 ## 11. 改进点（建议按优先级）
@@ -571,8 +574,7 @@ LLM 流式会设置：
 
 7) **补齐 Langfuse/可观测后端的 span 分类**  
    MCP spans 目前没有设置 `langfuse.observation.type`（仅有普通 span 字段）。  
-   建议：视 Langfuse 展示需求，给 `kiliax.mcp.connect/call` 增加 observation type 或更清晰的层级关系。
+   建议：视 Langfuse 展示需求，给 `kiliax.mcp.{mcp_name}`（connect/call）增加 observation type 或更清晰的层级关系。
 
 8) **更多关键路径埋点**  
    例如：session store I/O、事件广播、workspace 清理、patch apply 阶段拆分、队列长度与背压等。
-

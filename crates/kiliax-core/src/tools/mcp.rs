@@ -215,12 +215,13 @@ impl McpHub {
         let started = Instant::now();
 
         let span = tracing::info_span!(
-            "kiliax.mcp.connect",
+            "kiliax.mcp",
             mcp.server = %name,
             mcp.command = %cfg.command,
             mcp.args = ?cfg.args,
             mcp.duration_ms = tracing::field::Empty,
         );
+        telemetry::spans::update_name(&span, format!("kiliax.mcp.{name}"));
 
         let res: Result<(), ToolError> = async {
             let (transport, mut rx) = QuietStdioTransport::new(&cfg.command, cfg.args.clone());
@@ -370,11 +371,12 @@ impl McpHub {
 
         let started = Instant::now();
         let span = tracing::info_span!(
-            "kiliax.mcp.call",
+            "kiliax.mcp",
             mcp.server = %server_name,
             mcp.tool = %tool_name,
             mcp.duration_ms = tracing::field::Empty,
         );
+        telemetry::spans::update_name(&span, format!("kiliax.mcp.{server_name}"));
 
         let res: Result<String, ToolError> = async {
             let server = self
