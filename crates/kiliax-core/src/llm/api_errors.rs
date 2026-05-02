@@ -56,4 +56,3 @@ pub(super) async fn map_api_error_response(
         code: None,
     })
 }
-

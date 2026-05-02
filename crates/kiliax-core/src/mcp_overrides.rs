@@ -24,7 +24,10 @@ pub fn config_with_session_mcp_overrides(
     overrides: &[SessionMcpServerSetting],
 ) -> Result<Config, UnknownMcpServer> {
     let mut cfg = base.clone();
-    apply_mcp_enable_overrides(&mut cfg, overrides.iter().map(|s| (s.id.as_str(), s.enable)))?;
+    apply_mcp_enable_overrides(
+        &mut cfg,
+        overrides.iter().map(|s| (s.id.as_str(), s.enable)),
+    )?;
     Ok(cfg)
 }
 
@@ -107,4 +110,3 @@ mod tests {
         assert!(cfg.mcp.servers.iter().any(|s| s.name == "one" && s.enable));
     }
 }
-

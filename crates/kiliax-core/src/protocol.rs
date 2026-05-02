@@ -1,4 +1,3 @@
-use async_openai::types::{CompletionUsage, FinishReason, ImageDetail};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -26,19 +25,16 @@ pub struct ToolDefinition {
     pub strict: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolChoice {
     None,
+    #[default]
     Auto,
     Required,
-    Named { name: String },
-}
-
-impl Default for ToolChoice {
-    fn default() -> Self {
-        Self::Auto
-    }
+    Named {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,6 +97,15 @@ pub enum UserContentPart {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageDetail {
+    #[default]
+    Auto,
+    Low,
+    High,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenUsage {
     pub prompt_tokens: u32,
@@ -110,19 +115,65 @@ pub struct TokenUsage {
     pub cached_tokens: Option<u32>,
 }
 
-impl TokenUsage {
-    pub fn from_completion_usage(usage: &CompletionUsage) -> Self {
-        let cached = usage
-            .prompt_tokens_details
-            .as_ref()
-            .and_then(|d| d.cached_tokens)
-            .unwrap_or(0) as u32;
-        Self {
-            prompt_tokens: usage.prompt_tokens,
-            completion_tokens: usage.completion_tokens,
-            total_tokens: usage.total_tokens,
-            cached_tokens: (cached > 0).then_some(cached),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinishReason {
+    Stop,
+    Length,
+    ToolCalls,
+    ContentFilter,
+    FunctionCall,
+    StopSequence,
+    Refusal,
+    PauseTurn,
+    Other(String),
+}
+
+impl FinishReason {
+    fn as_wire_str(&self) -> &str {
+        match self {
+            Self::Stop => "stop",
+            Self::Length => "length",
+            Self::ToolCalls => "tool_calls",
+            Self::ContentFilter => "content_filter",
+            Self::FunctionCall => "function_call",
+            Self::StopSequence => "stop_sequence",
+            Self::Refusal => "refusal",
+            Self::PauseTurn => "pause_turn",
+            Self::Other(value) => value.as_str(),
         }
+    }
+
+    fn from_wire_str(value: &str) -> Self {
+        match value {
+            "stop" => Self::Stop,
+            "length" => Self::Length,
+            "tool_calls" => Self::ToolCalls,
+            "content_filter" => Self::ContentFilter,
+            "function_call" => Self::FunctionCall,
+            "stop_sequence" => Self::StopSequence,
+            "refusal" => Self::Refusal,
+            "pause_turn" => Self::PauseTurn,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl Serialize for FinishReason {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_wire_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FinishReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::from_wire_str(&value))
     }
 }
 
@@ -194,7 +245,7 @@ pub struct ChatResponse {
     pub model: String,
     pub message: Message,
     pub finish_reason: Option<FinishReason>,
-    pub usage: Option<CompletionUsage>,
+    pub usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -231,5 +282,5 @@ pub struct ChatStreamChunk {
     pub finish_reason: Option<FinishReason>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<CompletionUsage>,
+    pub usage: Option<TokenUsage>,
 }

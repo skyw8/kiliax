@@ -17,7 +17,7 @@ pub struct McpPicker {
 
 impl McpPicker {
     pub fn new(servers: Vec<McpServerStatus>) -> Self {
-        let cursor = if servers.is_empty() { 0 } else { 0 };
+        let cursor = 0;
         Self { servers, cursor }
     }
 

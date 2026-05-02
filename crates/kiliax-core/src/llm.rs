@@ -3,10 +3,7 @@ use std::pin::Pin;
 use async_openai::{
     config::Config as OpenAIConfigTrait,
     error::OpenAIError,
-    types::{
-        ChatCompletionRequestMessage, ChatCompletionTool, CompletionUsage,
-        CreateChatCompletionRequestArgs,
-    },
+    types::{ChatCompletionRequestMessage, ChatCompletionTool, CreateChatCompletionRequestArgs},
     Client,
 };
 use opentelemetry::KeyValue;
@@ -14,29 +11,29 @@ use reqwest_eventsource::{Event, RequestBuilderExt};
 use tokio_stream::{Stream, StreamExt};
 use tracing::Instrument;
 
-use crate::config::{Config, ConfigError, ResolvedModel};
-use crate::protocol::{
-    ChatRequest, ChatResponse, ChatStreamChunk, ToolChoice,
-};
+use crate::config::{Config, ConfigError, ProviderKind, ResolvedModel};
+use crate::protocol::{ChatRequest, ChatResponse, ChatStreamChunk, TokenUsage, ToolChoice};
 use crate::telemetry;
 
-mod byot;
-mod patches;
-mod openai_conv;
-mod openai_config;
+mod anthropic;
 mod api_errors;
+mod byot;
+mod openai_config;
+mod openai_conv;
+mod patches;
 
+use anthropic::AnthropicProvider;
+use api_errors::{map_api_error_response, map_eventsource_error};
 use byot::{
     chat_response_from_byot, chat_stream_chunk_from_byot, ByotCreateChatCompletionResponse,
     ByotCreateChatCompletionStreamResponse,
 };
+use openai_config::KiliaxOpenAIConfig;
+use openai_conv::{to_openai_message, to_openai_tool, to_openai_tool_choice};
 use patches::{
     inject_prompt_cache_fields, inject_reasoning_content_for_tool_calls,
     is_reasoning_content_missing_error, should_inject_reasoning_content,
 };
-use openai_conv::{to_openai_message, to_openai_tool, to_openai_tool_choice};
-use openai_config::KiliaxOpenAIConfig;
-use api_errors::{map_api_error_response, map_eventsource_error};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
@@ -50,7 +47,25 @@ pub enum LlmError {
     OpenAI(#[from] OpenAIError),
 
     #[error(transparent)]
+    Http(#[from] reqwest::Error),
+
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
+    #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("HTTP {status}: {body}")]
+    Api {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+
+    #[error("stream error: {0}")]
+    Stream(String),
+
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
 
     #[error("invalid image: {0}")]
     InvalidImage(String),
@@ -59,25 +74,33 @@ pub enum LlmError {
     NoChoices,
 }
 
+#[async_trait::async_trait]
+pub trait LlmProvider: Send + Sync {
+    fn route(&self) -> &ResolvedModel;
+    async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError>;
+    async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError>;
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmClient {
-    client: Client<KiliaxOpenAIConfig>,
-    http: reqwest::Client,
-    route: ResolvedModel,
-    prompt_cache_key: Option<String>,
+    provider: ProviderClient,
+}
+
+#[derive(Debug, Clone)]
+enum ProviderClient {
+    OpenAICompatible(OpenAICompatibleProvider),
+    Anthropic(AnthropicProvider),
 }
 
 impl LlmClient {
     pub fn new(route: ResolvedModel) -> Self {
-        let cfg = KiliaxOpenAIConfig::new(&route.base_url, route.api_key.as_deref());
-        let client = Client::with_config(cfg);
-        let http = reqwest::Client::new();
-        Self {
-            client,
-            http,
-            route,
-            prompt_cache_key: None,
-        }
+        let provider = match route.kind.clone() {
+            ProviderKind::OpenAICompatible => {
+                ProviderClient::OpenAICompatible(OpenAICompatibleProvider::new(route))
+            }
+            ProviderKind::Anthropic => ProviderClient::Anthropic(AnthropicProvider::new(route)),
+        };
+        Self { provider }
     }
 
     pub fn from_config(config: &Config, model_id: Option<&str>) -> Result<Self, LlmError> {
@@ -93,17 +116,72 @@ impl LlmClient {
     }
 
     pub fn with_prompt_cache_key(mut self, prompt_cache_key: Option<String>) -> Self {
-        self.prompt_cache_key = prompt_cache_key
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        match &mut self.provider {
+            ProviderClient::OpenAICompatible(provider) => {
+                provider.set_prompt_cache_key(prompt_cache_key);
+            }
+            ProviderClient::Anthropic(_) => {}
+        }
         self
     }
 
     pub fn route(&self) -> &ResolvedModel {
-        &self.route
+        match &self.provider {
+            ProviderClient::OpenAICompatible(provider) => provider.route(),
+            ProviderClient::Anthropic(provider) => provider.route(),
+        }
     }
 
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
+        match &self.provider {
+            ProviderClient::OpenAICompatible(provider) => provider.chat(req).await,
+            ProviderClient::Anthropic(provider) => provider.chat(req).await,
+        }
+    }
+
+    pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
+        match &self.provider {
+            ProviderClient::OpenAICompatible(provider) => provider.chat_stream(req).await,
+            ProviderClient::Anthropic(provider) => provider.chat_stream(req).await,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OpenAICompatibleProvider {
+    client: Client<KiliaxOpenAIConfig>,
+    http: reqwest::Client,
+    route: ResolvedModel,
+    prompt_cache_key: Option<String>,
+}
+
+impl OpenAICompatibleProvider {
+    pub fn new(route: ResolvedModel) -> Self {
+        let cfg = KiliaxOpenAIConfig::new(&route.base_url, route.api_key.as_deref());
+        let client = Client::with_config(cfg);
+        let http = reqwest::Client::new();
+        Self {
+            client,
+            http,
+            route,
+            prompt_cache_key: None,
+        }
+    }
+
+    pub fn set_prompt_cache_key(&mut self, prompt_cache_key: Option<String>) {
+        self.prompt_cache_key = prompt_cache_key
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for OpenAICompatibleProvider {
+    fn route(&self) -> &ResolvedModel {
+        &self.route
+    }
+
+    async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
         let ChatRequest {
             messages: internal_messages,
             tools,
@@ -250,11 +328,7 @@ impl LlmClient {
             Ok(ok) => {
                 let usage = ok.usage.as_ref();
                 if let Some(usage) = usage {
-                    let cached = usage
-                        .prompt_tokens_details
-                        .as_ref()
-                        .and_then(|d| d.cached_tokens)
-                        .unwrap_or(0) as i64;
+                    let cached = usage.cached_tokens.unwrap_or(0) as i64;
                     telemetry::spans::set_attributes(
                         &span,
                         [
@@ -286,12 +360,7 @@ impl LlmClient {
                     "ok",
                     latency,
                     usage.map(|u| u.prompt_tokens as u64),
-                    usage.and_then(|u| {
-                        u.prompt_tokens_details
-                            .as_ref()
-                            .and_then(|d| d.cached_tokens)
-                            .map(|v| v as u64)
-                    }),
+                    usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
                     usage.map(|u| u.completion_tokens as u64),
                 );
 
@@ -343,7 +412,7 @@ impl LlmClient {
         res
     }
 
-    pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
+    async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
         let ChatRequest {
             messages: internal_messages,
             tools,
@@ -477,7 +546,7 @@ impl LlmClient {
                     let mut body = body;
                     let mut retried_reasoning_patch = false;
                     let mut forwarded_any = false;
-                    let mut last_usage: Option<CompletionUsage> = None;
+                    let mut last_usage: Option<TokenUsage> = None;
                     let mut outcome = "ok";
                     let mut completion = String::new();
                     let mut completion_truncated = false;
@@ -507,7 +576,7 @@ impl LlmClient {
                                 {
                                     Ok(resp) => {
                                         let chunk = chat_stream_chunk_from_byot(resp);
-                                        if let Some(usage) = chunk.usage.clone() {
+                                        if let Some(usage) = chunk.usage {
                                             last_usage = Some(usage);
                                         }
                                         if ttft.is_none()
@@ -616,12 +685,9 @@ impl LlmClient {
                         outcome,
                         latency,
                         last_usage.as_ref().map(|u| u.prompt_tokens as u64),
-                        last_usage.as_ref().and_then(|u| {
-                            u.prompt_tokens_details
-                                .as_ref()
-                                .and_then(|d| d.cached_tokens)
-                                .map(|v| v as u64)
-                        }),
+                        last_usage
+                            .as_ref()
+                            .and_then(|u| u.cached_tokens.map(|v| v as u64)),
                         last_usage.as_ref().map(|u| u.completion_tokens as u64),
                     );
 
@@ -649,11 +715,7 @@ impl LlmClient {
                         );
                     }
                     if let Some(usage) = last_usage.as_ref() {
-                        let cached = usage
-                            .prompt_tokens_details
-                            .as_ref()
-                            .and_then(|d| d.cached_tokens)
-                            .unwrap_or(0) as i64;
+                        let cached = usage.cached_tokens.unwrap_or(0) as i64;
                         telemetry::spans::set_attributes(
                             &current_span,
                             [
@@ -672,11 +734,7 @@ impl LlmClient {
                         if total_s > 0.0 {
                             let output_tps = usage.completion_tokens as f64 / total_s;
                             telemetry::metrics::record_llm_output_tps(
-                                &provider,
-                                &model,
-                                true,
-                                outcome,
-                                output_tps,
+                                &provider, &model, true, outcome, output_tps,
                             );
                             telemetry::spans::set_attribute(
                                 &current_span,
@@ -690,11 +748,7 @@ impl LlmClient {
                             if gen_s > 0.0 {
                                 let output_tps = usage.completion_tokens as f64 / gen_s;
                                 telemetry::metrics::record_llm_output_tps_after_ttft(
-                                    &provider,
-                                    &model,
-                                    true,
-                                    outcome,
-                                    output_tps,
+                                    &provider, &model, true, outcome, output_tps,
                                 );
                                 telemetry::spans::set_attribute(
                                     &current_span,
@@ -761,12 +815,11 @@ pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatStreamChunk, LlmError
 
 #[cfg(test)]
 mod tests {
-    use crate::protocol::{Message, ToolDefinition};
     use crate::protocol::ToolCall;
+    use crate::protocol::{Message, ToolDefinition};
     use crate::protocol::{UserContentPart, UserMessageContent};
     use async_openai::types::{
-        ChatCompletionRequestUserMessageContent,
-        ChatCompletionRequestUserMessageContentPart,
+        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
     };
 
     use super::*;
@@ -874,6 +927,7 @@ mod tests {
     fn should_inject_reasoning_content_matches_kimi_model_even_behind_proxy() {
         let route = ResolvedModel {
             provider: "proxy".to_string(),
+            kind: ProviderKind::OpenAICompatible,
             model: "kimi-k2.5".to_string(),
             base_url: "http://127.0.0.1:8000/v1".to_string(),
             api_key: None,

@@ -1,8 +1,8 @@
-use async_openai::types::{CompletionUsage, FinishReason};
+use async_openai::types::CompletionUsage;
 use serde::Deserialize;
 
 use crate::protocol::{
-    ChatResponse, ChatStreamChunk, Message, TokenUsage, ToolCall, ToolCallDelta,
+    ChatResponse, ChatStreamChunk, FinishReason, Message, TokenUsage, ToolCall, ToolCallDelta,
 };
 
 use super::LlmError;
@@ -120,7 +120,7 @@ pub(super) fn chat_response_from_byot(
         reasoning_content.or(thinking).or(reasoning)
     };
 
-    let message_usage = usage.as_ref().map(TokenUsage::from_completion_usage);
+    let usage = usage.as_ref().map(token_usage_from_openai);
     Ok(ChatResponse {
         id,
         created,
@@ -129,7 +129,7 @@ pub(super) fn chat_response_from_byot(
             content,
             reasoning_content,
             tool_calls,
-            usage: message_usage,
+            usage,
         },
         finish_reason,
         usage,
@@ -238,6 +238,20 @@ pub(super) fn chat_stream_chunk_from_byot(
         thinking_delta,
         tool_calls,
         finish_reason,
-        usage: resp.usage,
+        usage: resp.usage.as_ref().map(token_usage_from_openai),
+    }
+}
+
+pub(super) fn token_usage_from_openai(usage: &CompletionUsage) -> TokenUsage {
+    let cached = usage
+        .prompt_tokens_details
+        .as_ref()
+        .and_then(|d| d.cached_tokens)
+        .unwrap_or(0);
+    TokenUsage {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        cached_tokens: (cached > 0).then_some(cached),
     }
 }

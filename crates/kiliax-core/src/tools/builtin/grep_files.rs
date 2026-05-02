@@ -87,7 +87,7 @@ pub(super) async fn execute(
         )
     })
     .await
-    .map_err(|e| ToolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+    .map_err(|e| ToolError::Io(std::io::Error::other(e)))??;
 
     Ok(matches.join("\n"))
 }
@@ -218,7 +218,7 @@ fn grep_one_file(
         let bytes = strip_line_terminator(bytes);
         let m = match matcher
             .find(bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| std::io::Error::other(e.to_string()))?
         {
             Some(m) => m,
             None => return Ok(true),

@@ -102,7 +102,7 @@ pub(super) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
     *messages = out;
 }
 
-pub(super) fn normalize_tool_call_ids(step: usize, tool_calls: &mut Vec<ToolCall>) {
+pub(super) fn normalize_tool_call_ids(step: usize, tool_calls: &mut [ToolCall]) {
     let mut used: std::collections::HashSet<String> =
         std::collections::HashSet::with_capacity(tool_calls.len());
 

@@ -72,7 +72,7 @@ pub(super) async fn execute(
         )
     })
     .await
-    .map_err(|e| ToolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+    .map_err(|e| ToolError::Io(std::io::Error::other(e)))??;
 
     entries.sort();
     Ok(entries.join("\n"))
@@ -94,10 +94,7 @@ fn list_dir_blocking(
             break;
         }
 
-        let rd = match std::fs::read_dir(&dir) {
-            Ok(rd) => rd,
-            Err(err) => return Err(err.into()),
-        };
+        let rd = std::fs::read_dir(&dir)?;
 
         let mut dirs = Vec::new();
         let mut files = Vec::new();

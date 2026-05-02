@@ -374,6 +374,9 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderConfig {
+    #[serde(default, alias = "type")]
+    pub kind: ProviderKind,
+
     #[serde(alias = "baseUrl", alias = "baseurl", alias = "base-url")]
     pub base_url: String,
 
@@ -390,10 +393,24 @@ pub struct ProviderConfig {
     pub models: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    #[default]
+    #[serde(
+        rename = "openai-compatible",
+        alias = "openai_compatible",
+        alias = "openai"
+    )]
+    OpenAICompatible,
+    Anthropic,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedModel {
     pub provider: String,
-    /// Model name to send to the provider's OpenAI-compatible endpoint.
+    pub kind: ProviderKind,
+    /// Model name to send to the selected provider.
     pub model: String,
 
     pub base_url: String,
@@ -489,6 +506,7 @@ impl Config {
 
         Ok(ResolvedModel {
             provider: provider_name.to_string(),
+            kind: provider.kind.clone(),
             model: model_name.to_string(),
             base_url: provider.base_url.clone(),
             api_key: provider.api_key.clone(),
@@ -983,11 +1001,37 @@ mod tests {
     }
 
     #[test]
+    fn provider_kind_defaults_to_openai_compatible() {
+        let cfg = load_from_str(
+            "default_model: p/m\nproviders:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - m\n",
+        )
+        .unwrap();
+
+        let resolved = cfg.resolve_model("p/m").unwrap();
+        assert_eq!(resolved.kind, ProviderKind::OpenAICompatible);
+    }
+
+    #[test]
+    fn provider_kind_accepts_anthropic() {
+        let cfg = load_from_str(
+            "default_model: anthropic/claude-3-5-sonnet-latest\nproviders:\n  anthropic:\n    kind: anthropic\n    base_url: https://api.anthropic.com/v1\n    models:\n      - claude-3-5-sonnet-latest\n",
+        )
+        .unwrap();
+
+        let resolved = cfg
+            .resolve_model("anthropic/claude-3-5-sonnet-latest")
+            .unwrap();
+        assert_eq!(resolved.kind, ProviderKind::Anthropic);
+        assert_eq!(resolved.base_url, "https://api.anthropic.com/v1");
+    }
+
+    #[test]
     fn resolve_model_routes_with_provider_prefix() {
         let mut providers = BTreeMap::new();
         providers.insert(
             "moonshot_cn".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "https://api.moonshot.cn/v1".to_string(),
                 api_key: Some("sk-test".to_string()),
                 models: vec!["kimi-k2-turbo-preview".to_string()],
@@ -1014,6 +1058,7 @@ mod tests {
         providers.insert(
             "p1".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: None,
                 models: Vec::new(),
@@ -1022,6 +1067,7 @@ mod tests {
         providers.insert(
             "p2".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: None,
                 models: Vec::new(),
@@ -1074,6 +1120,7 @@ mod tests {
         providers.insert(
             "p".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: None,
                 models: vec!["p/m".to_string()],
@@ -1101,6 +1148,7 @@ mod tests {
         providers.insert(
             "openrouter".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
                 api_key: None,
                 models: vec!["openai/gpt-4o-mini".to_string()],
@@ -1109,6 +1157,7 @@ mod tests {
         providers.insert(
             "zhipu".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "https://open.bigmodel.cn/api/paas/v4/".to_string(),
                 api_key: None,
                 models: vec!["glm-5".to_string()],

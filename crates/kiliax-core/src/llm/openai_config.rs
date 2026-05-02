@@ -57,4 +57,3 @@ impl OpenAIConfigTrait for KiliaxOpenAIConfig {
 fn normalize_api_base(api_base: &str) -> String {
     api_base.trim().trim_end_matches('/').to_string()
 }
-

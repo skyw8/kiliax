@@ -76,23 +76,12 @@ pub fn find_command(name: &str) -> Option<SlashCommand> {
     None
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SlashPopupState {
     visible: bool,
     query: String,
     items: Vec<SlashCommand>,
     selected: usize,
-}
-
-impl Default for SlashPopupState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            query: String::new(),
-            items: Vec::new(),
-            selected: 0,
-        }
-    }
 }
 
 impl SlashPopupState {
@@ -150,8 +139,7 @@ impl SlashPopupState {
         if !self.visible() {
             return 0;
         }
-        let n = self.items.len().min(max_items).min(u16::MAX as usize) as u16;
-        n
+        self.items.len().min(max_items).min(u16::MAX as usize) as u16
     }
 
     pub fn sync_from_input(&mut self, text: &str, cursor: usize) {
@@ -170,9 +158,7 @@ impl SlashPopupState {
         self.visible = true;
         self.query = query;
         self.items = next_items;
-        if query_changed {
-            self.selected = 0;
-        } else if self.selected >= self.items.len() {
+        if query_changed || self.selected >= self.items.len() {
             self.selected = 0;
         }
     }

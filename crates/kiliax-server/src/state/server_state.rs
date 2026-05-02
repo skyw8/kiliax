@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
-use kiliax_core::config::{Config, ProviderConfig};
+use kiliax_core::config::{Config, ProviderConfig, ProviderKind};
 use kiliax_core::session::{FileSessionStore, SessionId};
 use kiliax_core::tools::ToolEngine;
 use tokio::sync::{broadcast, Mutex, Notify};
@@ -17,12 +17,12 @@ use crate::infra::{
     validate_client_workspace_root,
 };
 
-use super::preamble::build_preamble;
 use super::domain;
+use super::preamble::build_preamble;
 use super::{
     apply_settings_patch, config_with_mcp_overrides, default_settings, list_models,
-    map_core_message_to_domain, map_mcp_status, map_session_err, resolve_session_settings,
-    mcp_status_from_settings, now_ms, read_events_after, read_last_event_id, read_run_file,
+    map_core_message_to_domain, map_mcp_status, map_session_err, mcp_status_from_settings, now_ms,
+    read_events_after, read_last_event_id, read_run_file, resolve_session_settings,
     session_events_api_path, skills_config_from_settings, ts_ms_to_rfc3339, write_text_atomic,
     LiveSession,
 };
@@ -47,6 +47,23 @@ pub struct ServerState {
 struct LiveSessionEntry {
     live: Arc<LiveSession>,
     last_access_ms: u64,
+}
+
+fn provider_kind_to_api(kind: &ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::OpenAICompatible => "openai-compatible",
+        ProviderKind::Anthropic => "anthropic",
+    }
+}
+
+fn parse_provider_kind(raw: &str) -> Result<ProviderKind, ApiError> {
+    match raw.trim() {
+        "openai-compatible" | "openai_compatible" | "openai" => Ok(ProviderKind::OpenAICompatible),
+        "anthropic" => Ok(ProviderKind::Anthropic),
+        other => Err(ApiError::invalid_argument(format!(
+            "unsupported provider kind: {other}"
+        ))),
+    }
 }
 
 impl ServerState {
@@ -334,6 +351,7 @@ impl ServerState {
                 .iter()
                 .map(|(id, p)| api::ConfigProviderSummary {
                     id: id.clone(),
+                    kind: provider_kind_to_api(&p.kind).to_string(),
                     base_url: p.base_url.clone(),
                     api_key_set: p.api_key.is_some(),
                     models: p.models.clone(),
@@ -380,6 +398,10 @@ impl ServerState {
             }
 
             if let Some(existing) = next.providers.get_mut(id) {
+                if let Some(kind) = upsert.kind {
+                    existing.kind = parse_provider_kind(&kind)?;
+                }
+
                 if let Some(base_url) = upsert.base_url {
                     let base_url = base_url.trim();
                     if base_url.is_empty() {
@@ -421,6 +443,13 @@ impl ServerState {
                     existing.models = out;
                 }
             } else {
+                let kind = upsert
+                    .kind
+                    .as_deref()
+                    .map(parse_provider_kind)
+                    .transpose()?
+                    .unwrap_or_default();
+
                 let Some(base_url) = upsert.base_url else {
                     return Err(ApiError::invalid_argument(
                         "provider base_url is required for new providers",
@@ -469,6 +498,7 @@ impl ServerState {
                 next.providers.insert(
                     id.to_string(),
                     ProviderConfig {
+                        kind,
                         base_url: base_url.to_string(),
                         api_key,
                         models,

@@ -360,13 +360,11 @@ fn draw_model_picker_models(
 
 fn display_width(text: &str, cursor_chars: usize) -> usize {
     let mut width = 0usize;
-    let mut seen = 0usize;
-    for ch in text.chars() {
+    for (seen, ch) in text.chars().enumerate() {
         if seen >= cursor_chars {
             break;
         }
         width = width.saturating_add(UnicodeWidthChar::width(ch).unwrap_or(0));
-        seen += 1;
     }
     width
 }

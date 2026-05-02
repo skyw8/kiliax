@@ -280,6 +280,7 @@ pub mod metrics {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_llm_call(
         provider: &str,
         model: &str,
@@ -311,7 +312,13 @@ pub mod metrics {
         }
     }
 
-    pub fn record_llm_ttft(provider: &str, model: &str, stream: bool, outcome: &str, ttft: Duration) {
+    pub fn record_llm_ttft(
+        provider: &str,
+        model: &str,
+        stream: bool,
+        outcome: &str,
+        ttft: Duration,
+    ) {
         let tags = &[
             KeyValue::new("provider", provider.to_string()),
             KeyValue::new("model", model.to_string()),
@@ -321,7 +328,13 @@ pub mod metrics {
         llm_ttft_ms().record(ttft.as_secs_f64() * 1000.0, tags);
     }
 
-    pub fn record_llm_output_tps(provider: &str, model: &str, stream: bool, outcome: &str, tps: f64) {
+    pub fn record_llm_output_tps(
+        provider: &str,
+        model: &str,
+        stream: bool,
+        outcome: &str,
+        tps: f64,
+    ) {
         let tags = &[
             KeyValue::new("provider", provider.to_string()),
             KeyValue::new("model", model.to_string()),

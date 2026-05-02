@@ -1,5 +1,5 @@
-mod live_session;
 pub mod domain;
+mod live_session;
 mod preamble;
 mod server_state;
 
@@ -103,10 +103,7 @@ fn resolve_session_settings(
         }
     }
 
-    let skills = meta
-        .skills
-        .as_ref()
-        .unwrap_or_else(|| &config.skills);
+    let skills = meta.skills.as_ref().unwrap_or(&config.skills);
     let skills = skills_settings_from_config(skills);
 
     let by_id: HashMap<&str, bool> = meta
@@ -412,7 +409,9 @@ fn map_mcp_status(
                 McpServerConnectionState::Connecting => {
                     (domain::McpConnectionState::Connecting, None)
                 }
-                McpServerConnectionState::Connected => (domain::McpConnectionState::Connected, None),
+                McpServerConnectionState::Connected => {
+                    (domain::McpConnectionState::Connected, None)
+                }
                 McpServerConnectionState::Retry { error, .. } => {
                     (domain::McpConnectionState::Error, Some(error))
                 }
@@ -479,11 +478,7 @@ fn now_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
-fn map_core_message_to_domain(
-    seq: u64,
-    ts_ms: u64,
-    msg: CoreMessage,
-) -> Option<domain::Message> {
+fn map_core_message_to_domain(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<domain::Message> {
     let id = seq.to_string();
     let created_at = ts_ms_to_rfc3339(ts_ms);
     match msg {

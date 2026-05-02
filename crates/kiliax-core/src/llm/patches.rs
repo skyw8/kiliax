@@ -134,4 +134,3 @@ pub(super) fn is_reasoning_content_missing_error(err: &OpenAIError) -> bool {
     let msg = msg.to_ascii_lowercase();
     msg.contains("reasoning_content") && msg.contains("missing")
 }
-

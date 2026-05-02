@@ -25,38 +25,35 @@ use crate::mcp_picker::{McpPicker, McpPickerEvent};
 use crate::model_picker::{ModelPicker, ModelPickerEvent};
 use crate::slash_command::SlashPopupState;
 
-mod stream;
-mod tokens;
-mod render;
-mod submissions;
 mod history_nav;
 mod preamble;
+mod render;
+mod stream;
+mod submissions;
+mod tokens;
 
 pub use submissions::PendingImage;
 pub(crate) use submissions::QueuedSubmission;
 
-use stream::{MarkdownStreamCollector, ThinkingStreamCollector};
-use tokens::OutputTokenCounter;
+use preamble::{build_preamble, preamble_updates};
 use render::{
     classify_tool_call, format_error_chain_text, render_dir_list_lines, render_error_lines,
     render_thinking_start_line, render_token_usage_line, render_tool_result_fallback_lines,
-    render_tool_result_lines, render_user_message_lines, tool_status_label,
-    turn_divider_marker,
+    render_tool_result_lines, render_user_message_lines, tool_status_label, turn_divider_marker,
 };
-use preamble::{build_preamble, preamble_updates};
+use stream::{MarkdownStreamCollector, ThinkingStreamCollector};
+use tokens::OutputTokenCounter;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum AppAction {
+    #[default]
     None,
     Submitted(String),
     ModelPicked(String),
-    McpToggled { server: String, enable: bool },
-}
-
-impl Default for AppAction {
-    fn default() -> Self {
-        AppAction::None
-    }
+    McpToggled {
+        server: String,
+        enable: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -157,6 +154,7 @@ pub struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         profile: AgentProfile,
         runtime: AgentRuntime,
@@ -959,21 +957,26 @@ impl App {
     }
 
     async fn compact_session(&mut self, emit_info: bool) -> Result<()> {
-        let (messages_snapshot, message_ids_snapshot) =
-            (self.session.messages.clone(), self.session.message_ids.clone());
+        let (messages_snapshot, message_ids_snapshot) = (
+            self.session.messages.clone(),
+            self.session.message_ids.clone(),
+        );
 
         let summary_suffix = compact::run_compaction(self.runtime.llm(), &messages_snapshot)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
         let user_messages = compact::collect_real_user_texts(&messages_snapshot);
-        let compacted_history = compact::build_compacted_user_history(&user_messages, &summary_suffix);
+        let compacted_history =
+            compact::build_compacted_user_history(&user_messages, &summary_suffix);
 
         let cutoff_id = compact::find_preamble_cutoff_id(&messages_snapshot, &message_ids_snapshot)
             .or_else(|| message_ids_snapshot.first().copied())
             .unwrap_or(0);
 
         if cutoff_id > 0 {
-            self.store.truncate_after(&mut self.session, cutoff_id).await?;
+            self.store
+                .truncate_after(&mut self.session, cutoff_id)
+                .await?;
         }
 
         let skills_config = self
@@ -1620,7 +1623,6 @@ fn validate_extra_workspace_root(input: &str) -> Result<PathBuf> {
     kiliax_core::paths::validate_existing_dir(input).map_err(|err| anyhow::anyhow!(err))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1641,7 +1643,10 @@ mod tests {
 
     #[test]
     fn soft_wrap_prefers_whitespace_boundaries() {
-        assert_eq!(super::stream::soft_wrap_split_idx("hello world", 5), Some(5));
+        assert_eq!(
+            super::stream::soft_wrap_split_idx("hello world", 5),
+            Some(5)
+        );
         assert_eq!(super::stream::soft_wrap_split_idx("a", 1), None);
         assert_eq!(super::stream::soft_wrap_split_idx("a", 0), None);
 
@@ -1803,6 +1808,7 @@ mod tests {
 
         let llm = LlmClient::new(ResolvedModel {
             provider: "p".to_string(),
+            kind: kiliax_core::config::ProviderKind::OpenAICompatible,
             model: "m".to_string(),
             base_url: "https://example.com/v1".to_string(),
             api_key: None,
@@ -1812,6 +1818,7 @@ mod tests {
         providers.insert(
             "p".to_string(),
             ProviderConfig {
+                kind: kiliax_core::config::ProviderKind::OpenAICompatible,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: None,
                 models: vec!["m".to_string()],

@@ -79,8 +79,7 @@ impl ToolEngine {
 
     pub fn set_extra_workspace_roots(&self, roots: Vec<PathBuf>) -> Result<(), ToolError> {
         let mut guard = self.extra_workspace_roots.write().map_err(|_| {
-            ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            ToolError::Io(std::io::Error::other(
                 "tool extra workspace roots lock poisoned",
             ))
         })?;
@@ -90,12 +89,10 @@ impl ToolEngine {
 
     pub fn set_config(&self, config: crate::config::Config) -> Result<(), ToolError> {
         telemetry::set_capture_config(config.otel.enabled.then_some(config.otel.capture.clone()));
-        let mut guard = self.config.write().map_err(|_| {
-            ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "tool config lock poisoned",
-            ))
-        })?;
+        let mut guard = self
+            .config
+            .write()
+            .map_err(|_| ToolError::Io(std::io::Error::other("tool config lock poisoned")))?;
         *guard = Arc::new(config);
         Ok(())
     }
@@ -104,12 +101,7 @@ impl ToolEngine {
         let cfg = self
             .config
             .read()
-            .map_err(|_| {
-                ToolError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "tool config lock poisoned",
-                ))
-            })
+            .map_err(|_| ToolError::Io(std::io::Error::other("tool config lock poisoned")))
             .ok()
             .map(|g| g.clone());
 
@@ -126,12 +118,7 @@ impl ToolEngine {
         let cfg = self
             .config
             .read()
-            .map_err(|_| {
-                ToolError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "tool config lock poisoned",
-                ))
-            })
+            .map_err(|_| ToolError::Io(std::io::Error::other("tool config lock poisoned")))
             .ok()
             .map(|g| g.clone());
 
@@ -251,12 +238,7 @@ impl ToolEngine {
         let cfg = self
             .config
             .read()
-            .map_err(|_| {
-                ToolError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "tool config lock poisoned",
-                ))
-            })?
+            .map_err(|_| ToolError::Io(std::io::Error::other("tool config lock poisoned")))?
             .clone();
 
         let res: Result<String, ToolError> = async {

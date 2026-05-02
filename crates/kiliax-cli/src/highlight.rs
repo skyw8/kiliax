@@ -46,10 +46,7 @@ pub fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'static>> {
                     .collect();
                 out.push(Line::from(spans));
             }
-            Err(_) => out.push(Line::from(
-                line.trim_end_matches(|ch| ch == '\n' || ch == '\r')
-                    .to_string(),
-            )),
+            Err(_) => out.push(Line::from(line.trim_end_matches(['\n', '\r']).to_string())),
         }
     }
 

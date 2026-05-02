@@ -10,13 +10,13 @@ use async_openai::{
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType, FunctionCall,
-        FunctionName, FunctionObject, ImageDetail, ImageUrl,
+        FunctionName, FunctionObject, ImageDetail as OpenAIImageDetail, ImageUrl,
     },
 };
 use base64::Engine as _;
 
 use crate::protocol::{
-    Message, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
+    ImageDetail, Message, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
 };
 
 use super::LlmError;
@@ -178,7 +178,7 @@ async fn image_url_from_path(
     if path.starts_with("http://") || path.starts_with("https://") || path.starts_with("data:") {
         return Ok(ImageUrl {
             url: path.to_string(),
-            detail,
+            detail: detail.map(to_openai_image_detail),
         });
     }
 
@@ -210,8 +210,16 @@ async fn image_url_from_path(
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     Ok(ImageUrl {
         url: format!("data:{mime_type};base64,{b64}"),
-        detail,
+        detail: detail.map(to_openai_image_detail),
     })
+}
+
+fn to_openai_image_detail(detail: ImageDetail) -> OpenAIImageDetail {
+    match detail {
+        ImageDetail::Auto => OpenAIImageDetail::Auto,
+        ImageDetail::Low => OpenAIImageDetail::Low,
+        ImageDetail::High => OpenAIImageDetail::High,
+    }
 }
 
 fn guess_image_mime_type(path: &std::path::Path) -> Option<&'static str> {
@@ -227,4 +235,3 @@ fn guess_image_mime_type(path: &std::path::Path) -> Option<&'static str> {
         _ => None,
     }
 }
-

@@ -161,11 +161,7 @@ fn find_web_dist_dir(workspace_root: &FsPath) -> Option<PathBuf> {
         }
     }
 
-    for dir in candidates {
-        if dir.join("index.html").is_file() {
-            return Some(dir);
-        }
-    }
-
-    None
+    candidates
+        .into_iter()
+        .find(|dir| dir.join("index.html").is_file())
 }

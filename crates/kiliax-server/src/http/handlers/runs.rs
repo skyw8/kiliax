@@ -48,7 +48,9 @@ async fn create_run(
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let req: crate::api::RunCreateRequest =
         serde_json::from_value(body).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
-    let out = state.create_run(&id, idem_key(&headers), req.into()).await?;
+    let out = state
+        .create_run(&id, idem_key(&headers), req.into())
+        .await?;
     let out: crate::api::Run = out.into();
     Ok((StatusCode::CREATED, Json(out)))
 }

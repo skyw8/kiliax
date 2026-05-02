@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use tokio_stream::{Stream, StreamExt};
 
 use crate::llm::LlmError;
-use crate::protocol::{ChatStreamChunk, Message, TokenUsage, ToolCall, ToolCallDelta};
+use crate::protocol::{ChatStreamChunk, FinishReason, Message, ToolCall, ToolCallDelta};
 
 use super::{tool_calls::normalize_tool_call_ids, AgentEvent, AgentRuntimeError};
 
@@ -11,7 +11,7 @@ use super::{tool_calls::normalize_tool_call_ids, AgentEvent, AgentRuntimeError};
 pub(super) struct StreamStepOutput {
     pub(super) assistant: Message,
     pub(super) tool_calls: Vec<ToolCall>,
-    pub(super) finish_reason: Option<async_openai::types::FinishReason>,
+    pub(super) finish_reason: Option<FinishReason>,
 }
 
 #[derive(Debug, Default)]
@@ -137,7 +137,7 @@ pub(super) async fn drive_stream_step(
             Some(assistant_reasoning)
         },
         tool_calls: resolved_calls.clone(),
-        usage: last_usage.as_ref().map(TokenUsage::from_completion_usage),
+        usage: last_usage,
     };
 
     Ok(StreamStepOutput {
@@ -146,4 +146,3 @@ pub(super) async fn drive_stream_step(
         finish_reason,
     })
 }
-

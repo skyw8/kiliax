@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
-use kiliax_core::compact;
 use kiliax_core::agents::AgentProfile;
+use kiliax_core::compact;
 use kiliax_core::config::Config;
 use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
@@ -17,10 +17,9 @@ use tokio_stream::StreamExt;
 use tracing::{Instrument, Span};
 
 use crate::error::{ApiError, ApiErrorCode};
-use crate::infra::{
-    validate_client_extra_workspace_roots, validate_client_workspace_root,
-};
+use crate::infra::{validate_client_extra_workspace_roots, validate_client_workspace_root};
 
+use super::preamble::{build_preamble, insert_preamble_updates_before_last_user, preamble_updates};
 use super::{
     append_event, apply_settings_patch, config_with_mcp_overrides, error_chain_vec,
     format_error_chain_text, map_core_message_to_domain_event_message, map_mcp_status,
@@ -28,13 +27,10 @@ use super::{
     resolve_session_settings, runtime_error_code, runtime_error_hint, session_events_api_path,
     skills_config_from_settings, ts_ms_to_rfc3339, write_run_file, ServerState,
 };
-use super::preamble::{
-    build_preamble, insert_preamble_updates_before_last_user, preamble_updates,
-};
 
+use super::domain;
 #[cfg(test)]
 use super::{default_settings, read_events_after};
-use super::domain;
 
 pub struct LiveSession {
     session_id: SessionId,
@@ -376,7 +372,8 @@ impl LiveSession {
         let mut settings = self.settings.lock().await.clone();
         let mut patch = patch;
         if let Some(roots) = patch.extra_workspace_roots.take() {
-            let validated = validate_client_extra_workspace_roots(&roots, &settings.workspace_root)?;
+            let validated =
+                validate_client_extra_workspace_roots(&roots, &settings.workspace_root)?;
             patch.extra_workspace_roots = Some(
                 validated
                     .into_iter()
@@ -429,9 +426,8 @@ impl LiveSession {
         let q = self.queue.lock().await;
         let st = self.status.lock().await;
 
-        let busy = !q.is_empty()
-            || st.queue_len > 0
-            || st.run_state != domain::SessionRunState::Idle;
+        let busy =
+            !q.is_empty() || st.queue_len > 0 || st.run_state != domain::SessionRunState::Idle;
         if busy {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
@@ -568,12 +564,12 @@ impl LiveSession {
             (session.messages.clone(), session.message_ids.clone())
         };
 
-        let summary_suffix =
-            compact::run_compaction(llm, &messages_snapshot)
-                .await
-                .map_err(ApiError::internal_error)?;
+        let summary_suffix = compact::run_compaction(llm, &messages_snapshot)
+            .await
+            .map_err(ApiError::internal_error)?;
         let user_messages = compact::collect_real_user_texts(&messages_snapshot);
-        let compacted_history = compact::build_compacted_user_history(&user_messages, &summary_suffix);
+        let compacted_history =
+            compact::build_compacted_user_history(&user_messages, &summary_suffix);
 
         let cutoff_id = compact::find_preamble_cutoff_id(&messages_snapshot, &message_ids_snapshot)
             .or_else(|| message_ids_snapshot.first().copied())
@@ -784,13 +780,13 @@ impl LiveSession {
             }
 
             // Apply deferred session settings once safe.
-            if self.settings_dirty.load(Ordering::SeqCst) {
-                if self.status.lock().await.run_state == domain::SessionRunState::Idle {
-                    if let Err(err) = self.apply_settings_now(true).await {
-                        tracing::error!("apply_settings_now error: {err}");
-                    } else {
-                        self.settings_dirty.store(false, Ordering::SeqCst);
-                    }
+            if self.settings_dirty.load(Ordering::SeqCst)
+                && self.status.lock().await.run_state == domain::SessionRunState::Idle
+            {
+                if let Err(err) = self.apply_settings_now(true).await {
+                    tracing::error!("apply_settings_now error: {err}");
+                } else {
+                    self.settings_dirty.store(false, Ordering::SeqCst);
                 }
             }
         }
@@ -1355,12 +1351,9 @@ impl LiveSession {
             AgentEvent::AssistantMessage { message } => {
                 let seq = self.record_message(message.clone()).await?;
                 let created_at = now_rfc3339();
-                let msg = map_core_message_to_domain_event_message(
-                    seq,
-                    created_at.clone(),
-                    message,
-                )
-                .unwrap_or(domain::Message::Assistant {
+                let msg =
+                    map_core_message_to_domain_event_message(seq, created_at.clone(), message)
+                        .unwrap_or(domain::Message::Assistant {
                             id: seq.to_string(),
                             created_at: created_at.clone(),
                             content: String::new(),
@@ -1402,12 +1395,9 @@ impl LiveSession {
                     st.active_tool = None;
                 }
                 let created_at = now_rfc3339();
-                let msg = map_core_message_to_domain_event_message(
-                    seq,
-                    created_at.clone(),
-                    message,
-                )
-                .unwrap_or(domain::Message::Tool {
+                let msg =
+                    map_core_message_to_domain_event_message(seq, created_at.clone(), message)
+                        .unwrap_or(domain::Message::Tool {
                             id: seq.to_string(),
                             created_at: created_at.clone(),
                             tool_call_id: "".to_string(),
@@ -1506,16 +1496,19 @@ fn apply_run_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kiliax_core::config::ProviderConfig;
+    use kiliax_core::config::{ProviderConfig, ProviderKind};
     use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
     use tempfile::TempDir;
 
     fn test_config() -> Config {
-        let mut cfg = Config::default();
-        cfg.default_model = Some("test/test-model".to_string());
+        let mut cfg = Config {
+            default_model: Some("test/test-model".to_string()),
+            ..Default::default()
+        };
         cfg.providers.insert(
             "test".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "http://127.0.0.1:1".to_string(),
                 api_key: None,
                 models: vec!["test-model".to_string()],

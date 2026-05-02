@@ -28,11 +28,13 @@ minimal
 
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
 - Context compaction (auto + `/compact`): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
-- Config + model/agent defaults + routing: `crates/kiliax-core/src/config.rs`
+- Config + model/agent defaults + provider kind routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
 - Protocol types (messages/tool-calls/usage): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
-- OpenAI-compatible client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-core/src/llm.rs`
+- Provider-neutral LLM facade + provider trait routing: `crates/kiliax-core/src/llm.rs`
+- OpenAI-compatible client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-core/src/llm/openai_*.rs`, `crates/kiliax-core/src/llm/byot.rs`, `crates/kiliax-core/src/llm/patches.rs`
+- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping): `crates/kiliax-core/src/llm/anthropic.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`

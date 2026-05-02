@@ -64,4 +64,3 @@ pub(super) async fn build_preamble(
     builder = builder.add_skills(filtered);
     builder.build()
 }
-

@@ -93,7 +93,9 @@ impl From<domain::McpServers> for api::McpServers {
 impl From<domain::McpServersPatch> for api::McpServersPatch {
     fn from(value: domain::McpServersPatch) -> Self {
         Self {
-            servers: value.servers.map(|v| v.into_iter().map(Into::into).collect()),
+            servers: value
+                .servers
+                .map(|v| v.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -110,7 +112,9 @@ impl From<api::McpServerSetting> for domain::McpServerSetting {
 impl From<api::McpServersPatch> for domain::McpServersPatch {
     fn from(value: api::McpServersPatch) -> Self {
         Self {
-            servers: value.servers.map(|v| v.into_iter().map(Into::into).collect()),
+            servers: value
+                .servers
+                .map(|v| v.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -461,4 +465,3 @@ impl From<api::RunCreateRequest> for domain::RunCreateRequest {
         }
     }
 }
-

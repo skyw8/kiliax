@@ -99,11 +99,7 @@ async fn stream_events_sse(
     let rx = live.subscribe_events();
     let shutdown = state.shutdown.clone();
 
-    let backlog_stream = stream::iter(
-        backlog
-            .into_iter()
-            .map(|e| Ok::<_, std::convert::Infallible>(e)),
-    );
+    let backlog_stream = stream::iter(backlog.into_iter().map(Ok::<_, std::convert::Infallible>));
     let live_stream = stream::unfold(
         LiveSseState {
             rx,

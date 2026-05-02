@@ -250,7 +250,7 @@ pub(super) async fn execute_shell_command(
     let mut stderr_buf = session.stderr.lock().await;
     let stderr = drain_with_limit(&mut stderr_buf, max.saturating_sub(stdout.len()));
 
-    let code = session.exit_code.lock().await.clone();
+    let code = *session.exit_code.lock().await;
     let running = code.is_none();
     if !running {
         let _ = shell_sessions.remove(id).await;
@@ -312,7 +312,7 @@ pub(super) async fn execute_write_stdin(
     let mut stderr_buf = sess.stderr.lock().await;
     let stderr = drain_with_limit(&mut stderr_buf, max.saturating_sub(stdout.len()));
 
-    let code = sess.exit_code.lock().await.clone();
+    let code = *sess.exit_code.lock().await;
     let running = code.is_none();
     if !running {
         let _ = shell_sessions.remove(args.session_id).await;

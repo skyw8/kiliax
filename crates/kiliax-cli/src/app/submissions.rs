@@ -137,4 +137,3 @@ impl App {
             .push_back(QueuedSubmission { text, images });
     }
 }
-

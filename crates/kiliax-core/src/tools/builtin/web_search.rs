@@ -267,10 +267,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 fn to_io_error<E: std::fmt::Display>(err: E) -> ToolError {
-    ToolError::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        err.to_string(),
-    ))
+    ToolError::Io(std::io::Error::other(err.to_string()))
 }
 
 #[cfg(test)]

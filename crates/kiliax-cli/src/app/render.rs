@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kiliax_core::protocol::TokenUsage;
@@ -207,7 +207,7 @@ fn truncate_one_line(text: &str, max_chars: usize) -> String {
 }
 
 fn cmd_basename(cmd: &str) -> &str {
-    cmd.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(cmd)
+    cmd.rsplit(['/', '\\']).next().unwrap_or(cmd)
 }
 
 fn cmd_basename_no_ext(cmd: &str) -> &str {
@@ -254,10 +254,7 @@ fn abbreviate_long_arg(token: &str) -> String {
         return token.to_string();
     }
     if token.contains('/') || token.contains('\\') {
-        let parts: Vec<&str> = token
-            .split(|c| c == '/' || c == '\\')
-            .filter(|p| !p.is_empty())
-            .collect();
+        let parts: Vec<&str> = token.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
         if parts.len() > 3 {
             return format!("…/{}", parts[parts.len() - 3..].join("/"));
         }
@@ -593,7 +590,7 @@ pub(super) fn format_error_chain_text(err: &dyn std::error::Error) -> String {
 }
 
 pub(super) fn render_dir_list_lines(
-    workspace_root: &PathBuf,
+    workspace_root: &Path,
     extra_roots: &[PathBuf],
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();

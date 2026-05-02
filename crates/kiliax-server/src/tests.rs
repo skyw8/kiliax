@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
-use kiliax_core::config::{Config, ProviderConfig};
+use kiliax_core::config::{Config, ProviderConfig, ProviderKind};
 use kiliax_core::protocol::{Message, TokenUsage, UserMessageContent};
 use kiliax_core::session::FileSessionStore;
 use kiliax_core::session::SessionId;
@@ -13,17 +13,19 @@ use tower::ServiceExt as _;
 use crate::state::ServerState;
 
 fn test_config() -> Config {
-    let mut cfg = Config::default();
-    cfg.default_model = Some("test/test-model".to_string());
+    let mut cfg = Config {
+        default_model: Some("test/test-model".to_string()),
+        ..Default::default()
+    };
     cfg.providers.insert(
         "test".to_string(),
         ProviderConfig {
+            kind: ProviderKind::OpenAICompatible,
             base_url: "http://127.0.0.1:1".to_string(),
             api_key: None,
             models: vec!["test-model".to_string(), "new-model".to_string()],
         },
     );
-    cfg.mcp.servers = Vec::new();
     cfg
 }
 
@@ -88,7 +90,7 @@ async fn read_json(resp: axum::response::Response) -> (StatusCode, serde_json::V
         .expect("collect body")
         .to_bytes();
     let value: serde_json::Value =
-        serde_json::from_slice(&bytes).unwrap_or_else(|_| serde_json::Value::Null);
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, value)
 }
 
@@ -1171,7 +1173,11 @@ async fn patch_settings_persists_and_emits_event() {
     let store = FileSessionStore::project(dir.path());
     let id = SessionId::parse(&session_id).expect("session id");
     let session = store.load(&id).await.expect("load session");
-    assert_eq!(session.meta.agent.as_str(), "plan", "meta should persist agent");
+    assert_eq!(
+        session.meta.agent.as_str(),
+        "plan",
+        "meta should persist agent"
+    );
 
     let resp = app
         .clone()
@@ -1483,7 +1489,7 @@ async fn create_session_sets_workspace_root_and_updated_at() {
         "workspace_root not under test .kiliax dir: {ws}"
     );
     assert!(
-        ws_path.starts_with(&allowed_kiliax_dir.join("workspace")),
+        ws_path.starts_with(allowed_kiliax_dir.join("workspace")),
         "workspace_root not under test .kiliax/workspace: {ws}"
     );
 
@@ -1547,10 +1553,9 @@ async fn list_skills_returns_workspace_skills() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let workspace_root = dir.path().join(format!(
-        "kiliax_test_workspace_{ts}_{}",
-        std::process::id()
-    ));
+    let workspace_root = dir
+        .path()
+        .join(format!("kiliax_test_workspace_{ts}_{}", std::process::id()));
     let skill_dir = workspace_root.join("skills").join("demo_skill");
     tokio::fs::create_dir_all(&skill_dir)
         .await

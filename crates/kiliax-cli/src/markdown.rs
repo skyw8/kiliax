@@ -69,6 +69,7 @@ pub fn render_markdown_lines(input: &str) -> Vec<Line<'static>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::render_markdown_lines;
 

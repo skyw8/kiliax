@@ -47,4 +47,3 @@ pub fn print_run_help() {
     println!("  --config <path>         (default: auto-detect kiliax.yaml)");
     println!("  --token <token>         (required bearer/web auth)");
 }
-

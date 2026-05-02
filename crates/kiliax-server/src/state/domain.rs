@@ -254,10 +254,19 @@ pub struct ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunInput {
-    Text { text: String },
-    FromUserMessage { user_message_id: u64 },
-    EditUserMessage { user_message_id: u64, content: String },
-    RegenerateAfterUserMessage { user_message_id: u64 },
+    Text {
+        text: String,
+    },
+    FromUserMessage {
+        user_message_id: u64,
+    },
+    EditUserMessage {
+        user_message_id: u64,
+        content: String,
+    },
+    RegenerateAfterUserMessage {
+        user_message_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -283,7 +283,7 @@ pub(crate) async fn open_external(
     match target {
         api::OpenWorkspaceTarget::Vscode => {
             if std::env::consts::OS == "windows" {
-                match spawn_detached("code", &[path.clone()]) {
+                match spawn_detached("code", std::slice::from_ref(&path)) {
                     Ok(()) => Ok(()),
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                         if let Some(exe) = windows_find_vscode_exe() {

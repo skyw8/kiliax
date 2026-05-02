@@ -58,7 +58,9 @@ pub fn estimate_context_tokens(messages: &[Message]) -> usize {
                 }
             },
             Message::Assistant {
-                content, tool_calls, ..
+                content,
+                tool_calls,
+                ..
             } => {
                 if let Some(text) = content.as_ref() {
                     total = total.saturating_add(approx_token_count(text));
@@ -134,7 +136,10 @@ fn user_content_to_text_for_compaction(content: &UserMessageContent) -> String {
     }
 }
 
-pub fn build_compacted_user_history(user_messages: &[String], summary_suffix: &str) -> Vec<Message> {
+pub fn build_compacted_user_history(
+    user_messages: &[String],
+    summary_suffix: &str,
+) -> Vec<Message> {
     let mut selected_messages: Vec<String> = Vec::new();
     let mut remaining = COMPACT_USER_MESSAGE_MAX_TOKENS;
 
@@ -262,12 +267,9 @@ pub async fn run_compaction(llm: &LlmClient, messages: &[Message]) -> Result<Str
 }
 
 fn drop_oldest_non_system(messages: &mut Vec<Message>) -> bool {
-    let idx = messages.iter().position(|m| {
-        !matches!(
-            m,
-            Message::System { .. } | Message::Developer { .. }
-        )
-    });
+    let idx = messages
+        .iter()
+        .position(|m| !matches!(m, Message::System { .. } | Message::Developer { .. }));
     let Some(idx) = idx else {
         return false;
     };
@@ -304,7 +306,8 @@ mod tests {
     fn build_compacted_history_appends_summary_last() {
         let msgs = vec!["one".to_string(), "two".to_string()];
         let out = build_compacted_user_history(&msgs, "sum");
-        assert!(matches!(out.last(), Some(Message::User { content: UserMessageContent::Text(t) }) if is_summary_message(t)));
+        assert!(
+            matches!(out.last(), Some(Message::User { content: UserMessageContent::Text(t) }) if is_summary_message(t))
+        );
     }
 }
-

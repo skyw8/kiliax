@@ -260,9 +260,7 @@ async fn apply_planned_paths(
         .values()
         .filter(|state| state.changed())
         .collect();
-    let mut applied_count = 0usize;
-
-    for state in &changed {
+    for (applied_count, state) in changed.iter().enumerate() {
         let result = match &state.current {
             Some(content) => write_path_content(&state.abs, content).await,
             None => remove_path_if_exists(&state.abs).await,
@@ -274,8 +272,6 @@ async fn apply_planned_paths(
             rollback_paths(&rollback_states).await;
             return Err(err.into());
         }
-
-        applied_count += 1;
     }
 
     Ok(())
@@ -312,6 +308,7 @@ async fn rollback_paths(applied: &[&PlannedPathState]) {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 enum PatchOp {
     AddFile {
         path: String,

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 mod handlers;
 mod headers;
-mod middleware;
 mod mapper;
+mod middleware;
 mod openapi;
 mod web;
 

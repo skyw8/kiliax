@@ -366,9 +366,7 @@ fn fuzzy_match(needle: &str, haystack: &str) -> Option<usize> {
     let hay = haystack.to_ascii_lowercase();
 
     for ch in needle.chars() {
-        let Some(rel) = hay[pos..].find(ch) else {
-            return None;
-        };
+        let rel = hay[pos..].find(ch)?;
         let idx = pos + rel;
         score = score.saturating_add(idx.saturating_sub(pos));
         pos = idx.saturating_add(ch.len_utf8());
@@ -391,12 +389,13 @@ mod tests {
     fn model_picker_qualifies_models_with_slashes() {
         use std::collections::BTreeMap;
 
-        use kiliax_core::config::ProviderConfig;
+        use kiliax_core::config::{ProviderConfig, ProviderKind};
 
         let mut providers = BTreeMap::new();
         providers.insert(
             "openrouter".to_string(),
             ProviderConfig {
+                kind: ProviderKind::OpenAICompatible,
                 base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
                 api_key: None,
                 models: vec!["openai/gpt-4o-mini".to_string()],

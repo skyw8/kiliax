@@ -103,6 +103,8 @@ mcp:
 
 providers:
   moonshot_cn:
+    # kind defaults to openai-compatible when omitted.
+    kind: openai-compatible
     base_url: https://api.moonshot.cn/v1
     # api_key is optional for endpoints that do not require auth.
     # Support key names: api_key / apikey / apiKey
@@ -111,6 +113,7 @@ providers:
       - kimi-k2-turbo-preview
 
   openai:
+    kind: openai-compatible
     base_url: https://api.openai.com/v1
     # api_key is optional for endpoints that do not require auth.
     # Support key names: api_key / apikey / apiKey
@@ -118,3 +121,12 @@ providers:
     models:
       - gpt-4o-mini
       - gpt-4o
+
+  anthropic:
+    kind: anthropic
+    # Either https://api.anthropic.com or https://api.anthropic.com/v1 works.
+    # Kiliax calls the Anthropic Messages API at /v1/messages.
+    base_url: https://api.anthropic.com/v1
+    api_key: sk-ant-your-key
+    models:
+      - claude-3-5-sonnet-latest

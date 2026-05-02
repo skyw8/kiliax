@@ -79,7 +79,7 @@ fn terminal_theme_hint() -> TerminalTheme {
     let bg = val
         .split(';')
         .filter_map(|part| part.trim().parse::<u8>().ok())
-        .last();
+        .next_back();
     let Some(bg) = bg else {
         return TerminalTheme::Unknown;
     };

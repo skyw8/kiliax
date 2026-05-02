@@ -182,7 +182,7 @@ impl ThinkingStreamCollector {
 }
 
 fn trim_trailing_blank_lines(lines: &mut Vec<Line<'static>>) {
-    while lines.last().is_some_and(|line| line_is_blank(line)) {
+    while lines.last().is_some_and(line_is_blank) {
         lines.pop();
     }
 }
@@ -254,4 +254,3 @@ fn trim_leading_newlines(text: &mut String) {
         text.drain(..start);
     }
 }
-

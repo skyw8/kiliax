@@ -44,4 +44,3 @@ impl App {
         self.input.set_text(draft);
     }
 }
-

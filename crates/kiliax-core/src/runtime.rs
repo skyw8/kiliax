@@ -1,17 +1,14 @@
 use tracing::Instrument;
 
 use crate::agents::{AgentKind, AgentProfile};
-use async_openai::types::FinishReason;
 
 use crate::llm::{LlmClient, LlmError};
-use crate::protocol::{
-    ChatRequest, Message, ToolCall, ToolChoice, ToolDefinition,
-};
+use crate::protocol::{ChatRequest, FinishReason, Message, ToolCall, ToolChoice, ToolDefinition};
 use crate::telemetry;
 use crate::tools::{policy, ToolEngine, ToolError};
 
-mod tool_calls;
 mod streaming;
+mod tool_calls;
 
 use streaming::{drive_stream_step, normalize_stream_step_tool_calls};
 use tool_calls::{
@@ -265,9 +262,8 @@ impl AgentRuntime {
                         }
 
                         while let Some(joined) = set.join_next().await {
-                            let (idx, _call, res) = joined.map_err(|e| {
-                                ToolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-                            })?;
+                            let (idx, _call, res) =
+                                joined.map_err(|e| ToolError::Io(std::io::Error::other(e)))?;
                             results[idx] = Some(res);
                         }
 
@@ -662,10 +658,7 @@ impl AgentRuntime {
                                                     Err(err) => {
                                                         let _ = tx
                                                             .send(Err(ToolError::Io(
-                                                                std::io::Error::new(
-                                                                    std::io::ErrorKind::Other,
-                                                                    err,
-                                                                ),
+                                                                std::io::Error::other(err),
                                                             )
                                                             .into()))
                                                             .await;
@@ -997,14 +990,12 @@ mod tests {
     async fn drive_stream_step_attaches_usage_from_final_chunk() {
         let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
 
-        let usage =
-            serde_json::from_value::<async_openai::types::CompletionUsage>(serde_json::json!({
-                "prompt_tokens": 19,
-                "completion_tokens": 21,
-                "total_tokens": 40,
-                "prompt_tokens_details": { "cached_tokens": 10 }
-            }))
-            .unwrap();
+        let usage = crate::protocol::TokenUsage {
+            prompt_tokens: 19,
+            completion_tokens: 21,
+            total_tokens: 40,
+            cached_tokens: Some(10),
+        };
 
         let chunks = vec![
             Ok(ChatStreamChunk {

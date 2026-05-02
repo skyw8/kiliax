@@ -276,11 +276,12 @@ fn preferred_project_instruction_path(dir: &Path) -> Option<PathBuf> {
 }
 
 fn render_tools_prompt(tools: &[ToolDefinition]) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    lines.push("# Tool Use".to_string());
-    lines.push("You can call tools to inspect or modify the workspace.".to_string());
-    lines.push(String::new());
-    lines.push("## Available Tools".to_string());
+    let mut lines: Vec<String> = vec![
+        "# Tool Use".to_string(),
+        "You can call tools to inspect or modify the workspace.".to_string(),
+        String::new(),
+        "## Available Tools".to_string(),
+    ];
 
     if tools.is_empty() {
         lines.push("- (none)".to_string());

@@ -11,12 +11,12 @@ impl OutputTokenCounter {
     }
 
     pub(super) fn estimate(&self) -> u64 {
-        self.tokens + ((self.carry_bytes + 3) / 4) as u64
+        self.tokens + self.carry_bytes.div_ceil(4) as u64
     }
 
     pub(super) fn finish_segment(&mut self) {
         if self.carry_bytes > 0 {
-            self.tokens += ((self.carry_bytes + 3) / 4) as u64;
+            self.tokens += self.carry_bytes.div_ceil(4) as u64;
             self.carry_bytes = 0;
         }
     }
@@ -60,4 +60,3 @@ fn is_cjk_like(ch: char) -> bool {
         0xAC00..=0xD7AF // Hangul Syllables
     )
 }
-
