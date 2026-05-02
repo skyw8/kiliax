@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod compact;
 pub mod config;
 pub mod llm;
 pub mod mcp_overrides;

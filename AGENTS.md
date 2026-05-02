@@ -27,6 +27,7 @@ minimal
 ### crates/kiliax-core (core library)
 
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
+- Context compaction (auto + `/compact`): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
 - Config + model/agent defaults + routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
 - Protocol types (messages/tool-calls/usage): `crates/kiliax-core/src/protocol.rs`
@@ -42,6 +43,7 @@ minimal
 ### crates/kiliax-cli (TUI)
 
 - UI + event loop + slash commands + session bootstrap: `crates/kiliax-cli/src/main.rs`
+- Slash command definitions + popup: `crates/kiliax-cli/src/slash_command.rs`
 - App state + render pipeline + session-local settings changes: `crates/kiliax-cli/src/app/`
 - Terminal init + backend: `crates/kiliax-cli/src/terminal.rs`
 - Server daemon control: `crates/kiliax-cli/src/daemon.rs`

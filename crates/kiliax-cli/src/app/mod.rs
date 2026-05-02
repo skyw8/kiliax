@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use kiliax_core::{
     agents::AgentProfile,
+    compact,
     config::Config,
     mcp_overrides::{config_with_session_mcp_overrides, session_mcp_servers_from_config},
     protocol::{Message, UserContentPart, UserMessageContent},
@@ -175,6 +176,7 @@ impl App {
                 Message::User { content } => content.first_text().map(|t| t.to_string()),
                 _ => None,
             })
+            .filter(|text| !compact::is_summary_message(text))
             .collect();
         Self {
             input: InputLine::default(),
@@ -656,6 +658,29 @@ impl App {
                 }
                 self.open_mcp_picker().await;
             }
+            crate::slash_command::SlashCommand::Compact => {
+                if !args.trim().is_empty() {
+                    self.pending_history_lines
+                        .extend(render_error_lines("usage: /compact"));
+                    return Ok(());
+                }
+                if self.running {
+                    self.pending_history_lines.extend(render_error_lines(
+                        "cannot compact while a run is in progress",
+                    ));
+                    return Ok(());
+                }
+
+                if let Err(err) = self.compact_session(/*emit_info*/ true).await {
+                    let text = format_error_chain_text(err.as_ref());
+                    tracing::error!(
+                        event = "tui.compact.error",
+                        session_id = %self.session.id(),
+                        error = %text,
+                    );
+                    self.pending_history_lines.extend(render_error_lines(&text));
+                }
+            }
         }
         Ok(())
     }
@@ -781,6 +806,7 @@ impl App {
                 Message::User { content } => content.first_text().map(|t| t.to_string()),
                 _ => None,
             })
+            .filter(|text| !compact::is_summary_message(text))
             .collect();
         self.reset_history_nav();
 
@@ -833,6 +859,29 @@ impl App {
         record_prompt_history: bool,
     ) -> Result<()> {
         let text = text.trim().to_string();
+
+        if let Some(limit) = self.options.auto_compact_token_limit {
+            let estimated = compact::estimate_context_tokens(&self.session.messages);
+            if estimated >= limit {
+                tracing::info!(
+                    event = "tui.auto_compact.triggered",
+                    session_id = %self.session.id(),
+                    estimated_tokens = estimated as u64,
+                    limit = limit as u64,
+                );
+                if let Err(err) = self.compact_session(/*emit_info*/ false).await {
+                    let text = format_error_chain_text(err.as_ref());
+                    tracing::warn!(
+                        event = "tui.auto_compact.failed",
+                        session_id = %self.session.id(),
+                        error = %text,
+                    );
+                    self.pending_history_lines
+                        .extend(render_error_lines(&format!("auto compact failed: {text}")));
+                }
+            }
+        }
+
         if record_prompt_history && !text.is_empty() {
             self.prompt_history.push(text.clone());
         }
@@ -906,6 +955,77 @@ impl App {
         let msg = Message::User { content };
         self.messages.push(msg.clone());
         self.store.record_message(&mut self.session, msg).await?;
+        Ok(())
+    }
+
+    async fn compact_session(&mut self, emit_info: bool) -> Result<()> {
+        let (messages_snapshot, message_ids_snapshot) =
+            (self.session.messages.clone(), self.session.message_ids.clone());
+
+        let summary_suffix = compact::run_compaction(self.runtime.llm(), &messages_snapshot)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let user_messages = compact::collect_real_user_texts(&messages_snapshot);
+        let compacted_history = compact::build_compacted_user_history(&user_messages, &summary_suffix);
+
+        let cutoff_id = compact::find_preamble_cutoff_id(&messages_snapshot, &message_ids_snapshot)
+            .or_else(|| message_ids_snapshot.first().copied())
+            .unwrap_or(0);
+
+        if cutoff_id > 0 {
+            self.store.truncate_after(&mut self.session, cutoff_id).await?;
+        }
+
+        let skills_config = self
+            .session
+            .meta
+            .skills
+            .clone()
+            .unwrap_or_else(|| self.config.skills.clone());
+        let new_preamble = build_preamble(
+            &self.profile,
+            &self.model_id,
+            &self.workspace_root,
+            self.runtime.tools(),
+            &skills_config,
+        )
+        .await;
+        for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
+            self.store.record_message(&mut self.session, msg).await?;
+        }
+        for msg in compacted_history {
+            self.store.record_message(&mut self.session, msg).await?;
+        }
+
+        self.store.checkpoint(&mut self.session).await?;
+        self.messages = self.session.messages.clone();
+        self.prompt_history = self
+            .messages
+            .iter()
+            .filter_map(|msg| match msg {
+                Message::User { content } => content.first_text().map(|t| t.to_string()),
+                _ => None,
+            })
+            .filter(|text| !compact::is_summary_message(text))
+            .collect();
+        self.reset_history_nav();
+
+        if emit_info {
+            self.pending_history_lines.push(Line::from(vec![
+                Span::from("• ").dim(),
+                Span::from("compact").bold(),
+                Span::from(": ").dim(),
+                Span::from("done").dim(),
+            ]));
+        }
+
+        tracing::info!(
+            event = "tui.compact.done",
+            session_id = %self.session.id(),
+            agent = %self.agent_name(),
+            model_id = %self.model_id(),
+        );
+
         Ok(())
     }
 
@@ -1377,7 +1497,7 @@ impl App {
                     }
                     Message::User { content } => {
                         let display = content.display_text();
-                        if !display.trim().is_empty() {
+                        if !compact::is_summary_message(&display) && !display.trim().is_empty() {
                             self.pending_history_lines
                                 .extend(render_user_message_lines(&display));
                         }

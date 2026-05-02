@@ -49,6 +49,7 @@ pub struct AgentRuntimeOptions {
     pub tool_error_mode: ToolErrorMode,
     pub temperature: Option<f32>,
     pub max_completion_tokens: Option<u32>,
+    pub auto_compact_token_limit: Option<usize>,
 }
 
 impl Default for AgentRuntimeOptions {
@@ -60,6 +61,7 @@ impl Default for AgentRuntimeOptions {
             tool_error_mode: ToolErrorMode::ToolMessage,
             temperature: None,
             max_completion_tokens: None,
+            auto_compact_token_limit: None,
         }
     }
 }
@@ -76,6 +78,7 @@ impl AgentRuntimeOptions {
         if let Some(max_steps) = config.runtime.max_steps {
             options.max_steps = max_steps;
         }
+        options.auto_compact_token_limit = config.runtime.auto_compact_token_limit;
 
         let agent_cfg = match profile.kind {
             AgentKind::Plan => &config.agents.plan,
@@ -83,6 +86,9 @@ impl AgentRuntimeOptions {
         };
         if let Some(max_steps) = agent_cfg.max_steps {
             options.max_steps = max_steps;
+        }
+        if agent_cfg.auto_compact_token_limit.is_some() {
+            options.auto_compact_token_limit = agent_cfg.auto_compact_token_limit;
         }
 
         options

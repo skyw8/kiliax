@@ -487,11 +487,18 @@ fn map_core_message_to_domain(
     let id = seq.to_string();
     let created_at = ts_ms_to_rfc3339(ts_ms);
     match msg {
-        CoreMessage::User { content } => Some(domain::Message::User {
-            id,
-            created_at,
-            content: content.first_text().unwrap_or("").to_string(),
-        }),
+        CoreMessage::User { content } => {
+            let text = content.first_text().unwrap_or("");
+            if kiliax_core::compact::is_summary_message(text) {
+                None
+            } else {
+                Some(domain::Message::User {
+                    id,
+                    created_at,
+                    content: text.to_string(),
+                })
+            }
+        }
         CoreMessage::Assistant {
             content,
             reasoning_content,
@@ -532,11 +539,18 @@ fn map_core_message_to_domain_event_message(
 ) -> Option<domain::Message> {
     let id = seq.to_string();
     match msg {
-        CoreMessage::User { content } => Some(domain::Message::User {
-            id,
-            created_at,
-            content: content.first_text().unwrap_or("").to_string(),
-        }),
+        CoreMessage::User { content } => {
+            let text = content.first_text().unwrap_or("");
+            if kiliax_core::compact::is_summary_message(text) {
+                None
+            } else {
+                Some(domain::Message::User {
+                    id,
+                    created_at,
+                    content: text.to_string(),
+                })
+            }
+        }
         CoreMessage::Assistant {
             content,
             reasoning_content,

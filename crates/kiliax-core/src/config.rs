@@ -47,6 +47,15 @@ pub struct AgentRuntimeConfig {
     /// Maximum number of ReAct steps in a single run.
     #[serde(default, alias = "maxSteps", alias = "max-steps")]
     pub max_steps: Option<usize>,
+
+    /// Approx token usage threshold triggering auto-compaction of conversation history.
+    #[serde(
+        default,
+        alias = "autoCompactTokenLimit",
+        alias = "auto_compact_token_limit",
+        alias = "auto-compact-token-limit"
+    )]
+    pub auto_compact_token_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -887,6 +896,11 @@ fn validate_agent_runtime_config(label: &str, cfg: &AgentRuntimeConfig) -> Resul
     if cfg.max_steps.is_some_and(|v| v == 0) {
         return Err(ConfigError::Invalid(format!(
             "{label}.max_steps must be greater than 0"
+        )));
+    }
+    if cfg.auto_compact_token_limit.is_some_and(|v| v == 0) {
+        return Err(ConfigError::Invalid(format!(
+            "{label}.auto_compact_token_limit must be greater than 0"
         )));
     }
     Ok(())

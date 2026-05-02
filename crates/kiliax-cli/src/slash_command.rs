@@ -5,6 +5,7 @@ pub enum SlashCommand {
     Model,
     Agent,
     Mcp,
+    Compact,
 }
 
 impl SlashCommand {
@@ -15,6 +16,7 @@ impl SlashCommand {
             SlashCommand::Model => "model",
             SlashCommand::Agent => "agent",
             SlashCommand::Mcp => "mcp",
+            SlashCommand::Compact => "compact",
         }
     }
 
@@ -25,6 +27,7 @@ impl SlashCommand {
             SlashCommand::Model => &[],
             SlashCommand::Agent => &["a"],
             SlashCommand::Mcp => &[],
+            SlashCommand::Compact => &[],
         }
     }
 
@@ -35,6 +38,7 @@ impl SlashCommand {
             SlashCommand::Model => "choose provider/model",
             SlashCommand::Agent => "switch agent (plan/general)",
             SlashCommand::Mcp => "toggle MCP servers",
+            SlashCommand::Compact => "compact conversation context",
         }
     }
 
@@ -51,6 +55,7 @@ pub fn all_commands() -> &'static [SlashCommand] {
         SlashCommand::Model,
         SlashCommand::Agent,
         SlashCommand::Mcp,
+        SlashCommand::Compact,
     ]
 }
 
@@ -225,6 +230,7 @@ mod tests {
         assert_eq!(find_command("a"), Some(SlashCommand::Agent));
         assert_eq!(find_command("model"), Some(SlashCommand::Model));
         assert_eq!(find_command("mcp"), Some(SlashCommand::Mcp));
+        assert_eq!(find_command("compact"), Some(SlashCommand::Compact));
         assert_eq!(find_command("unknown"), None);
     }
 

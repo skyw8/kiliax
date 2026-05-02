@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
+use kiliax_core::compact;
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::config::Config;
 use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
@@ -554,6 +555,77 @@ impl LiveSession {
         Ok(())
     }
 
+    async fn compact_session_history(
+        &self,
+        base_settings: &domain::SessionSettings,
+        effective: &domain::SessionSettings,
+        profile: &AgentProfile,
+        tools_for_run: &ToolEngine,
+        llm: &kiliax_core::llm::LlmClient,
+    ) -> Result<(), ApiError> {
+        let (messages_snapshot, message_ids_snapshot) = {
+            let session = self.session.lock().await;
+            (session.messages.clone(), session.message_ids.clone())
+        };
+
+        let summary_suffix =
+            compact::run_compaction(llm, &messages_snapshot)
+                .await
+                .map_err(ApiError::internal_error)?;
+        let user_messages = compact::collect_real_user_texts(&messages_snapshot);
+        let compacted_history = compact::build_compacted_user_history(&user_messages, &summary_suffix);
+
+        let cutoff_id = compact::find_preamble_cutoff_id(&messages_snapshot, &message_ids_snapshot)
+            .or_else(|| message_ids_snapshot.first().copied())
+            .unwrap_or(0);
+
+        let skills_config = skills_config_from_settings(&base_settings.skills);
+        let new_preamble = build_preamble(
+            profile,
+            &effective.model_id,
+            &effective.workspace_root,
+            tools_for_run,
+            &skills_config,
+        )
+        .await;
+
+        {
+            let mut session = self.session.lock().await;
+            if cutoff_id > 0 {
+                self.store
+                    .truncate_after(&mut session, cutoff_id)
+                    .await
+                    .map_err(map_session_err)?;
+            }
+
+            for msg in preamble_updates(session.messages.as_slice(), new_preamble) {
+                self.store
+                    .record_message(&mut session, msg)
+                    .await
+                    .map_err(map_session_err)?;
+            }
+            for msg in compacted_history {
+                self.store
+                    .record_message(&mut session, msg)
+                    .await
+                    .map_err(map_session_err)?;
+            }
+
+            self.store
+                .checkpoint(&mut session)
+                .await
+                .map_err(map_session_err)?;
+        }
+
+        tracing::info!(
+            event = "session.compacted",
+            session_id = %self.session_id,
+            model_id = %effective.model_id,
+        );
+
+        Ok(())
+    }
+
     pub async fn enqueue_run(
         &self,
         runs_dir: &Path,
@@ -787,14 +859,6 @@ impl LiveSession {
                 }
             };
 
-            if persist_user {
-                // Persist user message at execution time.
-                self.record_message(CoreMessage::User {
-                    content: UserMessageContent::Text(user_text.clone()),
-                })
-                .await?;
-            }
-
             let base_settings = self.settings.lock().await.clone();
             let overrides = run.overrides.take();
             let effective =
@@ -897,6 +961,48 @@ impl LiveSession {
                     .filter(|k| !k.trim().is_empty())
             };
             let llm = llm.with_prompt_cache_key(prompt_cache_key);
+
+            if persist_user {
+                if let Some(limit) = options.auto_compact_token_limit {
+                    let estimated = {
+                        let session = self.session.lock().await;
+                        compact::estimate_context_tokens(&session.messages)
+                    };
+                    if estimated >= limit {
+                        tracing::info!(
+                            event = "run.auto_compact.triggered",
+                            session_id = %self.session_id,
+                            run_id = %run.id,
+                            estimated_tokens = estimated as u64,
+                            limit = limit as u64,
+                        );
+                        if let Err(err) = self
+                            .compact_session_history(
+                                &base_settings,
+                                &effective,
+                                &profile,
+                                &tools_for_run,
+                                &llm,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                event = "run.auto_compact.failed",
+                                session_id = %self.session_id,
+                                run_id = %run.id,
+                                error = %err,
+                            );
+                        }
+                    }
+                }
+
+                // Persist user message at execution time (after optional pre-turn compaction).
+                self.record_message(CoreMessage::User {
+                    content: UserMessageContent::Text(user_text.clone()),
+                })
+                .await?;
+            }
+
             let runtime = AgentRuntime::new(llm, tools_for_run.clone());
 
             let mut messages = { self.session.lock().await.messages.clone() };

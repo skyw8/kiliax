@@ -65,6 +65,8 @@ otel:
 runtime:
   # Maximum number of ReAct steps in a single run.
   max_steps: 8
+  # Optional: auto-compact conversation history when context grows large.
+  # auto_compact_token_limit: 120000
 
 # Per-agent overrides (optional, applied after `runtime`).
 agents:
