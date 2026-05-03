@@ -1,5 +1,3 @@
-use async_openai::error::OpenAIError;
-
 use crate::llm::{LlmClient, LlmError};
 use crate::protocol::{ChatRequest, Message, UserContentPart, UserMessageContent};
 
@@ -257,7 +255,7 @@ pub async fn run_compaction(llm: &LlmClient, messages: &[Message]) -> Result<Str
                 return Ok(summary);
             }
             Err(err) => {
-                if is_context_window_exceeded_error(&err) && drop_oldest_non_system(&mut working) {
+                if err.is_context_window_exceeded() && drop_oldest_non_system(&mut working) {
                     continue;
                 }
                 return Err(err);
@@ -275,20 +273,6 @@ fn drop_oldest_non_system(messages: &mut Vec<Message>) -> bool {
     };
     messages.remove(idx);
     true
-}
-
-fn is_context_window_exceeded_error(err: &LlmError) -> bool {
-    let LlmError::OpenAI(OpenAIError::ApiError(api_err)) = err else {
-        return false;
-    };
-
-    let msg = api_err.message.to_ascii_lowercase();
-    msg.contains("context")
-        && (msg.contains("window")
-            || msg.contains("maximum context")
-            || msg.contains("max context")
-            || msg.contains("context length")
-            || msg.contains("too long"))
 }
 
 #[cfg(test)]

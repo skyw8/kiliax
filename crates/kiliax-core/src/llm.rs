@@ -74,6 +74,56 @@ pub enum LlmError {
     NoChoices,
 }
 
+impl LlmError {
+    pub fn is_context_window_exceeded(&self) -> bool {
+        match self {
+            LlmError::OpenAI(OpenAIError::ApiError(api_err)) => {
+                is_context_window_exceeded_message(&api_err.message)
+            }
+            LlmError::Api { body, .. } => is_context_window_exceeded_api_body(body),
+            _ => false,
+        }
+    }
+}
+
+fn is_context_window_exceeded_api_body(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return is_context_window_exceeded_message(body);
+    };
+
+    [
+        "/error/message",
+        "/message",
+        "/error/code",
+        "/code",
+        "/error/type",
+        "/type",
+    ]
+    .iter()
+    .filter_map(|pointer| value.pointer(pointer).and_then(serde_json::Value::as_str))
+    .any(is_context_window_exceeded_message)
+}
+
+fn is_context_window_exceeded_message(message: &str) -> bool {
+    let msg = message.to_ascii_lowercase();
+    let mentions_context_input = msg.contains("context")
+        || msg.contains("token")
+        || msg.contains("prompt")
+        || msg.contains("input")
+        || msg.contains("message")
+        || msg.contains("request");
+    let mentions_limit = msg.contains("too long")
+        || msg.contains("too large")
+        || msg.contains("exceed")
+        || msg.contains("over limit")
+        || msg.contains("token limit")
+        || msg.contains("context limit")
+        || msg.contains("maximum context")
+        || msg.contains("max context");
+
+    mentions_context_input && mentions_limit
+}
+
 #[async_trait::async_trait]
 pub trait LlmProvider: Send + Sync {
     fn route(&self) -> &ResolvedModel;
@@ -1055,5 +1105,37 @@ mod tests {
             body["messages"][0]["reasoning_content"],
             serde_json::json!(" ")
         );
+    }
+
+    #[test]
+    fn detects_openai_context_window_errors() {
+        let err = LlmError::OpenAI(OpenAIError::ApiError(async_openai::error::ApiError {
+            message: "This model's maximum context length is 128000 tokens.".to_string(),
+            r#type: None,
+            param: None,
+            code: None,
+        }));
+
+        assert!(err.is_context_window_exceeded());
+    }
+
+    #[test]
+    fn detects_anthropic_prompt_too_long_errors() {
+        let err = LlmError::Api {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 200001 tokens > 200000 maximum"}}"#.to_string(),
+        };
+
+        assert!(err.is_context_window_exceeded());
+    }
+
+    #[test]
+    fn ignores_unrelated_api_errors() {
+        let err = LlmError::Api {
+            status: reqwest::StatusCode::UNAUTHORIZED,
+            body: r#"{"error":{"message":"invalid api key"}}"#.to_string(),
+        };
+
+        assert!(!err.is_context_window_exceeded());
     }
 }
