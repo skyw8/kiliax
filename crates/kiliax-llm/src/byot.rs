@@ -130,6 +130,7 @@ pub(super) fn chat_response_from_byot(
             reasoning_content,
             tool_calls,
             usage,
+            provider_metadata: None,
         },
         finish_reason,
         usage,
@@ -239,6 +240,7 @@ pub(super) fn chat_stream_chunk_from_byot(
         tool_calls,
         finish_reason,
         usage: resp.usage.as_ref().map(token_usage_from_openai),
+        provider_metadata: None,
     }
 }
 

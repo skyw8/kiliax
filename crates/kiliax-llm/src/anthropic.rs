@@ -580,6 +580,7 @@ fn chat_response_from_anthropic(resp: AnthropicMessageResponse) -> ChatResponse 
             reasoning_content: None,
             tool_calls,
             usage,
+            provider_metadata: None,
         },
         finish_reason: resp
             .stop_reason
@@ -644,6 +645,7 @@ impl AnthropicStreamState {
             tool_calls: Vec::new(),
             finish_reason: None,
             usage: None,
+            provider_metadata: None,
         }
     }
 }
@@ -1085,6 +1087,7 @@ mod tests {
                         arguments: "{\"path\":\"README.md\"}".to_string(),
                     }],
                     usage: None,
+                    provider_metadata: None,
                 },
                 Message::Tool {
                     tool_call_id: "toolu_1".to_string(),

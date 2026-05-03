@@ -18,6 +18,7 @@ mod api_errors;
 mod byot;
 mod openai_config;
 mod openai_conv;
+mod openai_responses;
 mod patches;
 pub mod telemetry;
 pub mod types;
@@ -30,6 +31,7 @@ use byot::{
 };
 use openai_config::KiliaxOpenAIConfig;
 use openai_conv::{to_openai_message, to_openai_tool, to_openai_tool_choice};
+use openai_responses::OpenAiResponsesProvider;
 use patches::{
     inject_prompt_cache_fields, inject_reasoning_content_for_tool_calls,
     is_reasoning_content_missing_error, should_inject_reasoning_content,
@@ -176,8 +178,8 @@ pub struct LlmClient {
 #[derive(Debug, Clone)]
 enum ProviderClient {
     OpenAICompatible(OpenAICompatibleProvider),
+    OpenAIResponses(OpenAiResponsesProvider),
     Anthropic(AnthropicProvider),
-    Unsupported(ProviderRoute),
 }
 
 impl LlmClient {
@@ -189,7 +191,9 @@ impl LlmClient {
             ProviderApi::AnthropicMessages => {
                 ProviderClient::Anthropic(AnthropicProvider::new(route))
             }
-            ProviderApi::OpenAiResponses => ProviderClient::Unsupported(route),
+            ProviderApi::OpenAiResponses => {
+                ProviderClient::OpenAIResponses(OpenAiResponsesProvider::new(route))
+            }
         };
         Self { provider }
     }
@@ -199,7 +203,7 @@ impl LlmClient {
             ProviderClient::OpenAICompatible(provider) => {
                 provider.set_prompt_cache_key(prompt_cache_key);
             }
-            ProviderClient::Anthropic(_) | ProviderClient::Unsupported(_) => {}
+            ProviderClient::OpenAIResponses(_) | ProviderClient::Anthropic(_) => {}
         }
         self
     }
@@ -207,30 +211,24 @@ impl LlmClient {
     pub fn route(&self) -> &ProviderRoute {
         match &self.provider {
             ProviderClient::OpenAICompatible(provider) => provider.route(),
+            ProviderClient::OpenAIResponses(provider) => provider.route(),
             ProviderClient::Anthropic(provider) => provider.route(),
-            ProviderClient::Unsupported(route) => route,
         }
     }
 
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
         match &self.provider {
             ProviderClient::OpenAICompatible(provider) => provider.chat(req).await,
+            ProviderClient::OpenAIResponses(provider) => provider.chat(req).await,
             ProviderClient::Anthropic(provider) => provider.chat(req).await,
-            ProviderClient::Unsupported(route) => Err(LlmError::InvalidRequest(format!(
-                "{} is not implemented yet",
-                route.api.as_config_str()
-            ))),
         }
     }
 
     pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
         match &self.provider {
             ProviderClient::OpenAICompatible(provider) => provider.chat_stream(req).await,
+            ProviderClient::OpenAIResponses(provider) => provider.chat_stream(req).await,
             ProviderClient::Anthropic(provider) => provider.chat_stream(req).await,
-            ProviderClient::Unsupported(route) => Err(LlmError::InvalidRequest(format!(
-                "{} is not implemented yet",
-                route.api.as_config_str()
-            ))),
         }
     }
 }
@@ -936,6 +934,7 @@ mod tests {
                 arguments: "{\"path\":\"README.md\"}".to_string(),
             }],
             usage: None,
+            provider_metadata: None,
         };
         let openai = to_openai_message(&msg).await.unwrap();
         let ChatCompletionRequestMessage::Assistant(a) = openai else {
@@ -1038,6 +1037,7 @@ mod tests {
                     arguments: "{}".to_string(),
                 }],
                 usage: None,
+                provider_metadata: None,
             },
             Message::Tool {
                 tool_call_id: "call_1".to_string(),
@@ -1074,6 +1074,7 @@ mod tests {
                 arguments: "{}".to_string(),
             }],
             usage: None,
+            provider_metadata: None,
         }];
 
         let mut body = serde_json::json!({
@@ -1104,6 +1105,7 @@ mod tests {
                 arguments: "{}".to_string(),
             }],
             usage: None,
+            provider_metadata: None,
         }];
 
         let mut body = serde_json::json!({
@@ -1184,6 +1186,9 @@ mod tests {
 
         let raw = serde_json::to_string(&ProviderApi::AnthropicMessages).unwrap();
         assert_eq!(raw, "\"anthropic_messages\"");
+
+        let raw = serde_json::to_string(&ProviderApi::OpenAiResponses).unwrap();
+        assert_eq!(raw, "\"openai_responses\"");
     }
 
     #[test]

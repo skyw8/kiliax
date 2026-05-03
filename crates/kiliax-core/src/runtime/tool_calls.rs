@@ -49,6 +49,7 @@ pub(super) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
                 reasoning_content,
                 tool_calls,
                 usage,
+                provider_metadata,
             } if !tool_calls.is_empty() => {
                 let expected_ids: Vec<String> = tool_calls.iter().map(|c| c.id.clone()).collect();
                 out.push(Message::Assistant {
@@ -56,6 +57,7 @@ pub(super) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
                     reasoning_content,
                     tool_calls,
                     usage,
+                    provider_metadata,
                 });
 
                 let mut segment_tool_msgs: Vec<Message> = Vec::new();

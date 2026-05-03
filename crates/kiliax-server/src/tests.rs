@@ -325,6 +325,7 @@ async fn messages_include_usage_when_present() {
                     total_tokens: 40,
                     cached_tokens: Some(10),
                 }),
+                provider_metadata: None,
             },
         )
         .await
@@ -431,6 +432,7 @@ async fn fork_session_inherits_prompt_cache_key() {
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         )
         .await
@@ -795,6 +797,7 @@ async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         )
         .await
@@ -817,6 +820,7 @@ async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         )
         .await
@@ -923,6 +927,7 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         )
         .await
@@ -945,6 +950,7 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         )
         .await
@@ -1845,6 +1851,50 @@ async fn patch_config_providers_accepts_legacy_kind_alias() {
     assert_eq!(
         provider.get("api").and_then(|v| v.as_str()),
         Some("anthropic_messages")
+    );
+}
+
+#[tokio::test]
+async fn patch_config_providers_accepts_openai_responses_api() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            "/v1/config/providers",
+            serde_json::json!({
+                "upsert": [{
+                    "id": "openai",
+                    "api": "openai_responses",
+                    "base_url": "https://api.openai.com/v1",
+                    "models": ["gpt-4.1-mini"]
+                }]
+            }),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config/providers"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let providers = body
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .expect("providers array");
+    let provider = providers
+        .iter()
+        .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("openai"))
+        .expect("missing provider openai");
+    assert_eq!(
+        provider.get("api").and_then(|v| v.as_str()),
+        Some("openai_responses")
     );
 }
 

@@ -30,6 +30,15 @@ type SettingsTab = "providers" | "agents" | "yaml";
 
 const PROVIDERS_PANE_DEFAULT_MODEL = "__default_model__";
 const PROVIDERS_PANE_NEW_PROVIDER = "__new_provider__";
+const PROVIDER_API_OPTIONS = [
+  { value: "openai_chat_completions", label: "OpenAI Chat Completions" },
+  { value: "openai_responses", label: "OpenAI Responses" },
+  { value: "anthropic_messages", label: "Anthropic Messages" },
+];
+
+function providerApiLabel(value: string): string {
+  return PROVIDER_API_OPTIONS.find((o) => o.value === value)?.label ?? value;
+}
 
 export function SettingsDialog(props: {
   open: boolean;
@@ -56,6 +65,7 @@ export function SettingsDialog(props: {
   const [providersPaneSelection, setProvidersPaneSelection] = useState<string>("");
 
   const [newProviderId, setNewProviderId] = useState("");
+  const [newProviderApi, setNewProviderApi] = useState("openai_chat_completions");
   const [newProviderBaseUrl, setNewProviderBaseUrl] = useState("");
   const [newProviderModels, setNewProviderModels] = useState<string[]>([]);
   const [newProviderModelDraft, setNewProviderModelDraft] = useState("");
@@ -96,6 +106,7 @@ export function SettingsDialog(props: {
     setConfigPath("");
     setConfigLoaded(false);
     setNewProviderId("");
+    setNewProviderApi("openai_chat_completions");
     setNewProviderBaseUrl("");
     setNewProviderModels([]);
     setNewProviderModelDraft("");
@@ -290,7 +301,7 @@ export function SettingsDialog(props: {
         upsert: [
           {
             id,
-            api: "openai_chat_completions",
+            api: newProviderApi,
             base_url: baseUrl,
             models,
             api_key: apiKey ? apiKey : undefined,
@@ -301,6 +312,7 @@ export function SettingsDialog(props: {
       await loadSettingsProviders();
       await onConfigChanged();
       setNewProviderId("");
+      setNewProviderApi("openai_chat_completions");
       setNewProviderBaseUrl("");
       setNewProviderModels([]);
       setNewProviderModelDraft("");
@@ -604,6 +616,9 @@ export function SettingsDialog(props: {
                               <div className="mt-0.5 truncate text-xs text-zinc-500">
                                 {p.baseUrl || "—"}
                               </div>
+                              <div className="mt-0.5 truncate text-[11px] text-zinc-500">
+                                {providerApiLabel(p.api)}
+                              </div>
                             </div>
                             <div className="flex shrink-0 flex-col items-end gap-1">
                               <Badge
@@ -689,6 +704,21 @@ export function SettingsDialog(props: {
                           />
                         </div>
                         <div>
+                          <div className="text-xs text-zinc-600">API</div>
+                          <select
+                            className="h-9 w-full rounded-md border border-zinc-200 bg-white px-2 text-sm"
+                            value={newProviderApi}
+                            aria-label="Provider API"
+                            onChange={(e) => setNewProviderApi(e.target.value)}
+                          >
+                            {PROVIDER_API_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
                           <div className="text-xs text-zinc-600">Base URL</div>
                           <Input
                             placeholder="https://api.openai.com/v1"
@@ -770,6 +800,26 @@ export function SettingsDialog(props: {
                     </div>
                   ) : providersPaneSelectedProvider ? (
                     <div className="space-y-4">
+                      <div>
+                        <div className="text-xs text-zinc-600">API</div>
+                        <select
+                          className="h-9 w-full rounded-md border border-zinc-200 bg-white px-2 text-sm"
+                          value={providersPaneSelectedProvider.api}
+                          aria-label="Provider API"
+                          onChange={(e) =>
+                            setProviderDraft(providersPaneSelectedProvider.id, {
+                              api: e.target.value,
+                            })
+                          }
+                        >
+                          {PROVIDER_API_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
                       <div>
                         <div className="text-xs text-zinc-600">Base URL</div>
                         <Input

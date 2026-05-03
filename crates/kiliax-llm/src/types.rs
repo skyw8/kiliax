@@ -115,6 +115,23 @@ pub struct TokenUsage {
     pub cached_tokens: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "provider", rename_all = "snake_case")]
+pub enum ProviderMessageMetadata {
+    OpenAiResponses {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        output: Vec<serde_json::Value>,
+    },
+}
+
+impl ProviderMessageMetadata {
+    pub fn openai_responses_output(&self) -> Option<&[serde_json::Value]> {
+        match self {
+            Self::OpenAiResponses { output } => Some(output.as_slice()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinishReason {
     Stop,
@@ -198,6 +215,8 @@ pub enum Message {
         tool_calls: Vec<ToolCall>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<TokenUsage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<ProviderMessageMetadata>,
     },
     Tool {
         tool_call_id: String,
@@ -283,4 +302,7 @@ pub struct ChatStreamChunk {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<TokenUsage>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<ProviderMessageMetadata>,
 }

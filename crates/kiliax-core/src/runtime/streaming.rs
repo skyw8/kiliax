@@ -50,6 +50,7 @@ pub(super) async fn drive_stream_step(
     let mut tool_calls: BTreeMap<u32, ToolCallBuf> = BTreeMap::new();
     let mut finish_reason = None;
     let mut last_usage = None;
+    let mut provider_metadata = None;
     let mut assistant_body_started = false;
 
     loop {
@@ -70,6 +71,7 @@ pub(super) async fn drive_stream_step(
             tool_calls: tool_call_deltas,
             finish_reason: chunk_finish_reason,
             usage,
+            provider_metadata: chunk_provider_metadata,
             ..
         } = chunk;
 
@@ -110,6 +112,10 @@ pub(super) async fn drive_stream_step(
         if let Some(usage) = usage {
             last_usage = Some(usage);
         }
+
+        if let Some(metadata) = chunk_provider_metadata {
+            provider_metadata = Some(metadata);
+        }
     }
 
     let mut resolved_calls = Vec::new();
@@ -138,6 +144,7 @@ pub(super) async fn drive_stream_step(
         },
         tool_calls: resolved_calls.clone(),
         usage: last_usage,
+        provider_metadata,
     };
 
     Ok(StreamStepOutput {

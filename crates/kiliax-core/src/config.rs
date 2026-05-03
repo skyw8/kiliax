@@ -997,6 +997,18 @@ mod tests {
     }
 
     #[test]
+    fn provider_api_accepts_openai_responses() {
+        let cfg = load_from_str(
+            "default_model: openai/gpt-4.1-mini\nproviders:\n  openai:\n    api: openai_responses\n    base_url: https://api.openai.com/v1\n    models:\n      - gpt-4.1-mini\n",
+        )
+        .unwrap();
+
+        let resolved = cfg.resolve_model("openai/gpt-4.1-mini").unwrap();
+        assert_eq!(resolved.api, ProviderApi::OpenAiResponses);
+        assert_eq!(resolved.base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
     fn provider_api_accepts_legacy_kind_alias() {
         let cfg = load_from_str(
             "default_model: anthropic/claude-3-5-sonnet-latest\nproviders:\n  anthropic:\n    kind: anthropic\n    base_url: https://api.anthropic.com/v1\n    models:\n      - claude-3-5-sonnet-latest\n",

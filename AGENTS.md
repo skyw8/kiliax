@@ -45,6 +45,7 @@ minimal
 - Provider-neutral LLM facade, provider API routing, shared LLM error classification, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks): `crates/kiliax-llm/src/types.rs`
 - OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
+- OpenAI Responses API provider (request conversion, SSE events, function-call/reasoning item replay): `crates/kiliax-llm/src/openai_responses.rs`
 - Anthropic Messages API provider (non-streaming + SSE/tool-use mapping): `crates/kiliax-llm/src/anthropic.rs`
 
 ### crates/kiliax-cli (TUI)

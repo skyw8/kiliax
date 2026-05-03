@@ -779,7 +779,7 @@ pub enum AgentEvent {
 mod tests {
     use super::*;
     use crate::protocol::UserMessageContent;
-    use crate::protocol::{ChatStreamChunk, ToolCallDelta};
+    use crate::protocol::{ChatStreamChunk, ProviderMessageMetadata, ToolCallDelta};
 
     #[test]
     fn sanitize_tool_call_history_reorders_tool_messages() {
@@ -803,6 +803,7 @@ mod tests {
                     },
                 ],
                 usage: None,
+                provider_metadata: None,
             },
             Message::Tool {
                 tool_call_id: "b".to_string(),
@@ -817,6 +818,7 @@ mod tests {
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         ];
 
@@ -850,12 +852,14 @@ mod tests {
                     arguments: "{}".to_string(),
                 }],
                 usage: None,
+                provider_metadata: None,
             },
             Message::Assistant {
                 content: Some("next".to_string()),
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         ];
 
@@ -886,6 +890,7 @@ mod tests {
                     },
                 ],
                 usage: None,
+                provider_metadata: None,
             },
             Message::Tool {
                 tool_call_id: "a".to_string(),
@@ -903,6 +908,7 @@ mod tests {
                 reasoning_content: None,
                 tool_calls: Vec::new(),
                 usage: None,
+                provider_metadata: None,
             },
         ];
 
@@ -938,6 +944,7 @@ mod tests {
                 }],
                 finish_reason: None,
                 usage: None,
+                provider_metadata: None,
             }),
             Ok(ChatStreamChunk {
                 id: "chat_1".to_string(),
@@ -953,6 +960,7 @@ mod tests {
                 }],
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
+                provider_metadata: None,
             }),
         ];
 
@@ -1007,6 +1015,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 finish_reason: None,
                 usage: None,
+                provider_metadata: None,
             }),
             Ok(ChatStreamChunk {
                 id: "chat_1".to_string(),
@@ -1017,6 +1026,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 finish_reason: Some(FinishReason::Stop),
                 usage: Some(usage),
+                provider_metadata: None,
             }),
         ];
 
@@ -1034,6 +1044,47 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_attaches_provider_metadata_from_final_chunk() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+        let metadata = ProviderMessageMetadata::OpenAiResponses {
+            output: vec![serde_json::json!({
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "read",
+                "arguments": "{}"
+            })],
+        };
+
+        let chunks = vec![Ok(ChatStreamChunk {
+            id: "resp_1".to_string(),
+            created: 0,
+            model: "m".to_string(),
+            content_delta: None,
+            thinking_delta: None,
+            tool_calls: vec![ToolCallDelta {
+                index: 0,
+                id: Some("call_1".to_string()),
+                name: Some("read".to_string()),
+                arguments: Some("{}".to_string()),
+            }],
+            finish_reason: Some(FinishReason::ToolCalls),
+            usage: None,
+            provider_metadata: Some(metadata.clone()),
+        })];
+
+        let stream = tokio_stream::iter(chunks);
+        let out = drive_stream_step(0, stream, &tx).await.unwrap();
+
+        let Message::Assistant {
+            provider_metadata, ..
+        } = out.assistant
+        else {
+            panic!("expected assistant message");
+        };
+        assert_eq!(provider_metadata, Some(metadata));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn drive_stream_step_stops_forwarding_thinking_after_body_starts() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
 
@@ -1047,6 +1098,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 finish_reason: None,
                 usage: None,
+                provider_metadata: None,
             }),
             Ok(ChatStreamChunk {
                 id: "chat_1".to_string(),
@@ -1057,6 +1109,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
+                provider_metadata: None,
             }),
         ];
 
@@ -1114,6 +1167,7 @@ mod tests {
             }],
             finish_reason: Some(FinishReason::Stop),
             usage: None,
+            provider_metadata: None,
         })];
 
         let stream = tokio_stream::iter(chunks);

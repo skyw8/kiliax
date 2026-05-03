@@ -166,7 +166,7 @@ pub(super) async fn to_openai_user_content(
 
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
-async fn image_url_from_path(
+pub(super) async fn image_url_from_path(
     path: &str,
     detail: Option<ImageDetail>,
 ) -> Result<ImageUrl, LlmError> {

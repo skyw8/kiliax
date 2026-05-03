@@ -18,6 +18,11 @@ Instead, Kiliax:
 
 Code: `crates/kiliax-llm/src/lib.rs`.
 
+OpenAI's native Responses API is implemented separately as `api: openai_responses`.
+It does not use this BYOT Chat Completions compatibility path; it maps Kiliax's
+provider-neutral messages and tools to `POST /responses` in
+`crates/kiliax-llm/src/openai_responses.rs`.
+
 ## Why it exists (problems it solves)
 
 - **Provider schema drift**: some providers return `thinking` or `reasoning` instead of `reasoning_content`, or support multiple at once.
@@ -93,6 +98,5 @@ Code: `map_api_error_response(...)` in `crates/kiliax-llm/src/api_errors.rs`.
 ## Non-goals / current limitations
 
 - Multi-choice handling: BYOT currently ignores `choices[1..]`.
-- Non-chat endpoints (embeddings, images, audio, etc.) are not implemented via Kiliax’s BYOT layer today.
+- Non-chat endpoints and OpenAI Responses are not implemented via Kiliax's BYOT layer.
 - Provider-specific fields outside the set above are ignored unless explicitly added to the BYOT structs.
-

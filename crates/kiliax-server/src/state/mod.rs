@@ -499,6 +499,7 @@ fn map_core_message_to_domain(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<
             reasoning_content,
             tool_calls,
             usage,
+            ..
         } => Some(domain::Message::Assistant {
             id,
             created_at,
@@ -551,6 +552,7 @@ fn map_core_message_to_domain_event_message(
             reasoning_content,
             tool_calls,
             usage,
+            ..
         } => Some(domain::Message::Assistant {
             id,
             created_at,

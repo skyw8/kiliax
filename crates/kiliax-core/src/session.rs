@@ -785,6 +785,7 @@ mod tests {
                     reasoning_content: None,
                     tool_calls: Vec::new(),
                     usage: None,
+                    provider_metadata: None,
                 },
             )
             .await
@@ -835,6 +836,7 @@ mod tests {
                     reasoning_content: None,
                     tool_calls: Vec::new(),
                     usage: None,
+                    provider_metadata: None,
                 },
             )
             .await
