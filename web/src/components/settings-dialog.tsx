@@ -18,7 +18,7 @@ import { Badge } from "./ui/badge";
 
 type ProviderDraft = {
   id: string;
-  api: string;
+  api: ProviderApiId;
   baseUrl: string;
   models: string[];
   apiKeySet: boolean;
@@ -27,17 +27,49 @@ type ProviderDraft = {
 };
 
 type SettingsTab = "providers" | "agents" | "yaml";
+type ProviderApiId = "openai_chat_completions" | "openai_responses" | "anthropic_messages";
 
 const PROVIDERS_PANE_DEFAULT_MODEL = "__default_model__";
 const PROVIDERS_PANE_NEW_PROVIDER = "__new_provider__";
-const PROVIDER_API_OPTIONS = [
-  { value: "openai_chat_completions", label: "OpenAI Chat Completions" },
-  { value: "openai_responses", label: "OpenAI Responses" },
-  { value: "anthropic_messages", label: "Anthropic Messages" },
+const DEFAULT_PROVIDER_API: ProviderApiId = "openai_chat_completions";
+const PROVIDER_API_OPTIONS: Array<{
+  value: ProviderApiId;
+  label: string;
+  baseUrlPlaceholder: string;
+  modelExample: string;
+}> = [
+  {
+    value: "openai_chat_completions",
+    label: "OpenAI Chat Completions",
+    baseUrlPlaceholder: "https://api.openai.com/v1",
+    modelExample: "gpt-4o-mini",
+  },
+  {
+    value: "openai_responses",
+    label: "OpenAI Responses",
+    baseUrlPlaceholder: "https://api.openai.com/v1",
+    modelExample: "gpt-4.1-mini",
+  },
+  {
+    value: "anthropic_messages",
+    label: "Anthropic Messages",
+    baseUrlPlaceholder: "https://api.anthropic.com/v1",
+    modelExample: "claude-3-5-sonnet-latest",
+  },
 ];
 
 function providerApiLabel(value: string): string {
   return PROVIDER_API_OPTIONS.find((o) => o.value === value)?.label ?? value;
+}
+
+function normalizeProviderApi(value: string | null | undefined): ProviderApiId {
+  return PROVIDER_API_OPTIONS.some((o) => o.value === value)
+    ? (value as ProviderApiId)
+    : DEFAULT_PROVIDER_API;
+}
+
+function providerApiOption(value: ProviderApiId) {
+  return PROVIDER_API_OPTIONS.find((o) => o.value === value) ?? PROVIDER_API_OPTIONS[0];
 }
 
 export function SettingsDialog(props: {
@@ -65,7 +97,7 @@ export function SettingsDialog(props: {
   const [providersPaneSelection, setProvidersPaneSelection] = useState<string>("");
 
   const [newProviderId, setNewProviderId] = useState("");
-  const [newProviderApi, setNewProviderApi] = useState("openai_chat_completions");
+  const [newProviderApi, setNewProviderApi] = useState<ProviderApiId>(DEFAULT_PROVIDER_API);
   const [newProviderBaseUrl, setNewProviderBaseUrl] = useState("");
   const [newProviderModels, setNewProviderModels] = useState<string[]>([]);
   const [newProviderModelDraft, setNewProviderModelDraft] = useState("");
@@ -106,7 +138,7 @@ export function SettingsDialog(props: {
     setConfigPath("");
     setConfigLoaded(false);
     setNewProviderId("");
-    setNewProviderApi("openai_chat_completions");
+    setNewProviderApi(DEFAULT_PROVIDER_API);
     setNewProviderBaseUrl("");
     setNewProviderModels([]);
     setNewProviderModelDraft("");
@@ -135,7 +167,7 @@ export function SettingsDialog(props: {
   function normalizeProviderDraft(p: ConfigProviderSummary): ProviderDraft {
     return {
       id: p.id,
-      api: p.api || "openai_chat_completions",
+      api: normalizeProviderApi(p.api),
       baseUrl: p.base_url ?? "",
       models: normalizeModels(p.models ?? []),
       apiKeySet: Boolean(p.api_key_set),
@@ -312,7 +344,7 @@ export function SettingsDialog(props: {
       await loadSettingsProviders();
       await onConfigChanged();
       setNewProviderId("");
-      setNewProviderApi("openai_chat_completions");
+      setNewProviderApi(DEFAULT_PROVIDER_API);
       setNewProviderBaseUrl("");
       setNewProviderModels([]);
       setNewProviderModelDraft("");
@@ -590,7 +622,7 @@ export function SettingsDialog(props: {
                         Add provider
                       </div>
                       <div className="mt-0.5 truncate text-xs text-zinc-500">
-                        Create a new OpenAI-compatible provider.
+                        Create a new LLM provider.
                       </div>
                     </button>
                   </div>
@@ -657,9 +689,12 @@ export function SettingsDialog(props: {
                       {providersPaneSelection === PROVIDERS_PANE_DEFAULT_MODEL
                         ? "Used for new sessions when not overridden."
                         : providersPaneSelection === PROVIDERS_PANE_NEW_PROVIDER
-                          ? "Base URL, models, and API key."
-                          : providersPaneSelectedProvider?.baseUrl ??
-                            "Select a provider on the left."}
+                          ? "API type, base URL, models, and API key."
+                          : providersPaneSelectedProvider
+                            ? `${providerApiLabel(providersPaneSelectedProvider.api)} · ${
+                                providersPaneSelectedProvider.baseUrl || "No base URL"
+                              }`
+                            : "Select a provider on the left."}
                     </div>
                   </div>
                   {settingsSaving ? <div className="text-xs text-zinc-500">Saving…</div> : null}
@@ -709,7 +744,7 @@ export function SettingsDialog(props: {
                             className="h-9 w-full rounded-md border border-zinc-200 bg-white px-2 text-sm"
                             value={newProviderApi}
                             aria-label="Provider API"
-                            onChange={(e) => setNewProviderApi(e.target.value)}
+                            onChange={(e) => setNewProviderApi(normalizeProviderApi(e.target.value))}
                           >
                             {PROVIDER_API_OPTIONS.map((option) => (
                               <option key={option.value} value={option.value}>
@@ -721,7 +756,7 @@ export function SettingsDialog(props: {
                         <div>
                           <div className="text-xs text-zinc-600">Base URL</div>
                           <Input
-                            placeholder="https://api.openai.com/v1"
+                            placeholder={providerApiOption(newProviderApi).baseUrlPlaceholder}
                             value={newProviderBaseUrl}
                             onChange={(e) => setNewProviderBaseUrl(e.target.value)}
                           />
@@ -762,7 +797,7 @@ export function SettingsDialog(props: {
                         <div className="mt-2 flex gap-2">
                           <Input
                             className="font-mono text-xs"
-                            placeholder="Add model"
+                            placeholder={`Add model, e.g. ${providerApiOption(newProviderApi).modelExample}`}
                             value={newProviderModelDraft}
                             onChange={(e) => setNewProviderModelDraft(e.target.value)}
                             onKeyDown={(e) => {
@@ -808,7 +843,7 @@ export function SettingsDialog(props: {
                           aria-label="Provider API"
                           onChange={(e) =>
                             setProviderDraft(providersPaneSelectedProvider.id, {
-                              api: e.target.value,
+                              api: normalizeProviderApi(e.target.value),
                             })
                           }
                         >
