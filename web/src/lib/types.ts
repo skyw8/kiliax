@@ -136,7 +136,7 @@ export interface ConfigUpdateRequest {
 
 export interface ConfigProviderSummary {
   id: string;
-  kind: string;
+  api: string;
   base_url: string;
   api_key_set: boolean;
   models: string[];
@@ -149,7 +149,7 @@ export interface ConfigProvidersResponse {
 
 export interface ConfigProviderUpsert {
   id: string;
-  kind?: string;
+  api?: string;
   base_url?: string;
   api_key?: string | null;
   models?: string[];

@@ -1157,7 +1157,7 @@ impl App {
         let res: Result<()> = async {
             self.config.resolve_model(&model_id)?;
             let session_config = self.session_config()?;
-            let llm = kiliax_core::llm::LlmClient::from_config(&session_config, Some(&model_id))?
+            let llm = kiliax_core::llm::client_from_config(&session_config, Some(&model_id))?
                 .with_prompt_cache_key(self.session.meta.prompt_cache_key.clone());
             let tools = self.runtime.tools().clone();
             tools
@@ -1808,7 +1808,7 @@ mod tests {
 
         let llm = LlmClient::new(ResolvedModel {
             provider: "p".to_string(),
-            kind: kiliax_core::config::ProviderKind::OpenAICompatible,
+            api: kiliax_core::config::ProviderApi::OpenAiChatCompletions,
             model: "m".to_string(),
             base_url: "https://example.com/v1".to_string(),
             api_key: None,
@@ -1818,7 +1818,7 @@ mod tests {
         providers.insert(
             "p".to_string(),
             ProviderConfig {
-                kind: kiliax_core::config::ProviderKind::OpenAICompatible,
+                api: kiliax_core::config::ProviderApi::OpenAiChatCompletions,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: None,
                 models: vec!["m".to_string()],

@@ -337,7 +337,7 @@ pub struct ConfigProvidersResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConfigProviderSummary {
     pub id: String,
-    pub kind: String,
+    pub api: String,
     pub base_url: String,
     pub api_key_set: bool,
     pub models: Vec<String>,
@@ -361,8 +361,8 @@ pub struct ConfigProvidersPatchRequest {
 pub struct ConfigProviderUpsert {
     pub id: String,
 
-    #[serde(default)]
-    pub kind: Option<String>,
+    #[serde(default, alias = "kind")]
+    pub api: Option<String>,
 
     #[serde(default)]
     pub base_url: Option<String>,

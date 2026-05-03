@@ -18,7 +18,7 @@ import { Badge } from "./ui/badge";
 
 type ProviderDraft = {
   id: string;
-  kind: string;
+  api: string;
   baseUrl: string;
   models: string[];
   apiKeySet: boolean;
@@ -124,7 +124,7 @@ export function SettingsDialog(props: {
   function normalizeProviderDraft(p: ConfigProviderSummary): ProviderDraft {
     return {
       id: p.id,
-      kind: p.kind || "openai-compatible",
+      api: p.api || "openai_chat_completions",
       baseUrl: p.base_url ?? "",
       models: normalizeModels(p.models ?? []),
       apiKeySet: Boolean(p.api_key_set),
@@ -290,7 +290,7 @@ export function SettingsDialog(props: {
         upsert: [
           {
             id,
-            kind: "openai-compatible",
+            api: "openai_chat_completions",
             base_url: baseUrl,
             models,
             api_key: apiKey ? apiKey : undefined,
@@ -330,7 +330,7 @@ export function SettingsDialog(props: {
     setSettingsSaving(true);
     try {
       await api.patchConfigProviders({
-        upsert: [{ id, kind: p.kind, base_url: baseUrl, models }],
+        upsert: [{ id, api: p.api, base_url: baseUrl, models }],
       });
       setProviderDraft(id, { baseUrl, models });
       await onConfigChanged();

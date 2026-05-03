@@ -28,19 +28,24 @@ minimal
 
 - Agents + tool permissions: `crates/kiliax-core/src/agents/`
 - Context compaction (auto + `/compact`): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
-- Config + model/agent defaults + provider kind routing: `crates/kiliax-core/src/config.rs`
+- Config + model/agent defaults + provider API routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
-- Protocol types (messages/tool-calls/usage): `crates/kiliax-core/src/protocol.rs`
+- Protocol compatibility re-exports (messages/tool-calls/usage): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
-- Provider-neutral LLM facade, provider trait routing, and shared LLM error classification: `crates/kiliax-core/src/llm.rs`
-- OpenAI-compatible client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-core/src/llm/openai_*.rs`, `crates/kiliax-core/src/llm/byot.rs`, `crates/kiliax-core/src/llm/patches.rs`
-- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping): `crates/kiliax-core/src/llm/anthropic.rs`
+- LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + session-scoped MCP/skills overrides: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery): `crates/kiliax-core/src/tools/`
+
+### crates/kiliax-llm (LLM facade + providers)
+
+- Provider-neutral LLM facade, provider API routing, shared LLM error classification, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
+- Protocol types (messages/tool-calls/usage/stream chunks): `crates/kiliax-llm/src/types.rs`
+- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
+- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping): `crates/kiliax-llm/src/anthropic.rs`
 
 ### crates/kiliax-cli (TUI)
 
@@ -84,7 +89,7 @@ minimal
 - Symptom: `HTTP 400 ... thinking is enabled but reasoning_content is missing in assistant tool call message at index N`.
 - Why: Moonshot/Kimi validates the full `messages[]` history; when thinking is enabled, every `assistant` message that contains `tool_calls` must include a non-empty `reasoning_content`.
 - Rule: always send `reasoning_content` for `assistant` tool-call messages; if there is no reasoning text, send a single whitespace (`" "`) (some gateways treat `""` as missing).
-- Implementation: patch outbound JSON in `crates/kiliax-core/src/llm.rs` (`inject_reasoning_content_for_tool_calls(...)`) and retry once when the provider returns this specific error.
+- Implementation: patch outbound JSON in `crates/kiliax-llm/src/patches.rs` (`inject_reasoning_content_for_tool_calls(...)`) and retry once when the provider returns this specific error.
 - Provider routing: proxies may hide the upstream base_url/provider; detection should also match on the model string (see `should_inject_reasoning_content(...)`).
 
 ### TUI

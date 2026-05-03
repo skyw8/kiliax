@@ -937,17 +937,15 @@ impl LiveSession {
             let options = AgentRuntimeOptions::from_config(&profile, config.as_ref());
             let max_steps = options.max_steps;
 
-            let llm = kiliax_core::llm::LlmClient::from_config(
-                config.as_ref(),
-                Some(&effective.model_id),
-            )
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    ApiErrorCode::ModelNotSupported,
-                    e.to_string(),
-                )
-            })?;
+            let llm =
+                kiliax_core::llm::client_from_config(config.as_ref(), Some(&effective.model_id))
+                    .map_err(|e| {
+                        ApiError::new(
+                            StatusCode::BAD_REQUEST,
+                            ApiErrorCode::ModelNotSupported,
+                            e.to_string(),
+                        )
+                    })?;
             let prompt_cache_key = {
                 let session = self.session.lock().await;
                 session
@@ -1496,7 +1494,7 @@ fn apply_run_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kiliax_core::config::{ProviderConfig, ProviderKind};
+    use kiliax_core::config::{ProviderApi, ProviderConfig};
     use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
     use tempfile::TempDir;
 
@@ -1508,7 +1506,7 @@ mod tests {
         cfg.providers.insert(
             "test".to_string(),
             ProviderConfig {
-                kind: ProviderKind::OpenAICompatible,
+                api: ProviderApi::OpenAiChatCompletions,
                 base_url: "http://127.0.0.1:1".to_string(),
                 api_key: None,
                 models: vec!["test-model".to_string()],

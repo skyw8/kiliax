@@ -1,6 +1,6 @@
 # BYOT (Bring Your Own Type) compatibility layer
 
-Kiliax targets **OpenAI-compatible** APIs, but many providers deviate from the canonical schema (especially for tool-calls, reasoning/thinking fields, and streaming usage). To keep the runtime stable across providers, `kiliax-core` implements a small **BYOT-style** parsing layer: build a mostly-standard request, then deserialize responses/stream chunks into tolerant structs that accept provider-specific fields.
+Kiliax targets **OpenAI-compatible** APIs, but many providers deviate from the canonical schema (especially for tool-calls, reasoning/thinking fields, and streaming usage). To keep the runtime stable across providers, `kiliax-llm` implements a small **BYOT-style** parsing layer: build a mostly-standard request, then deserialize responses/stream chunks into tolerant structs that accept provider-specific fields.
 
 This document describes what BYOT means in Kiliax and what is currently supported.
 
@@ -16,7 +16,7 @@ Instead, Kiliax:
 4. Sends the request with `reqwest` (and `reqwest-eventsource` for streaming).
 5. Deserializes responses/stream chunks into Kiliax’s own “BYOT” structs that are more tolerant to schema differences.
 
-Code: `crates/kiliax-core/src/llm.rs`.
+Code: `crates/kiliax-llm/src/lib.rs`.
 
 ## Why it exists (problems it solves)
 
@@ -45,7 +45,7 @@ Notes:
 - Only **the first choice** (`choices[0]`) is consumed.
 - Tool calls are normalized into Kiliax’s internal `ToolCall { id, name, arguments }`.
 
-Code: `chat_response_from_byot(...)` in `crates/kiliax-core/src/llm.rs`.
+Code: `chat_response_from_byot(...)` in `crates/kiliax-llm/src/byot.rs`.
 
 ### Streaming parsing (`POST /chat/completions` with SSE)
 
@@ -66,7 +66,7 @@ Notes:
 - Only **the first choice** (`choices[0]`) is consumed.
 - Tool-call deltas are normalized into Kiliax’s internal `ToolCallDelta { index, id, name, arguments }`.
 
-Code: `chat_stream_chunk_from_byot(...)` in `crates/kiliax-core/src/llm.rs`.
+Code: `chat_stream_chunk_from_byot(...)` in `crates/kiliax-llm/src/byot.rs`.
 
 ### Request-side compatibility patches
 
@@ -78,7 +78,7 @@ After building the canonical request JSON, Kiliax applies a few provider-specifi
 - OpenAI streaming usage:
   - when `provider == "openai"` and streaming is enabled, Kiliax injects `stream_options.include_usage=true`.
 
-Code: `inject_prompt_cache_fields(...)`, `inject_reasoning_content_for_tool_calls(...)`, and the `stream_options` block in `chat_stream(...)` (`crates/kiliax-core/src/llm.rs`).
+Code: `inject_prompt_cache_fields(...)` and `inject_reasoning_content_for_tool_calls(...)` in `crates/kiliax-llm/src/patches.rs`, plus the `stream_options` block in `crates/kiliax-llm/src/lib.rs`.
 
 ### Error compatibility
 
@@ -88,7 +88,7 @@ For non-2xx responses, Kiliax:
 - attempts to parse the canonical OpenAI-style `{ "error": { ... } }`
 - otherwise falls back to treating the body as plain text and wraps it as an API error
 
-Code: `map_api_error_response(...)` in `crates/kiliax-core/src/llm.rs`.
+Code: `map_api_error_response(...)` in `crates/kiliax-llm/src/api_errors.rs`.
 
 ## Non-goals / current limitations
 

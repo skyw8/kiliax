@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
-use kiliax_core::config::{Config, ProviderConfig, ProviderKind};
+use kiliax_core::config::{Config, ProviderApi, ProviderConfig};
 use kiliax_core::session::{FileSessionStore, SessionId};
 use kiliax_core::tools::ToolEngine;
 use tokio::sync::{broadcast, Mutex, Notify};
@@ -49,19 +49,15 @@ struct LiveSessionEntry {
     last_access_ms: u64,
 }
 
-fn provider_kind_to_api(kind: &ProviderKind) -> &'static str {
-    match kind {
-        ProviderKind::OpenAICompatible => "openai-compatible",
-        ProviderKind::Anthropic => "anthropic",
-    }
-}
-
-fn parse_provider_kind(raw: &str) -> Result<ProviderKind, ApiError> {
+fn parse_provider_api(raw: &str) -> Result<ProviderApi, ApiError> {
     match raw.trim() {
-        "openai-compatible" | "openai_compatible" | "openai" => Ok(ProviderKind::OpenAICompatible),
-        "anthropic" => Ok(ProviderKind::Anthropic),
+        "openai_chat_completions" | "openai-compatible" | "openai_compatible" | "openai" => {
+            Ok(ProviderApi::OpenAiChatCompletions)
+        }
+        "openai_responses" => Ok(ProviderApi::OpenAiResponses),
+        "anthropic_messages" | "anthropic" => Ok(ProviderApi::AnthropicMessages),
         other => Err(ApiError::invalid_argument(format!(
-            "unsupported provider kind: {other}"
+            "unsupported provider api: {other}"
         ))),
     }
 }
@@ -351,7 +347,7 @@ impl ServerState {
                 .iter()
                 .map(|(id, p)| api::ConfigProviderSummary {
                     id: id.clone(),
-                    kind: provider_kind_to_api(&p.kind).to_string(),
+                    api: p.api.as_config_str().to_string(),
                     base_url: p.base_url.clone(),
                     api_key_set: p.api_key.is_some(),
                     models: p.models.clone(),
@@ -398,8 +394,8 @@ impl ServerState {
             }
 
             if let Some(existing) = next.providers.get_mut(id) {
-                if let Some(kind) = upsert.kind {
-                    existing.kind = parse_provider_kind(&kind)?;
+                if let Some(api) = upsert.api {
+                    existing.api = parse_provider_api(&api)?;
                 }
 
                 if let Some(base_url) = upsert.base_url {
@@ -443,10 +439,10 @@ impl ServerState {
                     existing.models = out;
                 }
             } else {
-                let kind = upsert
-                    .kind
+                let api = upsert
+                    .api
                     .as_deref()
-                    .map(parse_provider_kind)
+                    .map(parse_provider_api)
                     .transpose()?
                     .unwrap_or_default();
 
@@ -498,7 +494,7 @@ impl ServerState {
                 next.providers.insert(
                     id.to_string(),
                     ProviderConfig {
-                        kind,
+                        api,
                         base_url: base_url.to_string(),
                         api_key,
                         models,

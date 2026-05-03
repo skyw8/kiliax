@@ -1,7 +1,7 @@
 use async_openai::types::CompletionUsage;
 use serde::Deserialize;
 
-use crate::protocol::{
+use crate::types::{
     ChatResponse, ChatStreamChunk, FinishReason, Message, TokenUsage, ToolCall, ToolCallDelta,
 };
 

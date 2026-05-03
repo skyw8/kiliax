@@ -389,13 +389,13 @@ mod tests {
     fn model_picker_qualifies_models_with_slashes() {
         use std::collections::BTreeMap;
 
-        use kiliax_core::config::{ProviderConfig, ProviderKind};
+        use kiliax_core::config::{ProviderApi, ProviderConfig};
 
         let mut providers = BTreeMap::new();
         providers.insert(
             "openrouter".to_string(),
             ProviderConfig {
-                kind: ProviderKind::OpenAICompatible,
+                api: ProviderApi::OpenAiChatCompletions,
                 base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
                 api_key: None,
                 models: vec!["openai/gpt-4o-mini".to_string()],

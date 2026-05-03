@@ -3,7 +3,7 @@ use std::io::{self, Write};
 
 use kiliax_core::{
     config,
-    llm::LlmClient,
+    llm::client_from_config,
     protocol::{ChatRequest, Message, ToolCallDelta, UserMessageContent},
 };
 use tokio_stream::StreamExt;
@@ -30,7 +30,7 @@ fn merge_tool_call_delta(buf: &mut ToolCallBuf, delta: ToolCallDelta) {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let loaded = config::load()?;
-    let llm = LlmClient::from_config(&loaded.config, None)?;
+    let llm = client_from_config(&loaded.config, None)?;
 
     eprintln!("Config: {}", loaded.path.display());
     eprintln!(

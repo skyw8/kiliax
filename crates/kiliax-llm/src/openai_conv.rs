@@ -15,7 +15,7 @@ use async_openai::{
 };
 use base64::Engine as _;
 
-use crate::protocol::{
+use crate::types::{
     ImageDetail, Message, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
 };
 

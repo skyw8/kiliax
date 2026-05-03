@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use kiliax_core::{
     agents::AgentProfile,
     config,
-    llm::LlmClient,
+    llm::client_from_config,
     prompt::PromptBuilder,
     protocol::{Message, UserMessageContent},
     runtime::{AgentEvent, AgentRuntime, AgentRuntimeOptions},
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let loaded = config::load()?;
-    let llm = LlmClient::from_config(&loaded.config, None)?;
+    let llm = client_from_config(&loaded.config, None)?;
     let workspace_root = std::env::current_dir()?;
 
     eprintln!("Config: {}", loaded.path.display());

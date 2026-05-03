@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
-use kiliax_core::config::{Config, ProviderConfig, ProviderKind};
+use kiliax_core::config::{Config, ProviderApi, ProviderConfig};
 use kiliax_core::protocol::{Message, TokenUsage, UserMessageContent};
 use kiliax_core::session::FileSessionStore;
 use kiliax_core::session::SessionId;
@@ -20,7 +20,7 @@ fn test_config() -> Config {
     cfg.providers.insert(
         "test".to_string(),
         ProviderConfig {
-            kind: ProviderKind::OpenAICompatible,
+            api: ProviderApi::OpenAiChatCompletions,
             base_url: "http://127.0.0.1:1".to_string(),
             api_key: None,
             models: vec!["test-model".to_string(), "new-model".to_string()],
@@ -1790,6 +1790,10 @@ async fn patch_config_providers_sets_api_key_without_echo() {
         .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("test"))
         .expect("missing provider test");
     assert_eq!(
+        test_provider.get("api").and_then(|v| v.as_str()),
+        Some("openai_chat_completions")
+    );
+    assert_eq!(
         test_provider.get("api_key_set").and_then(|v| v.as_bool()),
         Some(true),
         "expected api_key_set: true, got: {body}"
@@ -1797,6 +1801,50 @@ async fn patch_config_providers_sets_api_key_without_echo() {
     assert!(
         test_provider.get("api_key").is_none(),
         "api_key must not be returned: {body}"
+    );
+}
+
+#[tokio::test]
+async fn patch_config_providers_accepts_legacy_kind_alias() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            "/v1/config/providers",
+            serde_json::json!({
+                "upsert": [{
+                    "id": "anthropic",
+                    "kind": "anthropic",
+                    "base_url": "https://api.anthropic.com/v1",
+                    "models": ["claude-test"]
+                }]
+            }),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config/providers"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let providers = body
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .expect("providers array");
+    let provider = providers
+        .iter()
+        .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("anthropic"))
+        .expect("missing provider anthropic");
+    assert_eq!(
+        provider.get("api").and_then(|v| v.as_str()),
+        Some("anthropic_messages")
     );
 }
 

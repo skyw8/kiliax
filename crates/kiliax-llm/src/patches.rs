@@ -1,12 +1,12 @@
 use async_openai::error::OpenAIError;
 
-use crate::config::ResolvedModel;
-use crate::protocol::Message;
+use crate::types::Message;
+use crate::ProviderRoute;
 
 // WHY: Moonshot/Kimi will reject requests when thinking is enabled unless every assistant
 // tool-call message includes `reasoning_content`. Proxies may hide the upstream provider/base_url,
 // so we also match on the model string.
-pub(super) fn should_inject_reasoning_content(route: &ResolvedModel) -> bool {
+pub(super) fn should_inject_reasoning_content(route: &ProviderRoute) -> bool {
     let provider = route.provider.to_ascii_lowercase();
     let base_url = route.base_url.to_ascii_lowercase();
     let model = route.model.to_ascii_lowercase();

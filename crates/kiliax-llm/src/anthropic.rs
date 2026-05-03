@@ -7,13 +7,12 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 use tracing::Instrument;
 
-use crate::config::ResolvedModel;
-use crate::protocol::{
+use crate::types::{
     ChatRequest, ChatResponse, ChatStreamChunk, FinishReason, Message, TokenUsage, ToolCall,
     ToolCallDelta, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
 };
 
-use super::{ChatStream, LlmError, LlmProvider};
+use super::{ChatStream, LlmError, LlmProvider, ProviderRoute};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -22,11 +21,11 @@ const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub(super) struct AnthropicProvider {
     http: reqwest::Client,
-    route: ResolvedModel,
+    route: ProviderRoute,
 }
 
 impl AnthropicProvider {
-    pub(super) fn new(route: ResolvedModel) -> Self {
+    pub(super) fn new(route: ProviderRoute) -> Self {
         Self {
             http: reqwest::Client::new(),
             route,
@@ -61,7 +60,7 @@ impl AnthropicProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for AnthropicProvider {
-    fn route(&self) -> &ResolvedModel {
+    fn route(&self) -> &ProviderRoute {
         &self.route
     }
 
@@ -905,12 +904,13 @@ async fn api_error_response(status: reqwest::StatusCode, response: reqwest::Resp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::LlmClient;
+    use crate::LlmClient;
+    use crate::ProviderApi;
 
-    fn route() -> ResolvedModel {
-        ResolvedModel {
+    fn route() -> ProviderRoute {
+        ProviderRoute {
             provider: "anthropic".to_string(),
-            kind: crate::config::ProviderKind::Anthropic,
+            api: ProviderApi::AnthropicMessages,
             model: "claude-3-5-sonnet-latest".to_string(),
             base_url: "https://api.anthropic.com/v1".to_string(),
             api_key: Some("key".to_string()),
@@ -1010,9 +1010,9 @@ mod tests {
     }
 
     fn client_for(base_url: String) -> LlmClient {
-        LlmClient::new(ResolvedModel {
+        LlmClient::new(ProviderRoute {
             provider: "anthropic".to_string(),
-            kind: crate::config::ProviderKind::Anthropic,
+            api: ProviderApi::AnthropicMessages,
             model: "claude-test".to_string(),
             base_url,
             api_key: Some("test-key".to_string()),
@@ -1187,7 +1187,7 @@ mod tests {
 
     #[test]
     fn endpoint_adds_v1_when_base_url_omits_it() {
-        let provider = AnthropicProvider::new(ResolvedModel {
+        let provider = AnthropicProvider::new(ProviderRoute {
             base_url: "https://api.anthropic.com".to_string(),
             ..route()
         });

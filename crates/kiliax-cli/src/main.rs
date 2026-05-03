@@ -23,7 +23,7 @@ use futures_util::StreamExt;
 use kiliax_core::{
     agents::AgentProfile,
     config,
-    llm::LlmClient,
+    llm::client_from_config,
     mcp_overrides::{config_with_session_mcp_overrides, session_mcp_servers_from_config},
     prompt::PromptBuilder,
     runtime::AgentRuntimeOptions,
@@ -259,12 +259,12 @@ async fn main() -> Result<()> {
                 store.checkpoint(&mut session).await?;
             }
             let messages = session.messages.clone();
-            let llm = LlmClient::from_config(&loaded.config, session.meta.model_id.as_deref())?
+            let llm = client_from_config(&loaded.config, session.meta.model_id.as_deref())?
                 .with_prompt_cache_key(session.meta.prompt_cache_key.clone());
             (session, messages, llm)
         }
         None => {
-            let llm = LlmClient::from_config(&loaded.config, None)?;
+            let llm = client_from_config(&loaded.config, None)?;
             let model_id = llm.route().model_id();
             let mut builder = PromptBuilder::for_agent(&profile)
                 .with_tools({

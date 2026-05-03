@@ -1452,20 +1452,17 @@ name = "kiliax-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-openai",
  "async-trait",
- "base64",
  "dirs",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "kiliax-llm",
  "mcp-protocol",
  "modelcontextprotocol-client",
  "opentelemetry",
  "reqwest",
- "reqwest-eventsource",
- "secrecy",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1478,6 +1475,26 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "uuid",
+]
+
+[[package]]
+name = "kiliax-llm"
+version = "0.1.0"
+dependencies = [
+ "async-openai",
+ "async-trait",
+ "base64",
+ "opentelemetry",
+ "reqwest",
+ "reqwest-eventsource",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tracing",
 ]
 
 [[package]]
