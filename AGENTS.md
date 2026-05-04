@@ -63,7 +63,7 @@ minimal
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - State domain types (events/status/snapshots/runs/messages): `crates/kiliax-server/src/state/domain.rs`
-- Infra (path validation/tmp workspace helpers/workspace hooks/launch normalization): `crates/kiliax-server/src/infra.rs`
+- Infra (path validation/tmp workspace helpers/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes message `usage` and session default writes): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 

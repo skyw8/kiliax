@@ -245,8 +245,19 @@ fn windows_percent_encode_path(input: &str) -> String {
 }
 
 fn spawn_detached(program: &str, args: &[String]) -> Result<(), std::io::Error> {
+    spawn_detached_in_dir(program, args, None)
+}
+
+fn spawn_detached_in_dir(
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> Result<(), std::io::Error> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
     cmd.spawn().map(|_| ())
 }
 
@@ -265,6 +276,38 @@ fn windows_cmd_start_in_dir_args(
     ];
     args.extend(program_args.iter().cloned());
     args
+}
+
+fn wsl_command_args(distro: Option<&str>, path: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(distro) = distro {
+        args.push("-d".to_string());
+        args.push(distro.to_string());
+    }
+    args.push("--cd".to_string());
+    args.push(path.to_string());
+    args
+}
+
+fn windows_terminal_args(start_dir: &str, program: &str, program_args: &[String]) -> Vec<String> {
+    let mut args = vec!["-d".to_string(), start_dir.to_string(), program.to_string()];
+    args.extend(program_args.iter().cloned());
+    args
+}
+
+fn linux_terminal_launchers(path: &str) -> Vec<(&'static str, Vec<String>)> {
+    vec![
+        ("x-terminal-emulator", Vec::new()),
+        (
+            "gnome-terminal",
+            vec!["--working-directory".to_string(), path.to_string()],
+        ),
+        (
+            "xfce4-terminal",
+            vec!["--working-directory".to_string(), path.to_string()],
+        ),
+        ("konsole", vec!["--workdir".to_string(), path.to_string()]),
+    ]
 }
 
 pub(crate) async fn open_external(
@@ -344,13 +387,15 @@ pub(crate) async fn open_external(
                     .ok()
                     .map(|v| v.trim().to_string())
                     .filter(|v| !v.is_empty());
-                let mut wt_args: Vec<String> = vec!["wsl.exe".to_string()];
-                if let Some(distro) = distro.clone() {
-                    wt_args.push("-d".to_string());
-                    wt_args.push(distro);
-                }
-                wt_args.push("--cd".to_string());
-                wt_args.push(path.clone());
+                let win_start_dir = if let Some(unc) = wsl_unc_path(&canonical) {
+                    unc
+                } else if let Some(win_path) = wslpath_to_windows_path(&canonical).await {
+                    win_path
+                } else {
+                    path.clone()
+                };
+                let wsl_args = wsl_command_args(distro.as_deref(), &path);
+                let wt_args = windows_terminal_args(&win_start_dir, "wsl.exe", &wsl_args);
 
                 match spawn_detached("wt.exe", &wt_args) {
                     Ok(()) => return Ok(()),
@@ -360,18 +405,7 @@ pub(crate) async fn open_external(
                     Err(err) => return Err(ApiError::internal_error(err)),
                 }
 
-                let mut cmd_args: Vec<String> = vec![
-                    "/c".to_string(),
-                    "start".to_string(),
-                    "".to_string(),
-                    "wsl.exe".to_string(),
-                ];
-                if let Some(distro) = distro {
-                    cmd_args.push("-d".to_string());
-                    cmd_args.push(distro);
-                }
-                cmd_args.push("--cd".to_string());
-                cmd_args.push(path);
+                let cmd_args = windows_cmd_start_in_dir_args(&win_start_dir, "wsl.exe", &wsl_args);
                 return spawn_detached("cmd.exe", &cmd_args).map_err(|err| {
                     if err.kind() == std::io::ErrorKind::NotFound {
                         ApiError::invalid_argument("terminal launcher not found: wt.exe/cmd.exe")
@@ -406,16 +440,8 @@ pub(crate) async fn open_external(
                 });
             }
 
-            let candidates: [(&str, &[&str]); 4] = [
-                ("x-terminal-emulator", &["--working-directory"]),
-                ("gnome-terminal", &["--working-directory"]),
-                ("xfce4-terminal", &["--working-directory"]),
-                ("konsole", &["--workdir"]),
-            ];
-            for (program, prefix) in candidates {
-                let mut args = prefix.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-                args.push(path.clone());
-                match spawn_detached(program, &args) {
+            for (program, args) in linux_terminal_launchers(&path) {
+                match spawn_detached_in_dir(program, &args, Some(&canonical)) {
                     Ok(()) => return Ok(()),
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(err) => return Err(ApiError::internal_error(err)),
@@ -431,7 +457,27 @@ pub(crate) async fn open_external(
 
 #[cfg(test)]
 mod tests {
-    use super::windows_cmd_start_in_dir_args;
+    use super::{
+        linux_terminal_launchers, windows_cmd_start_in_dir_args, windows_terminal_args,
+        wsl_command_args,
+    };
+
+    #[test]
+    fn linux_terminal_launchers_use_inherited_cwd_for_generic_launcher() {
+        let launchers = linux_terminal_launchers("/home/user/Desktop/github/kiliax");
+
+        assert_eq!(launchers[0], ("x-terminal-emulator", Vec::new()));
+        assert_eq!(
+            launchers[1],
+            (
+                "gnome-terminal",
+                vec![
+                    "--working-directory".to_string(),
+                    "/home/user/Desktop/github/kiliax".to_string(),
+                ],
+            )
+        );
+    }
 
     #[test]
     fn windows_cmd_start_in_dir_args_sets_working_directory_without_pushd() {
@@ -450,6 +496,38 @@ mod tests {
                 "/D".to_string(),
                 r#"D:\github code\kiliax\target\release"#.to_string(),
                 "cmd.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wsl_terminal_args_set_windows_and_linux_working_directories() {
+        let wsl_args = wsl_command_args(Some("Ubuntu"), "/home/user/Desktop/github/kiliax");
+        assert_eq!(
+            wsl_args,
+            vec![
+                "-d".to_string(),
+                "Ubuntu".to_string(),
+                "--cd".to_string(),
+                "/home/user/Desktop/github/kiliax".to_string(),
+            ]
+        );
+
+        let wt_args = windows_terminal_args(
+            r#"\\wsl$\Ubuntu\home\user\Desktop\github\kiliax"#,
+            "wsl.exe",
+            &wsl_args,
+        );
+        assert_eq!(
+            wt_args,
+            vec![
+                "-d".to_string(),
+                r#"\\wsl$\Ubuntu\home\user\Desktop\github\kiliax"#.to_string(),
+                "wsl.exe".to_string(),
+                "-d".to_string(),
+                "Ubuntu".to_string(),
+                "--cd".to_string(),
+                "/home/user/Desktop/github/kiliax".to_string(),
             ]
         );
     }
