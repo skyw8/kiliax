@@ -542,6 +542,12 @@ pub struct LoadedConfig {
     pub config: Config,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedConfig {
+    pub config: Config,
+    pub normalized: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("failed to get current dir: {0}")]
@@ -615,23 +621,28 @@ pub fn load_from_path(path: impl Into<PathBuf>) -> Result<LoadedConfig, ConfigEr
         path: path.clone(),
         source,
     })?;
-    let file: ConfigFile = serde_yaml::from_str(&text).map_err(|source| ConfigError::Parse {
-        path: path.clone(),
-        source,
-    })?;
-    let config = resolve_config(file)?;
-    validate(&config)?;
-    Ok(LoadedConfig { path, config })
+    let loaded = load_from_str_with_path(&text, path.clone())?;
+    Ok(LoadedConfig {
+        path,
+        config: loaded.config,
+    })
 }
 
 pub fn load_from_str(yaml: &str) -> Result<Config, ConfigError> {
-    let file: ConfigFile = serde_yaml::from_str(yaml).map_err(|source| ConfigError::Parse {
-        path: PathBuf::from("<memory>"),
-        source,
-    })?;
-    let config = resolve_config(file)?;
+    Ok(load_from_str_normalized(yaml)?.config)
+}
+
+pub fn load_from_str_normalized(yaml: &str) -> Result<NormalizedConfig, ConfigError> {
+    load_from_str_with_path(yaml, PathBuf::from("<memory>"))
+}
+
+fn load_from_str_with_path(yaml: &str, path: PathBuf) -> Result<NormalizedConfig, ConfigError> {
+    let file: ConfigFile =
+        serde_yaml::from_str(yaml).map_err(|source| ConfigError::Parse { path, source })?;
+    let mut config = resolve_config(file)?;
+    let normalized = normalize_config(&mut config);
     validate(&config)?;
-    Ok(config)
+    Ok(NormalizedConfig { config, normalized })
 }
 
 pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
@@ -682,6 +693,34 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         runtime,
         agents,
         mcp,
+    })
+}
+
+fn normalize_config(config: &mut Config) -> bool {
+    if config
+        .default_model
+        .as_deref()
+        .is_some_and(|model_id| config.resolve_model(model_id).is_ok())
+    {
+        return false;
+    }
+
+    if let Some(fallback) = first_provider_model_id(&config.providers) {
+        config.default_model = Some(fallback);
+        return true;
+    }
+
+    false
+}
+
+fn first_provider_model_id(providers: &BTreeMap<String, ProviderConfig>) -> Option<String> {
+    providers.iter().find_map(|(provider_name, provider)| {
+        provider
+            .models
+            .iter()
+            .map(|model| model.trim())
+            .find(|model| !model.is_empty())
+            .map(|model| format!("{provider_name}/{model}"))
     })
 }
 
@@ -980,6 +1019,47 @@ mod tests {
 
         let resolved = cfg.resolve_model("p/m").unwrap();
         assert_eq!(resolved.api, ProviderApi::OpenAiChatCompletions);
+    }
+
+    #[test]
+    fn invalid_default_model_falls_back_to_first_provider_model() {
+        let cfg = load_from_str(
+            "default_model: missing/model\nproviders:\n  p1:\n    base_url: https://example.com/v1\n    models:\n      - m1\n  p2:\n    base_url: https://example.com/v1\n    models:\n      - m2\n",
+        )
+        .unwrap();
+
+        assert_eq!(cfg.default_model.as_deref(), Some("p1/m1"));
+        let resolved = cfg
+            .resolve_model(cfg.default_model.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(resolved.provider, "p1");
+        assert_eq!(resolved.model, "m1");
+    }
+
+    #[test]
+    fn missing_default_model_falls_back_to_first_provider_model() {
+        let cfg = load_from_str(
+            "providers:\n  p1:\n    base_url: https://example.com/v1\n    models:\n      - m1\n  p2:\n    base_url: https://example.com/v1\n    models:\n      - m2\n",
+        )
+        .unwrap();
+
+        assert_eq!(cfg.default_model.as_deref(), Some("p1/m1"));
+    }
+
+    #[test]
+    fn load_from_str_normalized_reports_whether_config_changed() {
+        let loaded = load_from_str_normalized(
+            "default_model: p/m\nproviders:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - m\n",
+        )
+        .unwrap();
+        assert!(!loaded.normalized);
+
+        let loaded = load_from_str_normalized(
+            "default_model: missing/model\nproviders:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - m\n",
+        )
+        .unwrap();
+        assert!(loaded.normalized);
+        assert_eq!(loaded.config.default_model.as_deref(), Some("p/m"));
     }
 
     #[test]

@@ -1699,6 +1699,53 @@ mcp:
 }
 
 #[tokio::test]
+async fn put_config_falls_back_and_persists_default_model() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let new_yaml = r#"
+default_model: missing/model
+providers:
+  test:
+    base_url: http://127.0.0.1:1
+    models:
+      - test-model
+      - new-model
+mcp:
+  servers: []
+"#;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PUT,
+            "/v1/config",
+            serde_json::json!({ "yaml": new_yaml }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("config")
+            .and_then(|cfg| cfg.get("default_model"))
+            .and_then(|v| v.as_str()),
+        Some("test/test-model")
+    );
+    assert!(
+        body.get("yaml")
+            .and_then(|v| v.as_str())
+            .is_some_and(|yaml| yaml.contains("default_model: test/test-model")),
+        "normalized yaml not returned: {body}"
+    );
+
+    let saved = tokio::fs::read_to_string(dir.path().join("kiliax.yaml"))
+        .await
+        .expect("read saved config");
+    assert!(saved.contains("default_model: test/test-model"));
+}
+
+#[tokio::test]
 async fn patch_config_mcp_updates_enable_flag() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;

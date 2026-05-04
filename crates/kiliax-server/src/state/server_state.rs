@@ -286,10 +286,16 @@ impl ServerState {
         &self,
         req: api::ConfigUpdateRequest,
     ) -> Result<api::ConfigResponse, ApiError> {
-        let next = kiliax_core::config::load_from_str(&req.yaml)
+        let loaded = kiliax_core::config::load_from_str_normalized(&req.yaml)
             .map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+        let next = loaded.config;
+        let yaml = if loaded.normalized {
+            serde_yaml::to_string(&next).map_err(ApiError::internal_error)?
+        } else {
+            req.yaml
+        };
 
-        write_text_atomic(&self.config_path, &req.yaml).await?;
+        write_text_atomic(&self.config_path, &yaml).await?;
 
         self.config.store(Arc::new(next.clone()));
         self.tools_for_caps
@@ -306,7 +312,7 @@ impl ServerState {
 
         Ok(api::ConfigResponse {
             path: self.config_path.display().to_string(),
-            yaml: req.yaml,
+            yaml,
             config: next,
         })
     }
