@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowLeft, ChevronRight, RefreshCcw } from "lucide-react";
 
 import { api, ApiError } from "../lib/api";
@@ -25,18 +25,12 @@ export function FolderPicker({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadSeq, setReloadSeq] = useState(0);
-  const skipNextFetchPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const handle = window.setTimeout(() => {
       if (cancelled) return;
       async function load() {
-        if (skipNextFetchPathRef.current === path) {
-          skipNextFetchPathRef.current = null;
-          return;
-        }
-
         setLoading(true);
         setError(null);
         try {
@@ -45,12 +39,10 @@ export function FolderPicker({
           setEntries(res.entries ?? []);
           setParent(res.parent ?? null);
           setLoading(false);
-          if (res.path && res.path !== path) {
-            skipNextFetchPathRef.current = res.path;
-            onPathChange(res.path);
-          }
         } catch (err) {
           if (cancelled) return;
+          setEntries([]);
+          setParent(null);
           setLoading(false);
           const msg =
             err instanceof ApiError
@@ -67,7 +59,7 @@ export function FolderPicker({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [path, reloadSeq, onPathChange]);
+  }, [path, reloadSeq]);
 
   return (
     <div className="space-y-2">
@@ -194,4 +186,3 @@ export function FolderPickerDialog({
     </Dialog>
   );
 }
-
