@@ -19,9 +19,13 @@ use crate::types::{
     ImageDetail, Message, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
 };
 
-use super::LlmError;
+use super::{
+    tool_names::{to_wire_tool_choice, to_wire_tool_definition, to_wire_tool_name},
+    LlmError,
+};
 
 pub(super) fn to_openai_tool(tool: ToolDefinition) -> ChatCompletionTool {
+    let tool = to_wire_tool_definition(tool);
     ChatCompletionTool {
         r#type: ChatCompletionToolType::Function,
         function: FunctionObject {
@@ -34,6 +38,7 @@ pub(super) fn to_openai_tool(tool: ToolDefinition) -> ChatCompletionTool {
 }
 
 pub(super) fn to_openai_tool_choice(choice: &ToolChoice) -> ChatCompletionToolChoiceOption {
+    let choice = to_wire_tool_choice(choice);
     match choice {
         ToolChoice::None => ChatCompletionToolChoiceOption::None,
         ToolChoice::Auto => ChatCompletionToolChoiceOption::Auto,
@@ -41,7 +46,7 @@ pub(super) fn to_openai_tool_choice(choice: &ToolChoice) -> ChatCompletionToolCh
         ToolChoice::Named { name } => {
             ChatCompletionToolChoiceOption::Named(ChatCompletionNamedToolChoice {
                 r#type: ChatCompletionToolType::Function,
-                function: FunctionName { name: name.clone() },
+                function: FunctionName { name },
             })
         }
     }
@@ -84,7 +89,7 @@ pub(super) async fn to_openai_message(
                             id: c.id.clone(),
                             r#type: ChatCompletionToolType::Function,
                             function: FunctionCall {
-                                name: c.name.clone(),
+                                name: to_wire_tool_name(&c.name).to_string(),
                                 arguments: c.arguments.clone(),
                             },
                         })

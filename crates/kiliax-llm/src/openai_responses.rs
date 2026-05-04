@@ -17,6 +17,9 @@ use crate::types::{
 };
 
 use super::api_errors::{map_api_error_response, map_eventsource_error};
+use super::tool_names::{
+    to_internal_tool_name, to_wire_tool_choice, to_wire_tool_definition, to_wire_tool_name,
+};
 use super::{ChatStream, LlmError, LlmProvider, ProviderRoute};
 
 const DEFAULT_ARGUMENTS: &str = "{}";
@@ -226,7 +229,7 @@ async fn to_responses_request(
                 if let Some(metadata) = provider_metadata {
                     let output = metadata.openai_responses_output().unwrap_or_default();
                     if !output.is_empty() {
-                        input.extend(output.iter().cloned());
+                        input.extend(output.iter().map(to_wire_responses_output_item));
                         continue;
                     }
                 }
@@ -242,7 +245,7 @@ async fn to_responses_request(
                     input.push(json!({
                         "type": "function_call",
                         "call_id": call.id,
-                        "name": call.name,
+                        "name": to_wire_tool_name(&call.name),
                         "arguments": call.arguments,
                     }));
                 }
@@ -368,6 +371,7 @@ fn image_detail_to_responses(detail: ImageDetail) -> String {
 }
 
 fn to_responses_tool(tool: ToolDefinition) -> Value {
+    let tool = to_wire_tool_definition(tool);
     let mut value = json!({
         "type": "function",
         "name": tool.name,
@@ -385,12 +389,25 @@ fn to_responses_tool(tool: ToolDefinition) -> Value {
 }
 
 fn to_responses_tool_choice(choice: ToolChoice) -> Value {
-    match choice {
+    match to_wire_tool_choice(&choice) {
         ToolChoice::None => Value::String("none".to_string()),
         ToolChoice::Auto => Value::String("auto".to_string()),
         ToolChoice::Required => Value::String("required".to_string()),
         ToolChoice::Named { name } => json!({"type": "function", "name": name}),
     }
+}
+
+fn to_wire_responses_output_item(item: &Value) -> Value {
+    let mut item = item.clone();
+    if item.get("type").and_then(Value::as_str) == Some("function_call") {
+        if let Some(name) = item.get("name").and_then(Value::as_str) {
+            let wire_name = to_wire_tool_name(name);
+            if wire_name != name {
+                item["name"] = Value::String(wire_name.to_string());
+            }
+        }
+    }
+    item
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -577,6 +594,7 @@ fn tool_call_from_response_item(item: &Value) -> ToolCall {
         name: item
             .get("name")
             .and_then(Value::as_str)
+            .map(to_internal_tool_name)
             .unwrap_or("unknown")
             .to_string(),
         arguments: item
@@ -763,7 +781,11 @@ fn handle_stream_event(
                         .or_else(|| item.get("id"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                    name: item.get("name").and_then(Value::as_str).map(str::to_string),
+                    name: item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(to_internal_tool_name)
+                        .map(str::to_string),
                     arguments: None,
                 }];
                 return Ok(StreamEventAction::Chunk(chunk));
@@ -793,7 +815,11 @@ fn handle_stream_event(
                         .or_else(|| item.get("id"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                    name: item.get("name").and_then(Value::as_str).map(str::to_string),
+                    name: item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(to_internal_tool_name)
+                        .map(str::to_string),
                     arguments: item
                         .get("arguments")
                         .and_then(Value::as_str)
@@ -1009,13 +1035,55 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn aliases_kiliax_web_search_function_tool() {
+        let req = ChatRequest {
+            messages: vec![user("search")],
+            tools: vec![
+                ToolDefinition {
+                    name: "web_search".to_string(),
+                    description: Some("Search the web".to_string()),
+                    parameters: Some(json!({
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    })),
+                    strict: Some(true),
+                },
+                ToolDefinition {
+                    name: "write_file".to_string(),
+                    description: Some("Write a file".to_string()),
+                    parameters: Some(json!({"type": "object"})),
+                    strict: Some(true),
+                },
+            ],
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: None,
+            temperature: None,
+            max_completion_tokens: None,
+        };
+
+        let body = to_responses_request("qwen3.5-plus", req, false)
+            .await
+            .unwrap();
+
+        assert_eq!(body["tools"][0]["type"], json!("function"));
+        assert_eq!(body["tools"][0]["name"], json!("kiliax_web_search"));
+        assert!(body["tools"][0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Kiliax `web_search` tool"));
+        assert_eq!(body["tools"][1]["type"], json!("function"));
+        assert_eq!(body["tools"][1]["name"], json!("write_file"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn replays_stored_responses_output_items_before_tool_output() {
         let stored = json!({
             "type": "function_call",
             "id": "fc_1",
             "call_id": "call_1",
-            "name": "read",
-            "arguments": "{\"path\":\"README.md\"}"
+            "name": "web_search",
+            "arguments": "{\"query\":\"x\"}"
         });
         let req = ChatRequest::new(vec![
             user("read"),
@@ -1024,8 +1092,8 @@ mod tests {
                 reasoning_content: None,
                 tool_calls: vec![ToolCall {
                     id: "call_1".to_string(),
-                    name: "read".to_string(),
-                    arguments: "{\"path\":\"README.md\"}".to_string(),
+                    name: "web_search".to_string(),
+                    arguments: "{\"query\":\"x\"}".to_string(),
                 }],
                 usage: None,
                 provider_metadata: Some(ProviderMessageMetadata::OpenAiResponses {
@@ -1039,7 +1107,7 @@ mod tests {
         ]);
 
         let body = to_responses_request("gpt-test", req, false).await.unwrap();
-        assert_eq!(body["input"][1], stored);
+        assert_eq!(body["input"][1]["name"], json!("kiliax_web_search"));
         assert_eq!(body["input"][2]["type"], json!("function_call_output"));
         assert_eq!(body["input"][2]["call_id"], json!("call_1"));
     }
@@ -1093,7 +1161,22 @@ mod tests {
         assert_eq!(content.as_deref(), Some("hello"));
         assert_eq!(reasoning_content.as_deref(), Some("used read"));
         assert_eq!(tool_calls[0].id, "call_1");
+        assert_eq!(tool_calls[0].name, "read");
         assert!(provider_metadata.is_some());
+    }
+
+    #[test]
+    fn maps_web_search_alias_back_to_internal_tool_name() {
+        let item = json!({
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "kiliax_web_search",
+            "arguments": "{\"query\":\"x\"}"
+        });
+
+        let call = tool_call_from_response_item(&item);
+        assert_eq!(call.name, "web_search");
     }
 
     #[test]

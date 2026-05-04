@@ -12,6 +12,9 @@ use crate::types::{
     ToolCallDelta, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
 };
 
+use super::tool_names::{
+    to_internal_tool_name, to_wire_tool_choice, to_wire_tool_definition, to_wire_tool_name,
+};
 use super::{ChatStream, LlmError, LlmProvider, ProviderRoute};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -334,7 +337,7 @@ async fn to_anthropic_request(
                     })?;
                     blocks.push(AnthropicContentBlock::ToolUse {
                         id: call.id,
-                        name: call.name,
+                        name: to_wire_tool_name(&call.name).to_string(),
                         input,
                     });
                 }
@@ -441,6 +444,7 @@ async fn user_content_to_anthropic(
 }
 
 fn to_anthropic_tool(tool: ToolDefinition) -> AnthropicTool {
+    let tool = to_wire_tool_definition(tool);
     AnthropicTool {
         name: tool.name,
         description: tool.description,
@@ -455,7 +459,7 @@ fn to_anthropic_tool_choice(
     parallel_tool_calls: Option<bool>,
 ) -> AnthropicToolChoice {
     let disable_parallel_tool_use = parallel_tool_calls == Some(false);
-    match choice {
+    match to_wire_tool_choice(&choice) {
         ToolChoice::None => AnthropicToolChoice::None,
         ToolChoice::Auto => AnthropicToolChoice::Auto {
             disable_parallel_tool_use,
@@ -593,6 +597,7 @@ fn chat_response_from_anthropic(resp: AnthropicMessageResponse) -> ChatResponse 
                 let name = block
                     .get("name")
                     .and_then(|v| v.as_str())
+                    .map(to_internal_tool_name)
                     .unwrap_or("unknown")
                     .to_string();
                 let input = block
@@ -718,6 +723,7 @@ fn handle_stream_event(
                         .content_block
                         .get("name")
                         .and_then(|v| v.as_str())
+                        .map(to_internal_tool_name)
                         .map(str::to_string);
                     let initial_input = parsed.content_block.get("input").cloned();
                     state.tool_uses.insert(
@@ -1138,6 +1144,55 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn aliases_web_search_tool_names_in_anthropic_request() {
+        let req = ChatRequest {
+            messages: vec![
+                Message::User {
+                    content: UserMessageContent::Text("use search".to_string()),
+                },
+                Message::Assistant {
+                    content: None,
+                    reasoning_content: None,
+                    tool_calls: vec![ToolCall {
+                        id: "toolu_1".to_string(),
+                        name: "web_search".to_string(),
+                        arguments: "{\"query\":\"x\"}".to_string(),
+                    }],
+                    usage: None,
+                    provider_metadata: None,
+                },
+            ],
+            tools: vec![ToolDefinition {
+                name: "web_search".to_string(),
+                description: Some("Search the web".to_string()),
+                parameters: Some(serde_json::json!({"type": "object"})),
+                strict: None,
+            }],
+            tool_choice: ToolChoice::Named {
+                name: "web_search".to_string(),
+            },
+            parallel_tool_calls: None,
+            temperature: None,
+            max_completion_tokens: None,
+        };
+
+        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let json = serde_json::to_value(body).unwrap();
+        assert_eq!(
+            json["tools"][0]["name"],
+            serde_json::json!("kiliax_web_search")
+        );
+        assert_eq!(
+            json["tool_choice"],
+            serde_json::json!({"type": "tool", "name": "kiliax_web_search"})
+        );
+        assert_eq!(
+            json["messages"][1]["content"][0]["name"],
+            serde_json::json!("kiliax_web_search")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn maps_assistant_tool_call_and_tool_result_history() {
         let req = ChatRequest {
             messages: vec![
@@ -1247,7 +1302,7 @@ mod tests {
             "model": "claude",
             "content": [
                 {"type": "text", "text": "hello"},
-                {"type": "tool_use", "id": "toolu_1", "name": "read", "input": {"path": "README.md"}}
+                {"type": "tool_use", "id": "toolu_1", "name": "kiliax_web_search", "input": {"query": "x"}}
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 3}
@@ -1265,7 +1320,8 @@ mod tests {
             panic!("expected assistant");
         };
         assert_eq!(content.as_deref(), Some("hello"));
-        assert_eq!(tool_calls[0].arguments, "{\"path\":\"README.md\"}");
+        assert_eq!(tool_calls[0].name, "web_search");
+        assert_eq!(tool_calls[0].arguments, "{\"query\":\"x\"}");
     }
 
     #[test]
@@ -1280,7 +1336,7 @@ mod tests {
         handle_stream_event(
             &mut state,
             "content_block_start",
-            r#"{"index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"read","input":{}}}"#,
+            r#"{"index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"kiliax_web_search","input":{}}}"#,
         )
         .unwrap();
         handle_stream_event(
@@ -1302,7 +1358,7 @@ mod tests {
         };
         assert_eq!(chunk.tool_calls.len(), 1);
         assert_eq!(chunk.tool_calls[0].id.as_deref(), Some("toolu_1"));
-        assert_eq!(chunk.tool_calls[0].name.as_deref(), Some("read"));
+        assert_eq!(chunk.tool_calls[0].name.as_deref(), Some("web_search"));
         assert_eq!(
             chunk.tool_calls[0].arguments.as_deref(),
             Some("{\"path\":\"README.md\"}")

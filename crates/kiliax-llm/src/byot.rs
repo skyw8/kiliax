@@ -5,7 +5,7 @@ use crate::types::{
     ChatResponse, ChatStreamChunk, FinishReason, Message, TokenUsage, ToolCall, ToolCallDelta,
 };
 
-use super::LlmError;
+use super::{tool_names::to_internal_tool_name, LlmError};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ByotCreateChatCompletionResponse {
@@ -96,6 +96,7 @@ pub(super) fn chat_response_from_byot(
                     .function
                     .as_ref()
                     .and_then(|f| f.name.clone())
+                    .map(|name| to_internal_tool_name(&name).to_string())
                     .unwrap_or_else(|| "unknown".to_string()),
                 arguments: c
                     .function
@@ -107,7 +108,10 @@ pub(super) fn chat_response_from_byot(
     } else if let Some(call) = function_call {
         vec![ToolCall {
             id: String::new(),
-            name: call.name.unwrap_or_else(|| "unknown".to_string()),
+            name: call
+                .name
+                .map(|name| to_internal_tool_name(&name).to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
             arguments: call.arguments.unwrap_or_default(),
         }]
     } else {
@@ -217,7 +221,11 @@ pub(super) fn chat_stream_chunk_from_byot(
                 .map(|c| ToolCallDelta {
                     index: c.index,
                     id: c.id,
-                    name: c.function.as_ref().and_then(|f| f.name.clone()),
+                    name: c
+                        .function
+                        .as_ref()
+                        .and_then(|f| f.name.clone())
+                        .map(|name| to_internal_tool_name(&name).to_string()),
                     arguments: c.function.as_ref().and_then(|f| f.arguments.clone()),
                 })
                 .collect();
@@ -225,7 +233,9 @@ pub(super) fn chat_stream_chunk_from_byot(
             tool_calls = vec![ToolCallDelta {
                 index: 0,
                 id: None,
-                name: function_call.name,
+                name: function_call
+                    .name
+                    .map(|name| to_internal_tool_name(&name).to_string()),
                 arguments: function_call.arguments,
             }];
         }

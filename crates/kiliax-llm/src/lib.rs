@@ -21,6 +21,7 @@ mod openai_conv;
 mod openai_responses;
 mod patches;
 pub mod telemetry;
+mod tool_names;
 pub mod types;
 
 use anthropic::AnthropicProvider;
@@ -994,6 +995,53 @@ mod tests {
         };
         let openai = to_openai_tool(tool);
         assert_eq!(openai.function.strict, Some(true));
+    }
+
+    #[test]
+    fn openai_tool_conversion_aliases_web_search() {
+        let tool = ToolDefinition {
+            name: "web_search".to_string(),
+            description: Some("Search the web".to_string()),
+            parameters: Some(serde_json::json!({"type":"object"})),
+            strict: Some(true),
+        };
+        let openai = to_openai_tool(tool);
+        assert_eq!(openai.function.name, "kiliax_web_search");
+        assert!(openai
+            .function
+            .description
+            .as_deref()
+            .unwrap()
+            .contains("Kiliax `web_search` tool"));
+    }
+
+    #[test]
+    fn byot_maps_wire_web_search_alias_to_internal_name() {
+        let raw = serde_json::json!({
+            "id": "chat_1",
+            "created": 0,
+            "model": "m",
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "kiliax_web_search",
+                            "arguments": "{\"query\":\"x\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let parsed: ByotCreateChatCompletionResponse = serde_json::from_value(raw).unwrap();
+        let resp = chat_response_from_byot(parsed).unwrap();
+        let Message::Assistant { tool_calls, .. } = resp.message else {
+            panic!("expected assistant");
+        };
+        assert_eq!(tool_calls[0].name, "web_search");
     }
 
     #[test]
