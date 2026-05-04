@@ -53,6 +53,7 @@ export function SkillsDialog(props: {
   sessionSummaryRef.current = sessionSummary;
 
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [loadErrors, setLoadErrors] = useState<SkillLoadError[]>([]);
   const [defaultEnable, setDefaultEnable] = useState(true);
@@ -79,7 +80,10 @@ export function SkillsDialog(props: {
       } catch (err) {
         onApiErrorRef.current(err);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoaded(true);
+          setLoading(false);
+        }
       }
     })();
 
@@ -87,6 +91,8 @@ export function SkillsDialog(props: {
       cancelled = true;
     };
   }, [open, selectedSessionId]);
+
+  const showInitialLoading = loading && !loaded;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -98,7 +104,7 @@ export function SkillsDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        {loading ? (
+        {showInitialLoading ? (
           <div className="py-10 text-center text-sm text-zinc-500">Loading…</div>
         ) : (
           <div className="space-y-2">
@@ -232,4 +238,3 @@ export function SkillsDialog(props: {
     </Dialog>
   );
 }
-

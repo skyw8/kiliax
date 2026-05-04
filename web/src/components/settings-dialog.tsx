@@ -85,6 +85,7 @@ export function SettingsDialog(props: {
 
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("providers");
   const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
 
   const [configYaml, setConfigYaml] = useState("");
@@ -134,6 +135,7 @@ export function SettingsDialog(props: {
 
   const resetDrafts = useCallback(() => {
     setSettingsTab("providers");
+    setSettingsLoaded(false);
     setConfigYaml("");
     setConfigPath("");
     setConfigLoaded(false);
@@ -221,7 +223,10 @@ export function SettingsDialog(props: {
     Promise.all([loadSettingsProviders(), loadSettingsRuntime()])
       .catch((err) => onApiErrorRef.current(err))
       .finally(() => {
-        if (!cancelled) setSettingsLoading(false);
+        if (!cancelled) {
+          setSettingsLoaded(true);
+          setSettingsLoading(false);
+        }
       });
 
     return () => {
@@ -502,6 +507,8 @@ export function SettingsDialog(props: {
     }
   }
 
+  const showInitialSettingsLoading = settingsLoading && !settingsLoaded;
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -577,7 +584,7 @@ export function SettingsDialog(props: {
             </Button>
           </div>
 
-          {settingsLoading ? (
+          {showInitialSettingsLoading ? (
             <div className="py-10 text-center text-sm text-zinc-500">Loading…</div>
           ) : settingsTab === "providers" ? (
             <div className="flex h-[min(600px,72vh)] flex-col gap-3 md:flex-row">

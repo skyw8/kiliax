@@ -13,6 +13,31 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 
+function prefixQuery(input: string): { parentPath: string; prefix: string } | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  const slash = trimmed.lastIndexOf("/");
+  const backslash = trimmed.lastIndexOf("\\");
+  const sep = Math.max(slash, backslash);
+  if (sep < 0 || sep === trimmed.length - 1) return null;
+
+  const prefix = trimmed.slice(sep + 1);
+  if (!prefix) return null;
+
+  let parentPath = trimmed.slice(0, sep);
+  if (sep === 0) parentPath = trimmed.slice(0, 1);
+  if (/^[A-Za-z]:$/.test(parentPath)) parentPath += "\\";
+  if (!parentPath) return null;
+
+  return { parentPath, prefix };
+}
+
+function prefixMatches(entries: FsEntry[], prefix: string): FsEntry[] {
+  const normalized = prefix.toLowerCase();
+  return entries.filter((entry) => entry.name.toLowerCase().startsWith(normalized));
+}
+
 export function FolderPicker({
   path,
   onPathChange,
@@ -25,6 +50,7 @@ export function FolderPicker({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadSeq, setReloadSeq] = useState(0);
+  const initialLoading = loading && !entries.length && !error;
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +67,21 @@ export function FolderPicker({
           setLoading(false);
         } catch (err) {
           if (cancelled) return;
+          const query = prefixQuery(path);
+          if (query) {
+            try {
+              const res = await api.fsList(query.parentPath);
+              if (cancelled) return;
+              const matches = prefixMatches(res.entries ?? [], query.prefix);
+              setEntries(matches);
+              setParent(res.path ?? query.parentPath);
+              setLoading(false);
+              setError(matches.length ? null : "Path not found");
+              return;
+            } catch {
+              if (cancelled) return;
+            }
+          }
           setEntries([]);
           setParent(null);
           setLoading(false);
@@ -49,7 +90,7 @@ export function FolderPicker({
               ? err.message
               : err instanceof Error
                 ? err.message
-                : "Failed to list folders";
+                : "Path not found";
           setError(msg);
         }
       }
@@ -70,7 +111,7 @@ export function FolderPicker({
           className="h-8 w-8"
           aria-label="Up"
           title="Up"
-          disabled={!parent || loading}
+          disabled={!parent}
           onClick={() => {
             if (!parent) return;
             onPathChange(parent);
@@ -92,7 +133,6 @@ export function FolderPicker({
           className="h-8 w-8"
           aria-label="Refresh"
           title="Refresh"
-          disabled={loading}
           onClick={() => setReloadSeq((v) => v + 1)}
         >
           <RefreshCcw className="h-4 w-4 text-zinc-600" />
@@ -106,7 +146,7 @@ export function FolderPicker({
       ) : null}
 
       <div className="h-[min(320px,50vh)] overflow-auto rounded-md border border-zinc-200 bg-white">
-        {loading ? (
+        {initialLoading ? (
           <div className="flex h-full items-center justify-center px-3 text-center text-xs text-zinc-500">
             Loading…
           </div>
