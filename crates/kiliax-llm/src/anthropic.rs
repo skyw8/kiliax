@@ -288,7 +288,8 @@ async fn to_anthropic_request(
 
     let mut system_parts = Vec::new();
     let mut out_messages = Vec::new();
-    for message in messages {
+    let mut messages = messages.into_iter().peekable();
+    while let Some(message) = messages.next() {
         match message {
             Message::Developer { content } | Message::System { content } => {
                 if !content.trim().is_empty() {
@@ -337,12 +338,26 @@ async fn to_anthropic_request(
                 tool_call_id,
                 content,
             } => {
-                out_messages.push(AnthropicRequestMessage {
-                    role: AnthropicRole::User,
-                    content: vec![AnthropicContentBlock::ToolResult {
+                let mut blocks = vec![AnthropicContentBlock::ToolResult {
+                    tool_use_id: tool_call_id,
+                    content,
+                }];
+                while matches!(messages.peek(), Some(Message::Tool { .. })) {
+                    let Some(Message::Tool {
+                        tool_call_id,
+                        content,
+                    }) = messages.next()
+                    else {
+                        unreachable!("peeked tool message");
+                    };
+                    blocks.push(AnthropicContentBlock::ToolResult {
                         tool_use_id: tool_call_id,
                         content,
-                    }],
+                    });
+                }
+                out_messages.push(AnthropicRequestMessage {
+                    role: AnthropicRole::User,
+                    content: blocks,
                 });
             }
         }
@@ -1116,6 +1131,61 @@ mod tests {
         assert_eq!(
             json["messages"][2]["content"][0]["type"],
             serde_json::json!("tool_result")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn groups_parallel_tool_results_into_one_user_message() {
+        let req = ChatRequest {
+            messages: vec![
+                Message::User {
+                    content: UserMessageContent::Text("use tools".to_string()),
+                },
+                Message::Assistant {
+                    content: None,
+                    reasoning_content: None,
+                    tool_calls: vec![
+                        ToolCall {
+                            id: "toolu_1".to_string(),
+                            name: "read".to_string(),
+                            arguments: "{\"path\":\"README.md\"}".to_string(),
+                        },
+                        ToolCall {
+                            id: "toolu_2".to_string(),
+                            name: "grep".to_string(),
+                            arguments: "{\"query\":\"fn main\"}".to_string(),
+                        },
+                    ],
+                    usage: None,
+                    provider_metadata: None,
+                },
+                Message::Tool {
+                    tool_call_id: "toolu_1".to_string(),
+                    content: "read ok".to_string(),
+                },
+                Message::Tool {
+                    tool_call_id: "toolu_2".to_string(),
+                    content: "grep ok".to_string(),
+                },
+            ],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: None,
+            temperature: None,
+            max_completion_tokens: None,
+        };
+
+        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let json = serde_json::to_value(body).unwrap();
+        assert_eq!(json["messages"].as_array().unwrap().len(), 3);
+        assert_eq!(json["messages"][2]["role"], serde_json::json!("user"));
+        assert_eq!(
+            json["messages"][2]["content"][0]["tool_use_id"],
+            serde_json::json!("toolu_1")
+        );
+        assert_eq!(
+            json["messages"][2]["content"][1]["tool_use_id"],
+            serde_json::json!("toolu_2")
         );
     }
 
