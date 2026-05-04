@@ -74,6 +74,7 @@ minimal
 ### web (React UI)
 
 - Main UI (responsive layout + WS streaming/session actions): `web/src/app.tsx`
+- Message rendering + user input collapse controls: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Folder picker + path entry UX: `web/src/components/folder-picker.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`

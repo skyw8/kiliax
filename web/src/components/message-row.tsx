@@ -1,5 +1,13 @@
 import React from "react";
-import { Copy, GitFork, MoreHorizontal, Pencil, RefreshCcw } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  GitFork,
+  MoreHorizontal,
+  Pencil,
+  RefreshCcw,
+} from "lucide-react";
 
 import {
   copyToClipboard,
@@ -11,6 +19,14 @@ import {
 import type { Message, ToolCall } from "../lib/types";
 import { CodeBlock } from "./code-block";
 import { Markdown, type MermaidErrorInfo } from "./markdown";
+
+const USER_COLLAPSE_CHAR_LIMIT = 700;
+const USER_COLLAPSE_LINE_LIMIT = 10;
+
+function shouldCollapseUserMessage(content: string): boolean {
+  if (content.length > USER_COLLAPSE_CHAR_LIMIT) return true;
+  return content.split(/\r\n|\r|\n/).length > USER_COLLAPSE_LINE_LIMIT;
+}
 
 function renderToolCalls(
   toolCalls: ToolCall[] | undefined,
@@ -69,13 +85,19 @@ export function MessageRow({
   onRegenerateAssistant?: (assistantMessageId: string) => void;
   historyMutable?: boolean;
 }) {
+  const [userMessageExpanded, setUserMessageExpanded] = React.useState(false);
+
   if (msg.role === "user") {
     const wide = hasMermaidFence(msg.content);
+    const collapsible = shouldCollapseUserMessage(msg.content);
+    const collapsed = collapsible && !userMessageExpanded;
     const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     return (
       <div className="group flex justify-end">
-        <div className={`${bubbleWidth} relative whitespace-pre-wrap break-words rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}>
+        <div
+          className={`${bubbleWidth} relative rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}
+        >
           <div className="absolute right-full top-2 flex items-center gap-1 pr-2 invisible opacity-0 transition-opacity group-hover:visible group-hover:opacity-100">
             <button
               type="button"
@@ -101,7 +123,32 @@ export function MessageRow({
             </button>
           </div>
 
-          {msg.content}
+          {collapsible ? (
+            <button
+              type="button"
+              className="absolute right-2 top-2 rounded-md p-1 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50"
+              aria-label={userMessageExpanded ? "Collapse message" : "Expand message"}
+              title={userMessageExpanded ? "Collapse" : "Expand"}
+              aria-expanded={userMessageExpanded}
+              onClick={() => setUserMessageExpanded((v) => !v)}
+            >
+              {userMessageExpanded ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </button>
+          ) : null}
+
+          <div
+            className={[
+              "whitespace-pre-wrap break-words",
+              collapsible ? "pr-7" : "",
+              collapsed ? "max-h-32 overflow-hidden" : "",
+            ].join(" ")}
+          >
+            {msg.content}
+          </div>
         </div>
       </div>
     );
@@ -233,4 +280,3 @@ export function MessageRow({
     </div>
   );
 }
-
