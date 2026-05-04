@@ -266,10 +266,24 @@ struct AnthropicTool {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicToolChoice {
-    Auto,
-    Any,
-    Tool { name: String },
+    Auto {
+        #[serde(default, skip_serializing_if = "is_false")]
+        disable_parallel_tool_use: bool,
+    },
+    Any {
+        #[serde(default, skip_serializing_if = "is_false")]
+        disable_parallel_tool_use: bool,
+    },
+    Tool {
+        name: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        disable_parallel_tool_use: bool,
+    },
     None,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 async fn to_anthropic_request(
@@ -281,7 +295,7 @@ async fn to_anthropic_request(
         messages,
         tools,
         tool_choice,
-        parallel_tool_calls: _,
+        parallel_tool_calls,
         temperature,
         max_completion_tokens,
     } = req;
@@ -373,7 +387,7 @@ async fn to_anthropic_request(
     let tool_choice = if tools.is_empty() {
         None
     } else {
-        Some(to_anthropic_tool_choice(tool_choice))
+        Some(to_anthropic_tool_choice(tool_choice, parallel_tool_calls))
     };
 
     Ok(AnthropicMessagesRequest {
@@ -436,12 +450,23 @@ fn to_anthropic_tool(tool: ToolDefinition) -> AnthropicTool {
     }
 }
 
-fn to_anthropic_tool_choice(choice: ToolChoice) -> AnthropicToolChoice {
+fn to_anthropic_tool_choice(
+    choice: ToolChoice,
+    parallel_tool_calls: Option<bool>,
+) -> AnthropicToolChoice {
+    let disable_parallel_tool_use = parallel_tool_calls == Some(false);
     match choice {
         ToolChoice::None => AnthropicToolChoice::None,
-        ToolChoice::Auto => AnthropicToolChoice::Auto,
-        ToolChoice::Required => AnthropicToolChoice::Any,
-        ToolChoice::Named { name } => AnthropicToolChoice::Tool { name },
+        ToolChoice::Auto => AnthropicToolChoice::Auto {
+            disable_parallel_tool_use,
+        },
+        ToolChoice::Required => AnthropicToolChoice::Any {
+            disable_parallel_tool_use,
+        },
+        ToolChoice::Named { name } => AnthropicToolChoice::Tool {
+            name,
+            disable_parallel_tool_use,
+        },
     }
 }
 
@@ -1084,6 +1109,32 @@ mod tests {
             serde_json::json!({"type": "tool", "name": "read"})
         );
         assert_eq!(json["max_tokens"], serde_json::json!(128));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn maps_disabled_parallel_tool_calls_to_anthropic_tool_choice() {
+        let req = ChatRequest {
+            messages: vec![Message::User {
+                content: UserMessageContent::Text("hi".to_string()),
+            }],
+            tools: vec![ToolDefinition {
+                name: "read".to_string(),
+                description: None,
+                parameters: Some(serde_json::json!({"type": "object"})),
+                strict: None,
+            }],
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: Some(false),
+            temperature: None,
+            max_completion_tokens: None,
+        };
+
+        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let json = serde_json::to_value(body).unwrap();
+        assert_eq!(
+            json["tool_choice"],
+            serde_json::json!({"type": "auto", "disable_parallel_tool_use": true})
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
