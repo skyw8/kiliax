@@ -39,6 +39,18 @@ minimal
 - Session store + snapshots + events + session-scoped MCP/skills overrides: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery): `crates/kiliax-core/src/tools/`
+- Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
+  - `read_file`: read a UTF-8 text file from the workspace (or allowed skills roots), with optional line range and byte cap
+  - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
+  - `grep_files`: search files for a regex pattern (ripgrep semantics; respects `.gitignore`/`.ignore` by default)
+  - `view_image`: attach a local image from the filesystem (png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif)
+  - `shell_command`: run a command in the workspace (argv array, no shell quoting); returns a `session_id` for long-running processes
+  - `write_stdin`: write to stdin of a running shell session, or poll its output
+  - `write_file`: write/overwrite a file on the local filesystem (requires prior `read_file` when overwriting)
+  - `edit_file`: perform exact string replacements in a file (requires prior `read_file`; supports `replaceAll`)
+  - `apply_patch`: apply a stripped-down file-oriented diff envelope (`*** Begin Patch` / `*** End Patch`) for multi-file edits
+  - `update_plan`: update the UI plan (best effort, surfaced in TUI/web)
+  - `web_search`: search the web via Tavily (`web_search.api_key` / `tools.tavily.api_key` in `kiliax.yaml`, fallback `TAVILY_API_KEY`)
 
 ### crates/kiliax-llm (LLM facade + providers)
 
