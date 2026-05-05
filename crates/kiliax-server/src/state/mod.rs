@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::config::Config;
-use kiliax_core::protocol::Message as CoreMessage;
+use kiliax_core::protocol::{Message as CoreMessage, UserContentPart, UserMessageContent};
 use kiliax_core::runtime::AgentRuntimeError;
 use kiliax_core::session::{FileSessionStore, SessionError, SessionId, SessionMeta};
 use kiliax_core::tools::McpServerConnectionState;
@@ -478,6 +478,71 @@ fn now_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
+fn user_content_attachments(content: &UserMessageContent) -> Vec<domain::MessageAttachment> {
+    let UserMessageContent::Parts(parts) = content else {
+        return Vec::new();
+    };
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            UserContentPart::Text { .. } => None,
+            UserContentPart::Image { path, filename, .. } => Some(domain::MessageAttachment {
+                filename: filename
+                    .clone()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| image_label_from_path(path)),
+                media_type: image_media_type_from_path(path)
+                    .unwrap_or("image/*")
+                    .to_string(),
+            }),
+            UserContentPart::File {
+                filename,
+                media_type,
+                ..
+            } => Some(domain::MessageAttachment {
+                filename: filename.clone(),
+                media_type: media_type.clone(),
+            }),
+        })
+        .collect()
+}
+
+fn image_label_from_path(path: &str) -> String {
+    if path.trim().starts_with("data:") {
+        return "image".to_string();
+    }
+    Path::new(path)
+        .file_name()
+        .and_then(|v| v.to_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("image")
+        .to_string()
+}
+
+fn image_media_type_from_path(path: &str) -> Option<&'static str> {
+    if let Some(rest) = path.trim().strip_prefix("data:") {
+        let media_type = rest.split_once(',')?.0.split_once(';')?.0.trim();
+        return match media_type {
+            "image/png" => Some("image/png"),
+            "image/jpeg" => Some("image/jpeg"),
+            "image/gif" => Some("image/gif"),
+            "image/webp" => Some("image/webp"),
+            _ => None,
+        };
+    }
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|v| v.to_str())?
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
 fn map_core_message_to_domain(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<domain::Message> {
     let id = seq.to_string();
     let created_at = ts_ms_to_rfc3339(ts_ms);
@@ -487,10 +552,12 @@ fn map_core_message_to_domain(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<
             if kiliax_core::compact::is_summary_message(text) {
                 None
             } else {
+                let attachments = user_content_attachments(&content);
                 Some(domain::Message::User {
                     id,
                     created_at,
                     content: text.to_string(),
+                    attachments,
                 })
             }
         }
@@ -540,10 +607,12 @@ fn map_core_message_to_domain_event_message(
             if kiliax_core::compact::is_summary_message(text) {
                 None
             } else {
+                let attachments = user_content_attachments(&content);
                 Some(domain::Message::User {
                     id,
                     created_at,
                     content: text.to_string(),
+                    attachments,
                 })
             }
         }

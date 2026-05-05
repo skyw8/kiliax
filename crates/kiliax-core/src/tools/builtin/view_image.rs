@@ -96,6 +96,7 @@ pub(crate) async fn execute_with_attachment(
     let msg = Message::User {
         content: UserMessageContent::Parts(vec![UserContentPart::Image {
             path: display_path,
+            filename: None,
             detail: None,
         }]),
     };

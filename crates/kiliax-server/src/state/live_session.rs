@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::compact;
 use kiliax_core::config::Config;
-use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
+use kiliax_core::protocol::{Message as CoreMessage, UserContentPart, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
 use kiliax_core::session::{FileSessionStore, SessionId, SessionMcpServerSetting, SessionState};
 use kiliax_core::tools::ToolEngine;
@@ -69,6 +69,96 @@ struct QueuedRun {
 enum EventPersistence {
     Durable,
     Ephemeral,
+}
+
+fn user_content_has_input(content: &UserMessageContent) -> bool {
+    match content {
+        UserMessageContent::Text(text) => !text.trim().is_empty(),
+        UserMessageContent::Parts(parts) => parts.iter().any(|part| match part {
+            UserContentPart::Text { text } => !text.trim().is_empty(),
+            UserContentPart::Image { .. } | UserContentPart::File { .. } => true,
+        }),
+    }
+}
+
+fn user_content_trace_text(content: &UserMessageContent) -> String {
+    let first_text = content.first_text().unwrap_or("").trim();
+    if !first_text.is_empty() {
+        first_text.to_string()
+    } else {
+        content.display_text()
+    }
+}
+
+fn run_text_content(
+    text: &str,
+    attachments: &[domain::RunAttachment],
+) -> Result<UserMessageContent, ApiError> {
+    let has_text = !text.trim().is_empty();
+    if !has_text && attachments.is_empty() {
+        return Err(ApiError::invalid_argument(
+            "input text or attachments must not be empty",
+        ));
+    }
+    if attachments.len() > 8 {
+        return Err(ApiError::invalid_argument("too many attachments"));
+    }
+    if attachments.is_empty() {
+        return Ok(UserMessageContent::Text(text.to_string()));
+    }
+
+    let mut parts = Vec::new();
+    if has_text {
+        parts.push(UserContentPart::Text {
+            text: text.to_string(),
+        });
+    }
+    for attachment in attachments {
+        let filename = attachment.filename.trim();
+        let media_type = attachment.media_type.trim().to_ascii_lowercase();
+        let data = attachment.data.trim();
+        if filename.is_empty() {
+            return Err(ApiError::invalid_argument(
+                "attachment filename must not be empty",
+            ));
+        }
+        if data.is_empty() {
+            return Err(ApiError::invalid_argument(
+                "attachment base64 data must not be empty",
+            ));
+        }
+        if data.starts_with("data:") {
+            return Err(ApiError::invalid_argument(
+                "attachment data must be raw base64, not a data URL",
+            ));
+        }
+        if is_supported_image_media_type(&media_type) {
+            parts.push(UserContentPart::Image {
+                path: format!("data:{media_type};base64,{data}"),
+                filename: Some(filename.to_string()),
+                detail: None,
+            });
+        } else if media_type == "application/pdf" {
+            parts.push(UserContentPart::File {
+                filename: filename.to_string(),
+                media_type,
+                data: data.to_string(),
+            });
+        } else {
+            return Err(ApiError::invalid_argument(format!(
+                "unsupported attachment media type `{}`",
+                attachment.media_type
+            )));
+        }
+    }
+    Ok(UserMessageContent::Parts(parts))
+}
+
+fn is_supported_image_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    )
 }
 
 impl LiveSession {
@@ -510,7 +600,7 @@ impl LiveSession {
                 .ok_or_else(|| ApiError::not_found("message not found"))?;
             match &session.messages[idx] {
                 CoreMessage::User { content } => {
-                    if content.first_text().unwrap_or("").trim().is_empty() {
+                    if !user_content_has_input(content) {
                         return Err(ApiError::invalid_argument(
                             "cannot regenerate: user message is empty",
                         ));
@@ -628,10 +718,8 @@ impl LiveSession {
         req: domain::RunCreateRequest,
     ) -> Result<domain::Run, ApiError> {
         match &req.input {
-            domain::RunInput::Text { text } => {
-                if text.trim().is_empty() {
-                    return Err(ApiError::invalid_argument("input text must not be empty"));
-                }
+            domain::RunInput::Text { text, attachments } => {
+                run_text_content(text, attachments)?;
             }
             domain::RunInput::FromUserMessage { user_message_id } => {
                 if *user_message_id == 0 {
@@ -650,8 +738,10 @@ impl LiveSession {
                 }
                 match &session.messages[idx] {
                     CoreMessage::User { content } => {
-                        if content.first_text().unwrap_or("").trim().is_empty() {
-                            return Err(ApiError::invalid_argument("input text must not be empty"));
+                        if !user_content_has_input(content) {
+                            return Err(ApiError::invalid_argument(
+                                "input text or attachments must not be empty",
+                            ));
                         }
                     }
                     _ => {
@@ -820,8 +910,10 @@ impl LiveSession {
             run.started_at = Some(now_rfc3339());
             write_run_file(&self.runs_dir, &run).await?;
 
-            let (user_text, persist_user) = match &run.input {
-                domain::RunInput::Text { text } => (text.clone(), true),
+            let (user_content, persist_user) = match &run.input {
+                domain::RunInput::Text { text, attachments } => {
+                    (run_text_content(text, attachments)?, true)
+                }
                 domain::RunInput::FromUserMessage { user_message_id } => {
                     let session = self.session.lock().await;
                     let by_id = session
@@ -829,31 +921,36 @@ impl LiveSession {
                         .iter()
                         .position(|id| *id == *user_message_id)
                         .and_then(|idx| match &session.messages[idx] {
-                            CoreMessage::User { content } => {
-                                Some(content.first_text().unwrap_or("").to_string())
-                            }
+                            CoreMessage::User { content } => Some(content.clone()),
                             _ => None,
                         });
                     let last_user = session.messages.iter().rev().find_map(|m| match m {
-                        CoreMessage::User { content } => {
-                            Some(content.first_text().unwrap_or("").to_string())
-                        }
+                        CoreMessage::User { content } => Some(content.clone()),
                         _ => None,
                     });
-                    (by_id.or(last_user).unwrap_or_default(), false)
+                    (
+                        by_id
+                            .or(last_user)
+                            .unwrap_or_else(|| UserMessageContent::Text(String::new())),
+                        false,
+                    )
                 }
-                domain::RunInput::EditUserMessage { content, .. } => (content.clone(), false),
+                domain::RunInput::EditUserMessage { content, .. } => {
+                    (UserMessageContent::Text(content.clone()), false)
+                }
                 domain::RunInput::RegenerateAfterUserMessage { .. } => {
                     let session = self.session.lock().await;
                     let last_user = session.messages.iter().rev().find_map(|m| match m {
-                        CoreMessage::User { content } => {
-                            Some(content.first_text().unwrap_or("").to_string())
-                        }
+                        CoreMessage::User { content } => Some(content.clone()),
                         _ => None,
                     });
-                    (last_user.unwrap_or_default(), false)
+                    (
+                        last_user.unwrap_or_else(|| UserMessageContent::Text(String::new())),
+                        false,
+                    )
                 }
             };
+            let user_text = user_content_trace_text(&user_content);
 
             let base_settings = self.settings.lock().await.clone();
             let overrides = run.overrides.take();
@@ -992,7 +1089,7 @@ impl LiveSession {
 
                 // Persist user message at execution time (after optional pre-turn compaction).
                 self.record_message(CoreMessage::User {
-                    content: UserMessageContent::Text(user_text.clone()),
+                    content: user_content.clone(),
                 })
                 .await?;
             }

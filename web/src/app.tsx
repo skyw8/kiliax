@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, FolderOpen, FolderPlus, GitFork, Image as ImageIcon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, Trash2, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
@@ -12,6 +12,8 @@ import { isTmpWorkspaceRoot, workspaceBasename, workspaceDisplayName } from "./l
 import type {
   Capabilities,
   Message,
+  MessageAttachment,
+  RunAttachment,
   Session,
   SessionSummary,
 } from "./lib/types";
@@ -43,6 +45,12 @@ type PendingMessage = {
   baseEventId: number;
   createdAt: string;
   content: string;
+  attachments?: MessageAttachment[];
+};
+
+type ComposerAttachment = RunAttachment & {
+  id: string;
+  size: number;
 };
 
 type StreamState = {
@@ -53,6 +61,55 @@ type StreamState = {
 };
 
 const LIST_PAGE_SIZE = 6;
+const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,application/pdf";
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+function isSupportedAttachmentType(mediaType: string): boolean {
+  return (
+    mediaType === "application/pdf" ||
+    mediaType === "image/png" ||
+    mediaType === "image/jpeg" ||
+    mediaType === "image/gif" ||
+    mediaType === "image/webp"
+  );
+}
+
+function attachmentMediaType(file: File): string {
+  const mediaType = (file.type || "").toLowerCase();
+  if (mediaType) return mediaType;
+  const ext = file.name.toLowerCase().split(".").pop() ?? "";
+  if (ext === "pdf") return "application/pdf";
+  if (ext === "png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  return "";
+}
+
+function attachmentMetadata(a: RunAttachment): MessageAttachment {
+  return { filename: a.filename, media_type: a.media_type };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function App() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
@@ -98,6 +155,8 @@ export default function App() {
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const [composerText, setComposerText] = useState("");
+  const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
+  const [attachmentReading, setAttachmentReading] = useState(false);
   const [editMessageOpen, setEditMessageOpen] = useState(false);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -152,6 +211,7 @@ export default function App() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
   const pendingRef = useRef<PendingMessage[]>([]);
   const localMessageByRunRef = useRef<Record<string, string>>({});
@@ -679,9 +739,58 @@ export default function App() {
     }
   }
 
+  async function onAttachmentFilesSelected(files: FileList | null) {
+    const selected = Array.from(files ?? []);
+    if (!selected.length) return;
+    setAttachmentReading(true);
+    try {
+      const next: ComposerAttachment[] = [];
+      for (const file of selected) {
+        const mediaType = attachmentMediaType(file);
+        if (!isSupportedAttachmentType(mediaType)) {
+          pushAlert({
+            id: newAlertId("attachment"),
+            level: "error",
+            title: "Unsupported file",
+            message: `${file.name || "File"} must be a PNG, JPEG, GIF, WebP, or PDF.`,
+            autoCloseMs: 5000,
+          });
+          continue;
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          pushAlert({
+            id: newAlertId("attachment"),
+            level: "error",
+            title: "File too large",
+            message: `${file.name || "File"} is larger than ${formatBytes(MAX_ATTACHMENT_BYTES)}.`,
+            autoCloseMs: 5000,
+          });
+          continue;
+        }
+        const data = await readFileAsBase64(file);
+        next.push({
+          id: `att_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`,
+          filename: file.name || "attachment",
+          media_type: mediaType,
+          data,
+          size: file.size,
+        });
+      }
+      if (next.length) {
+        setComposerAttachments((prev) => [...prev, ...next]);
+      }
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setAttachmentReading(false);
+    }
+  }
+
   async function onSend() {
+    if (attachmentReading) return;
     const text = composerText.trim();
-    if (!text) return;
+    const attachments = composerAttachments;
+    if (!text && attachments.length === 0) return;
 
     const baseEventId = selectedSummary?.status.last_event_id ?? 0;
     const localMessageId = `local_${Date.now().toString(16)}_${Math.random()
@@ -689,6 +798,7 @@ export default function App() {
       .slice(2)}`;
     const localCreatedAt = new Date().toISOString();
     setComposerText("");
+    setComposerAttachments([]);
 
     let didAppendLocalMessage = false;
     let createdRunId: string | null = null;
@@ -712,13 +822,22 @@ export default function App() {
           id: localMessageId,
           created_at: localCreatedAt,
           content: text,
+          attachments: attachments.map(attachmentMetadata),
           delivery_state: "queued",
         },
       ]);
       didAppendLocalMessage = true;
 
       const run: any = await api.createRun(sessionId, {
-        input: { type: "text", text },
+        input: {
+          type: "text",
+          text,
+          attachments: attachments.map(({ filename, media_type, data }) => ({
+            filename,
+            media_type,
+            data,
+          })),
+        },
       });
       createdRunId = String(run?.id ?? "").trim() || null;
       if (createdRunId) {
@@ -733,12 +852,14 @@ export default function App() {
           baseEventId,
           createdAt: new Date().toISOString(),
           content: text,
+          attachments: attachments.map(attachmentMetadata),
         },
       ]);
       await refreshSessions();
     } catch (err) {
       if (createdRunId == null) {
         setComposerText(text);
+        setComposerAttachments(attachments);
         if (didAppendLocalMessage) {
           setMessages((m) => m.filter((msg) => msg.id !== localMessageId));
         }
@@ -1238,7 +1359,8 @@ export default function App() {
   const selectedSummary = sortedSessions.find((s) => s.id === selectedId) ?? null;
   const selectedBadge = selectedSummary ? statusBadge(selectedSummary) : null;
 
-  const composerHasText = composerText.trim().length > 0;
+  const composerHasAttachments = composerAttachments.length > 0;
+  const composerHasText = composerText.trim().length > 0 || composerHasAttachments;
   const lastPendingRun = pendingForSelected[pendingForSelected.length - 1] ?? null;
   const sessionHasWork = Boolean(
     selectedSummary &&
@@ -1859,49 +1981,107 @@ export default function App() {
 
           <div className="border-t border-zinc-200 bg-white px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
             <div className="relative mx-auto w-full max-w-4xl">
-              <div className="flex min-w-0 items-center gap-2 rounded-3xl border border-zinc-200 bg-white px-4 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
-                <Textarea
-                  ref={composerRef}
-                  value={composerText}
-                  onChange={(e) => setComposerText(e.target.value)}
-                  placeholder="Ask anything…"
-                  className="min-h-[44px] max-h-[240px] min-w-0 flex-1 resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      onSend();
-                    }
-                  }}
-                />
-
-                {showInterrupt ? (
+              <div className="min-w-0 rounded-3xl border border-zinc-200 bg-white px-3 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
+                {composerAttachments.length ? (
+                  <div className="mb-2 flex flex-wrap gap-1.5 px-1">
+                    {composerAttachments.map((a) => {
+                      const isPdf = a.media_type === "application/pdf";
+                      const Icon = isPdf ? FileText : ImageIcon;
+                      return (
+                        <div
+                          key={a.id}
+                          className="flex max-w-full items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700"
+                          title={`${a.filename} • ${formatBytes(a.size)}`}
+                        >
+                          <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                          <span className="max-w-[180px] truncate">{a.filename}</span>
+                          <span className="shrink-0 text-zinc-400">{formatBytes(a.size)}</span>
+                          <button
+                            type="button"
+                            className="rounded-full p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900"
+                            aria-label={`Remove ${a.filename}`}
+                            title="Remove"
+                            onClick={() =>
+                              setComposerAttachments((prev) =>
+                                prev.filter((item) => item.id !== a.id),
+                              )
+                            }
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <div className="flex min-w-0 items-center gap-2">
+                  <input
+                    ref={attachmentInputRef}
+                    type="file"
+                    className="hidden"
+                    accept={ATTACHMENT_ACCEPT}
+                    multiple
+                    onChange={(e) => {
+                      const files = e.currentTarget.files;
+                      e.currentTarget.value = "";
+                      void onAttachmentFilesSelected(files);
+                    }}
+                  />
                   <Button
+                    variant="ghost"
                     size="icon"
-                    aria-label="Interrupt"
-                    className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
-                    onClick={async () => {
-                      if (!cancellableRunId) return;
-                      try {
-                        await api.cancelRun(cancellableRunId);
-                        await refreshSessions();
-                      } catch (err) {
-                        handleApiError(err);
+                    aria-label="Attach files"
+                    title="Attach files"
+                    disabled={attachmentReading}
+                    className="h-9 w-9 shrink-0 rounded-full"
+                    onClick={() => attachmentInputRef.current?.click()}
+                  >
+                    <Plus className="h-4 w-4 text-zinc-700" />
+                  </Button>
+
+                  <Textarea
+                    ref={composerRef}
+                    value={composerText}
+                    onChange={(e) => setComposerText(e.target.value)}
+                    placeholder="Ask anything…"
+                    className="min-h-[44px] max-h-[240px] min-w-0 flex-1 resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        onSend();
                       }
                     }}
-                  >
-                    <Square className="h-4 w-4" />
-                  </Button>
-                ) : (
-                  <Button
-                    size="icon"
-                    aria-label="Send"
-                    onClick={onSend}
-                    disabled={!composerHasText}
-                    className="shrink-0 rounded-full"
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </Button>
-                )}
+                  />
+
+                  {showInterrupt ? (
+                    <Button
+                      size="icon"
+                      aria-label="Interrupt"
+                      className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
+                      onClick={async () => {
+                        if (!cancellableRunId) return;
+                        try {
+                          await api.cancelRun(cancellableRunId);
+                          await refreshSessions();
+                        } catch (err) {
+                          handleApiError(err);
+                        }
+                      }}
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="icon"
+                      aria-label="Send"
+                      onClick={onSend}
+                      disabled={!composerHasText || attachmentReading}
+                      className="shrink-0 rounded-full"
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               </div>
 
               <div className="absolute left-full top-1/2 hidden -translate-y-1/2 translate-x-2 items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm xl:flex">

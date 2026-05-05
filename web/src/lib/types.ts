@@ -93,7 +93,13 @@ export interface UserMessage {
   id: string;
   created_at: string;
   content: string;
+  attachments?: MessageAttachment[];
   delivery_state?: "queued" | "sent";
+}
+
+export interface MessageAttachment {
+  filename: string;
+  media_type: string;
 }
 
 export interface AssistantMessage {
@@ -216,10 +222,16 @@ export interface FsListResponse {
 export type OpenWorkspaceTarget = "vscode" | "file_manager" | "terminal";
 
 export type RunInput =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; attachments?: RunAttachment[] }
   | { type: "from_user_message"; user_message_id: number }
   | { type: "edit_user_message"; user_message_id: number; content: string }
   | { type: "regenerate_after_user_message"; user_message_id: number };
+
+export interface RunAttachment {
+  filename: string;
+  media_type: string;
+  data: string;
+}
 
 export interface RunOverrides {
   agent?: string;

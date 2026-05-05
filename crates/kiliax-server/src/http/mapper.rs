@@ -222,6 +222,15 @@ impl From<domain::ToolCall> for api::ToolCall {
     }
 }
 
+impl From<domain::MessageAttachment> for api::MessageAttachment {
+    fn from(value: domain::MessageAttachment) -> Self {
+        Self {
+            filename: value.filename,
+            media_type: value.media_type,
+        }
+    }
+}
+
 impl From<domain::Message> for api::Message {
     fn from(value: domain::Message) -> Self {
         match value {
@@ -229,10 +238,12 @@ impl From<domain::Message> for api::Message {
                 id,
                 created_at,
                 content,
+                attachments,
             } => Self::User {
                 id,
                 created_at,
                 content,
+                attachments: attachments.into_iter().map(Into::into).collect(),
             },
             domain::Message::Assistant {
                 id,
@@ -298,7 +309,10 @@ impl From<domain::EventList> for api::EventListResponse {
 impl From<domain::RunInput> for api::RunInput {
     fn from(value: domain::RunInput) -> Self {
         match value {
-            domain::RunInput::Text { text } => Self::Text { text },
+            domain::RunInput::Text { text, attachments } => Self::Text {
+                text,
+                attachments: attachments.into_iter().map(Into::into).collect(),
+            },
             domain::RunInput::FromUserMessage { user_message_id } => {
                 Self::FromUserMessage { user_message_id }
             }
@@ -319,7 +333,10 @@ impl From<domain::RunInput> for api::RunInput {
 impl From<api::RunInput> for domain::RunInput {
     fn from(value: api::RunInput) -> Self {
         match value {
-            api::RunInput::Text { text } => Self::Text { text },
+            api::RunInput::Text { text, attachments } => Self::Text {
+                text,
+                attachments: attachments.into_iter().map(Into::into).collect(),
+            },
             api::RunInput::FromUserMessage { user_message_id } => {
                 Self::FromUserMessage { user_message_id }
             }
@@ -333,6 +350,26 @@ impl From<api::RunInput> for domain::RunInput {
             api::RunInput::RegenerateAfterUserMessage { user_message_id } => {
                 Self::RegenerateAfterUserMessage { user_message_id }
             }
+        }
+    }
+}
+
+impl From<domain::RunAttachment> for api::RunAttachment {
+    fn from(value: domain::RunAttachment) -> Self {
+        Self {
+            filename: value.filename,
+            media_type: value.media_type,
+            data: value.data,
+        }
+    }
+}
+
+impl From<api::RunAttachment> for domain::RunAttachment {
+    fn from(value: api::RunAttachment) -> Self {
+        Self {
+            filename: value.filename,
+            media_type: value.media_type,
+            data: value.data,
         }
     }
 }

@@ -55,6 +55,7 @@ impl UserMessageContent {
             UserMessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
                 UserContentPart::Text { text } => Some(text.as_str()),
                 UserContentPart::Image { .. } => None,
+                UserContentPart::File { .. } => None,
             }),
         }
     }
@@ -70,9 +71,18 @@ impl UserMessageContent {
                     }
                     match part {
                         UserContentPart::Text { text } => out.push_str(text),
-                        UserContentPart::Image { path, .. } => {
+                        UserContentPart::Image { path, filename, .. } => {
                             out.push_str("[image: ");
-                            out.push_str(path);
+                            out.push_str(content_label(
+                                filename.as_deref(),
+                                Some(path),
+                                "uploaded image",
+                            ));
+                            out.push(']');
+                        }
+                        UserContentPart::File { filename, .. } => {
+                            out.push_str("[file: ");
+                            out.push_str(content_label(Some(filename), None, "uploaded file"));
                             out.push(']');
                         }
                     }
@@ -93,8 +103,33 @@ pub enum UserContentPart {
         /// Local filesystem path or URL.
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<ImageDetail>,
     },
+    File {
+        filename: String,
+        media_type: String,
+        /// Raw base64 bytes without a data URL prefix.
+        data: String,
+    },
+}
+
+fn content_label<'a>(
+    filename: Option<&'a str>,
+    path: Option<&'a str>,
+    fallback: &'static str,
+) -> &'a str {
+    if let Some(filename) = filename.map(str::trim).filter(|s| !s.is_empty()) {
+        return filename;
+    }
+    if let Some(path) = path.map(str::trim).filter(|s| !s.is_empty()) {
+        if path.starts_with("data:") {
+            return fallback;
+        }
+        return path;
+    }
+    fallback
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

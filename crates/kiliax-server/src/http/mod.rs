@@ -7,6 +7,7 @@ mod middleware;
 mod openapi;
 mod web;
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware as axum_middleware;
 use axum::routing::get;
 use axum::{Extension, Router};
@@ -68,5 +69,6 @@ pub fn build_app(state: Arc<ServerState>) -> Router {
             state,
             middleware::auth_middleware,
         ))
+        .layer(DefaultBodyLimit::max(72 * 1024 * 1024))
         .layer(axum_middleware::from_fn(middleware::access_log_middleware))
 }

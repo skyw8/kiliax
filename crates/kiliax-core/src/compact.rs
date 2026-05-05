@@ -48,6 +48,7 @@ pub fn estimate_context_tokens(messages: &[Message]) -> usize {
                                 total = total.saturating_add(approx_token_count(text));
                             }
                             UserContentPart::Image { .. } => {}
+                            UserContentPart::File { .. } => {}
                         }
                     }
                     if !saw_text {

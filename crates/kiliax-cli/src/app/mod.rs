@@ -934,7 +934,11 @@ impl App {
                 .strip_prefix(&self.workspace_root)
                 .unwrap_or(path_for_message.as_path());
             let path = rel.to_string_lossy().replace('\\', "/");
-            parts.push(UserContentPart::Image { path, detail: None });
+            parts.push(UserContentPart::Image {
+                path,
+                filename: None,
+                detail: None,
+            });
         }
 
         let content = if parts.len() == 1 {

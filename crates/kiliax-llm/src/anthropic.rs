@@ -12,6 +12,7 @@ use crate::types::{
     ToolCallDelta, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
 };
 
+use super::openai_conv::validate_pdf_file_data;
 use super::tool_names::{
     to_internal_tool_name, to_wire_tool_choice, to_wire_tool_definition, to_wire_tool_name,
 };
@@ -240,6 +241,9 @@ enum AnthropicContentBlock {
     Image {
         source: AnthropicImageSource,
     },
+    Document {
+        source: AnthropicDocumentSource,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -256,6 +260,12 @@ enum AnthropicContentBlock {
 enum AnthropicImageSource {
     Base64 { media_type: String, data: String },
     Url { url: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicDocumentSource {
+    Base64 { media_type: String, data: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -429,6 +439,16 @@ async fn user_content_to_anthropic(
                     UserContentPart::Image { path, .. } => {
                         blocks.push(AnthropicContentBlock::Image {
                             source: image_source_from_path(&path).await?,
+                        });
+                    }
+                    UserContentPart::File {
+                        filename,
+                        media_type,
+                        data,
+                    } => {
+                        validate_pdf_file_data(&filename, &media_type, &data)?;
+                        blocks.push(AnthropicContentBlock::Document {
+                            source: AnthropicDocumentSource::Base64 { media_type, data },
                         });
                     }
                 }
@@ -1115,6 +1135,42 @@ mod tests {
             serde_json::json!({"type": "tool", "name": "read"})
         );
         assert_eq!(json["max_tokens"], serde_json::json!(128));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn maps_pdf_file_data_to_document_block() {
+        let req = ChatRequest::new(vec![Message::User {
+            content: UserMessageContent::Parts(vec![
+                UserContentPart::Text {
+                    text: "read".to_string(),
+                },
+                UserContentPart::File {
+                    filename: "paper.pdf".to_string(),
+                    media_type: "application/pdf".to_string(),
+                    data: "JVBERi0=".to_string(),
+                },
+            ]),
+        }]);
+
+        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let json = serde_json::to_value(body).unwrap();
+
+        assert_eq!(
+            json["messages"][0]["content"][1]["type"],
+            serde_json::json!("document")
+        );
+        assert_eq!(
+            json["messages"][0]["content"][1]["source"]["type"],
+            serde_json::json!("base64")
+        );
+        assert_eq!(
+            json["messages"][0]["content"][1]["source"]["media_type"],
+            serde_json::json!("application/pdf")
+        );
+        assert_eq!(
+            json["messages"][0]["content"][1]["source"]["data"],
+            serde_json::json!("JVBERi0=")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

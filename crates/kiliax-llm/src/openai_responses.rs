@@ -10,7 +10,7 @@ use tokio_stream::StreamExt;
 use tracing::Instrument;
 
 use crate::openai_config::KiliaxOpenAIConfig;
-use crate::openai_conv::image_url_from_path;
+use crate::openai_conv::{image_url_from_path, validate_pdf_file_data};
 use crate::types::{
     ChatRequest, ChatResponse, ChatStreamChunk, FinishReason, ImageDetail, Message,
     ProviderMessageMetadata, TokenUsage, ToolCall, ToolCallDelta, ToolChoice, ToolDefinition,
@@ -375,7 +375,7 @@ async fn user_content_to_responses(content: UserMessageContent) -> Result<Vec<Va
                         saw_text = true;
                         out.push(json!({"type": "input_text", "text": text}));
                     }
-                    UserContentPart::Image { path, detail } => {
+                    UserContentPart::Image { path, detail, .. } => {
                         let image_url = image_url_from_path(&path, detail.clone()).await?;
                         let mut item = json!({
                             "type": "input_image",
@@ -385,6 +385,18 @@ async fn user_content_to_responses(content: UserMessageContent) -> Result<Vec<Va
                             item["detail"] = Value::String(image_detail_to_responses(detail));
                         }
                         out.push(item);
+                    }
+                    UserContentPart::File {
+                        filename,
+                        media_type,
+                        data,
+                    } => {
+                        validate_pdf_file_data(&filename, &media_type, &data)?;
+                        out.push(json!({
+                            "type": "input_file",
+                            "filename": filename,
+                            "file_data": data,
+                        }));
                     }
                 }
             }
@@ -1089,6 +1101,36 @@ mod tests {
         );
         assert_eq!(body["parallel_tool_calls"], json!(false));
         assert_eq!(body["max_output_tokens"], json!(64));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn maps_pdf_file_data_to_responses_input_file() {
+        let req = ChatRequest::new(vec![Message::User {
+            content: UserMessageContent::Parts(vec![
+                UserContentPart::Text {
+                    text: "read".to_string(),
+                },
+                UserContentPart::File {
+                    filename: "paper.pdf".to_string(),
+                    media_type: "application/pdf".to_string(),
+                    data: "JVBERi0=".to_string(),
+                },
+            ]),
+        }]);
+
+        let body = to_responses_request("gpt-test", req, false, None)
+            .await
+            .unwrap();
+
+        assert_eq!(body["input"][0]["content"][1]["type"], json!("input_file"));
+        assert_eq!(
+            body["input"][0]["content"][1]["filename"],
+            json!("paper.pdf")
+        );
+        assert_eq!(
+            body["input"][0]["content"][1]["file_data"],
+            json!("JVBERi0=")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

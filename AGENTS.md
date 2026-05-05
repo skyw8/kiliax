@@ -30,7 +30,7 @@ minimal
 - Context compaction (auto + `/compact`): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
 - Config + model/agent defaults + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
-- Protocol compatibility re-exports (messages/tool-calls/usage): `crates/kiliax-core/src/protocol.rs`
+- Protocol compatibility re-exports (messages/tool-calls/usage + base64 image/PDF content parts): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
@@ -55,10 +55,10 @@ minimal
 ### crates/kiliax-llm (LLM facade + providers)
 
 - Provider-neutral LLM facade, provider API routing, shared LLM error classification, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
-- Protocol types (messages/tool-calls/usage/stream chunks) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
-- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
-- OpenAI Responses API provider (request conversion, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing): `crates/kiliax-llm/src/openai_responses.rs`
-- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + grouped tool_result request blocks + parallel tool-use controls): `crates/kiliax-llm/src/anthropic.rs`
+- Protocol types (messages/tool-calls/usage/stream chunks + image/PDF user content parts) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
+- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
+- OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing): `crates/kiliax-llm/src/openai_responses.rs`
+- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls): `crates/kiliax-llm/src/anthropic.rs`
 
 ### crates/kiliax-cli (TUI)
 
@@ -71,12 +71,12 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/session actions: `crates/kiliax-server/src/http/`
+- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/session actions + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
-- State domain types (events/status/snapshots/runs/messages): `crates/kiliax-server/src/state/domain.rs`
+- State domain types (events/status/snapshots/runs/messages + attachment metadata/base64 run input): `crates/kiliax-server/src/state/domain.rs`
 - Infra (path validation/tmp workspace helpers/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
-- REST/OpenAPI schemas (includes message `usage` and session default writes): `crates/kiliax-server/src/api.rs`
+- REST/OpenAPI schemas (includes message `usage`, session default writes, and run/message attachments): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 
 ### crates/kiliax-otel (OpenTelemetry)
@@ -85,8 +85,8 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + WS streaming/session actions): `web/src/app.tsx`
-- Message rendering + user input collapse controls + queued user bubble styling: `web/src/components/message-row.tsx`
+- Main UI (responsive layout + WS streaming/session actions + composer image/PDF attachments): `web/src/app.tsx`
+- Message rendering + user input collapse controls + queued user bubble styling + attachment chips: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Folder picker + path entry UX: `web/src/components/folder-picker.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
@@ -94,7 +94,7 @@ minimal
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + explicit session default persistence + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
-- Types (includes message `usage` and session default writes): `web/src/lib/types.ts`
+- Types (includes message `usage`, session default writes, and base64 run attachments): `web/src/lib/types.ts`
 
 ## constraints
 **All UI languages default to English, including any prompts, outputs, etc.**

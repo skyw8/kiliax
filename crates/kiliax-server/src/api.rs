@@ -236,6 +236,8 @@ fn default_true() -> bool {
 pub enum RunInput {
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<RunAttachment>,
     },
     FromUserMessage {
         user_message_id: u64,
@@ -247,6 +249,15 @@ pub enum RunInput {
     RegenerateAfterUserMessage {
         user_message_id: u64,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunAttachment {
+    pub filename: String,
+    pub media_type: String,
+    /// Raw base64 bytes without a data URL prefix.
+    pub data: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
@@ -445,6 +456,8 @@ pub enum Message {
         id: String,
         created_at: String,
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<MessageAttachment>,
     },
     Assistant {
         id: String,
@@ -463,6 +476,12 @@ pub enum Message {
         tool_call_id: String,
         content: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MessageAttachment {
+    pub filename: String,
+    pub media_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

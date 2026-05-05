@@ -14,6 +14,7 @@ use async_openai::{
     },
 };
 use base64::Engine as _;
+use serde_json::{json, Value};
 
 use crate::types::{
     ImageDetail, Message, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
@@ -114,6 +115,16 @@ pub(super) async fn to_openai_message(
     })
 }
 
+pub(super) async fn to_openai_message_value(msg: &Message) -> Result<Value, LlmError> {
+    match msg {
+        Message::User { content } => Ok(json!({
+            "role": "user",
+            "content": to_openai_user_content_value(content).await?,
+        })),
+        _ => serde_json::to_value(to_openai_message(msg).await?).map_err(LlmError::Json),
+    }
+}
+
 pub(super) async fn to_openai_user_content(
     content: &UserMessageContent,
 ) -> Result<ChatCompletionRequestUserMessageContent, LlmError> {
@@ -138,11 +149,17 @@ pub(super) async fn to_openai_user_content(
                             ChatCompletionRequestMessageContentPartText { text: text.clone() },
                         ))
                     }
-                    UserContentPart::Image { path, detail } => {
+                    UserContentPart::Image { path, detail, .. } => {
                         let image_url = image_url_from_path(path, detail.clone()).await?;
                         out.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
                             ChatCompletionRequestMessageContentPartImage { image_url },
                         ));
+                    }
+                    UserContentPart::File { .. } => {
+                        return Err(LlmError::OpenAI(OpenAIError::InvalidArgument(
+                            "file content is only supported by the raw OpenAI chat request path"
+                                .to_string(),
+                        )));
                     }
                 }
             }
@@ -169,7 +186,96 @@ pub(super) async fn to_openai_user_content(
     }
 }
 
+pub(super) async fn to_openai_user_content_value(
+    content: &UserMessageContent,
+) -> Result<Value, LlmError> {
+    match content {
+        UserMessageContent::Text(text) => {
+            if text.trim().is_empty() {
+                return Err(LlmError::OpenAI(OpenAIError::InvalidArgument(
+                    "user message text must not be empty".to_string(),
+                )));
+            }
+            Ok(Value::String(text.clone()))
+        }
+        UserMessageContent::Parts(parts) => {
+            let mut out = Vec::new();
+            let mut saw_text = false;
+            for part in parts {
+                match part {
+                    UserContentPart::Text { text } => {
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        saw_text = true;
+                        out.push(json!({"type": "text", "text": text}));
+                    }
+                    UserContentPart::Image { path, detail, .. } => {
+                        let image_url = image_url_from_path(path, detail.clone()).await?;
+                        out.push(json!({
+                            "type": "image_url",
+                            "image_url": image_url,
+                        }));
+                    }
+                    UserContentPart::File {
+                        filename,
+                        media_type,
+                        data,
+                    } => {
+                        validate_pdf_file_data(filename, media_type, data)?;
+                        out.push(json!({
+                            "type": "file",
+                            "file": {
+                                "filename": filename,
+                                "file_data": data,
+                            },
+                        }));
+                    }
+                }
+            }
+            if out.is_empty() {
+                return Err(LlmError::OpenAI(OpenAIError::InvalidArgument(
+                    "user message content must not be empty".to_string(),
+                )));
+            }
+            if !saw_text {
+                out.insert(0, json!({"type": "text", "text": "."}));
+            }
+            Ok(Value::Array(out))
+        }
+    }
+}
+
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
+pub(super) fn validate_pdf_file_data(
+    filename: &str,
+    media_type: &str,
+    data: &str,
+) -> Result<(), LlmError> {
+    if filename.trim().is_empty() {
+        return Err(LlmError::InvalidRequest(
+            "file filename must not be empty".to_string(),
+        ));
+    }
+    if !media_type.eq_ignore_ascii_case("application/pdf") {
+        return Err(LlmError::InvalidRequest(format!(
+            "unsupported file media type `{media_type}`"
+        )));
+    }
+    let data = data.trim();
+    if data.is_empty() {
+        return Err(LlmError::InvalidRequest(
+            "file base64 data must not be empty".to_string(),
+        ));
+    }
+    if data.starts_with("data:") {
+        return Err(LlmError::InvalidRequest(
+            "file data must be raw base64, not a data URL".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 pub(super) async fn image_url_from_path(
     path: &str,

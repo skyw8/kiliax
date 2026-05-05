@@ -1,17 +1,17 @@
 use std::pin::Pin;
 
 use async_openai::{
-    config::Config as OpenAIConfigTrait,
-    error::OpenAIError,
-    types::{ChatCompletionRequestMessage, ChatCompletionTool, CreateChatCompletionRequestArgs},
-    Client,
+    config::Config as OpenAIConfigTrait, error::OpenAIError, types::ChatCompletionTool, Client,
 };
 use opentelemetry::KeyValue;
 use reqwest_eventsource::{Event, RequestBuilderExt};
+use serde_json::{json, Value};
 use tokio_stream::{Stream, StreamExt};
 use tracing::Instrument;
 
-use crate::types::{ChatRequest, ChatResponse, ChatStreamChunk, TokenUsage, ToolChoice};
+use crate::types::{
+    ChatRequest, ChatResponse, ChatStreamChunk, TokenUsage, ToolChoice, ToolDefinition,
+};
 
 mod anthropic;
 mod api_errors;
@@ -31,7 +31,7 @@ use byot::{
     ByotCreateChatCompletionStreamResponse,
 };
 use openai_config::KiliaxOpenAIConfig;
-use openai_conv::{to_openai_message, to_openai_tool, to_openai_tool_choice};
+use openai_conv::{to_openai_message_value, to_openai_tool, to_openai_tool_choice};
 use openai_responses::OpenAiResponsesProvider;
 use patches::{
     inject_prompt_cache_fields, inject_reasoning_content_for_tool_calls,
@@ -265,6 +265,61 @@ impl OpenAICompatibleProvider {
     }
 }
 
+async fn build_openai_chat_body(
+    model: &str,
+    internal_messages: &[crate::types::Message],
+    tools: Vec<ToolDefinition>,
+    tool_choice: &ToolChoice,
+    parallel_tool_calls: Option<bool>,
+    temperature: Option<f32>,
+    max_completion_tokens: Option<u32>,
+    stream: bool,
+) -> Result<Value, LlmError> {
+    let mut messages = Vec::with_capacity(internal_messages.len());
+    for msg in internal_messages {
+        messages.push(to_openai_message_value(msg).await?);
+    }
+
+    let mut body = json!({
+        "model": model,
+        "messages": messages,
+    });
+    let obj = body
+        .as_object_mut()
+        .expect("chat completion request body is an object");
+
+    if stream {
+        obj.insert("stream".to_string(), Value::Bool(true));
+    }
+    if !tools.is_empty() {
+        let tools: Vec<ChatCompletionTool> = tools.into_iter().map(to_openai_tool).collect();
+        obj.insert("tools".to_string(), serde_json::to_value(tools)?);
+        if tool_choice != &ToolChoice::Auto {
+            obj.insert(
+                "tool_choice".to_string(),
+                serde_json::to_value(to_openai_tool_choice(tool_choice))?,
+            );
+        }
+    }
+    if let Some(parallel_tool_calls) = parallel_tool_calls {
+        obj.insert(
+            "parallel_tool_calls".to_string(),
+            Value::Bool(parallel_tool_calls),
+        );
+    }
+    if let Some(temperature) = temperature {
+        obj.insert("temperature".to_string(), json!(temperature));
+    }
+    if let Some(max_completion_tokens) = max_completion_tokens {
+        obj.insert(
+            "max_completion_tokens".to_string(),
+            json!(max_completion_tokens),
+        );
+    }
+
+    Ok(body)
+}
+
 #[async_trait::async_trait]
 impl LlmProvider for OpenAICompatibleProvider {
     fn route(&self) -> &ProviderRoute {
@@ -325,42 +380,17 @@ impl LlmProvider for OpenAICompatibleProvider {
         }
 
         let res: Result<ChatResponse, LlmError> = async {
-            let mut messages: Vec<ChatCompletionRequestMessage> =
-                Vec::with_capacity(internal_messages.len());
-            for msg in &internal_messages {
-                messages.push(to_openai_message(msg).await?);
-            }
-
-            let mut builder = CreateChatCompletionRequestArgs::default();
-            builder.model(&self.route.model).messages(messages);
-
-            if !tools.is_empty() {
-                let tools: Vec<ChatCompletionTool> =
-                    tools.into_iter().map(to_openai_tool).collect();
-                builder.tools(tools);
-                if tool_choice != ToolChoice::Auto {
-                    builder.tool_choice(to_openai_tool_choice(&tool_choice));
-                }
-            }
-
-            if let Some(parallel_tool_calls) = parallel_tool_calls {
-                builder.parallel_tool_calls(parallel_tool_calls);
-            }
-
-            if let Some(temperature) = temperature {
-                builder.temperature(temperature);
-            }
-
-            if let Some(max_completion_tokens) = max_completion_tokens {
-                builder.max_completion_tokens(max_completion_tokens);
-            }
-
-            let request = builder.build()?;
-            let mut body = serde_json::to_value(&request).map_err(|e| {
-                LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
-                    "failed to serialize request: {e}"
-                )))
-            })?;
+            let mut body = build_openai_chat_body(
+                &self.route.model,
+                &internal_messages,
+                tools,
+                &tool_choice,
+                parallel_tool_calls,
+                temperature,
+                max_completion_tokens,
+                false,
+            )
+            .await?;
 
             if should_inject_reasoning_content(&self.route) {
                 inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
@@ -562,43 +592,17 @@ impl LlmProvider for OpenAICompatibleProvider {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<ChatStreamChunk, LlmError>>();
 
         let setup: Result<(), LlmError> = async {
-            let mut messages: Vec<ChatCompletionRequestMessage> =
-                Vec::with_capacity(internal_messages.len());
-            for msg in &internal_messages {
-                messages.push(to_openai_message(msg).await?);
-            }
-
-            let mut builder = CreateChatCompletionRequestArgs::default();
-            builder.model(&self.route.model).messages(messages);
-
-            if !tools.is_empty() {
-                let tools: Vec<ChatCompletionTool> =
-                    tools.into_iter().map(to_openai_tool).collect();
-                builder.tools(tools);
-                if tool_choice != ToolChoice::Auto {
-                    builder.tool_choice(to_openai_tool_choice(&tool_choice));
-                }
-            }
-
-            if let Some(parallel_tool_calls) = parallel_tool_calls {
-                builder.parallel_tool_calls(parallel_tool_calls);
-            }
-
-            if let Some(temperature) = temperature {
-                builder.temperature(temperature);
-            }
-
-            if let Some(max_completion_tokens) = max_completion_tokens {
-                builder.max_completion_tokens(max_completion_tokens);
-            }
-
-            let mut request = builder.build()?;
-            request.stream = Some(true);
-            let mut body = serde_json::to_value(&request).map_err(|e| {
-                LlmError::OpenAI(OpenAIError::InvalidArgument(format!(
-                    "failed to serialize request: {e}"
-                )))
-            })?;
+            let mut body = build_openai_chat_body(
+                &self.route.model,
+                &internal_messages,
+                tools,
+                &tool_choice,
+                parallel_tool_calls,
+                temperature,
+                max_completion_tokens,
+                true,
+            )
+            .await?;
 
             if should_inject_reasoning_content(&self.route) {
                 inject_reasoning_content_for_tool_calls(&mut body, &internal_messages);
@@ -909,9 +913,11 @@ mod tests {
     use crate::types::{Message, ToolDefinition};
     use crate::types::{UserContentPart, UserMessageContent};
     use async_openai::types::{
-        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+        ChatCompletionRequestMessage, ChatCompletionRequestUserMessageContent,
+        ChatCompletionRequestUserMessageContentPart,
     };
 
+    use super::openai_conv::to_openai_message;
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
@@ -952,6 +958,7 @@ mod tests {
     async fn image_only_user_message_includes_non_empty_text_part() {
         let content = UserMessageContent::Parts(vec![UserContentPart::Image {
             path: "data:image/png;base64,AA==".to_string(),
+            filename: None,
             detail: None,
         }]);
         let openai = openai_conv::to_openai_user_content(&content).await.unwrap();
@@ -962,6 +969,45 @@ mod tests {
             panic!("expected first part to be text");
         };
         assert!(!t.text.trim().is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn openai_chat_body_maps_pdf_file_data_part() {
+        let req = ChatRequest::new(vec![Message::User {
+            content: UserMessageContent::Parts(vec![
+                UserContentPart::Text {
+                    text: "summarize".to_string(),
+                },
+                UserContentPart::File {
+                    filename: "report.pdf".to_string(),
+                    media_type: "application/pdf".to_string(),
+                    data: "JVBERi0=".to_string(),
+                },
+            ]),
+        }]);
+
+        let body = build_openai_chat_body(
+            "gpt-test",
+            &req.messages,
+            req.tools,
+            &req.tool_choice,
+            req.parallel_tool_calls,
+            req.temperature,
+            req.max_completion_tokens,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["messages"][0]["content"][1]["type"], json!("file"));
+        assert_eq!(
+            body["messages"][0]["content"][1]["file"]["filename"],
+            json!("report.pdf")
+        );
+        assert_eq!(
+            body["messages"][0]["content"][1]["file"]["file_data"],
+            json!("JVBERi0=")
+        );
     }
 
     #[test]

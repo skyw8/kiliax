@@ -3,7 +3,9 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  FileText,
   GitFork,
+  Image as ImageIcon,
   MoreHorizontal,
   Pencil,
   RefreshCcw,
@@ -16,7 +18,7 @@ import {
   hasMermaidFence,
   parseMessageId,
 } from "../lib/app-utils";
-import type { Message, ToolCall } from "../lib/types";
+import type { Message, MessageAttachment, ToolCall } from "../lib/types";
 import { CodeBlock } from "./code-block";
 import { Markdown, type MermaidErrorInfo } from "./markdown";
 
@@ -26,6 +28,37 @@ const USER_COLLAPSE_LINE_LIMIT = 10;
 function shouldCollapseUserMessage(content: string): boolean {
   if (content.length > USER_COLLAPSE_CHAR_LIMIT) return true;
   return content.split(/\r\n|\r|\n/).length > USER_COLLAPSE_LINE_LIMIT;
+}
+
+function renderUserAttachments(
+  attachments: MessageAttachment[] | undefined,
+  dark: boolean,
+  hasContent: boolean,
+) {
+  if (!attachments?.length) return null;
+  return (
+    <div className={`${hasContent ? "mt-2" : ""} flex flex-wrap gap-1.5`}>
+      {attachments.map((a, idx) => {
+        const isPdf = a.media_type === "application/pdf";
+        const Icon = isPdf ? FileText : ImageIcon;
+        return (
+          <div
+            key={`${a.filename}-${idx}`}
+            className={[
+              "flex max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-xs",
+              dark
+                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                : "border-zinc-300 bg-zinc-200 text-zinc-800",
+            ].join(" ")}
+            title={a.filename}
+          >
+            <Icon className={["h-3.5 w-3.5 shrink-0", dark ? "text-zinc-300" : "text-zinc-600"].join(" ")} />
+            <span className="max-w-[220px] truncate">{a.filename}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function renderToolCalls(
@@ -94,6 +127,7 @@ export function MessageRow({
     const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     const queued = msg.delivery_state === "queued";
+    const attachments = msg.attachments ?? [];
     const bubbleTone = queued
       ? "bg-zinc-300 text-zinc-800"
       : "bg-zinc-900 text-zinc-50";
@@ -147,15 +181,18 @@ export function MessageRow({
             </button>
           ) : null}
 
-          <div
-            className={[
-              "whitespace-pre-wrap break-words",
-              collapsible ? "pr-7" : "",
-              collapsed ? "max-h-32 overflow-hidden" : "",
-            ].join(" ")}
-          >
-            {msg.content}
-          </div>
+          {msg.content ? (
+            <div
+              className={[
+                "whitespace-pre-wrap break-words",
+                collapsible ? "pr-7" : "",
+                collapsed ? "max-h-32 overflow-hidden" : "",
+              ].join(" ")}
+            >
+              {msg.content}
+            </div>
+          ) : null}
+          {renderUserAttachments(attachments, !queued, Boolean(msg.content))}
         </div>
       </div>
     );
