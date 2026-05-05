@@ -39,6 +39,7 @@ import { Textarea } from "./components/ui/textarea";
 type PendingMessage = {
   sessionId: string;
   runId: string;
+  localMessageId?: string;
   baseEventId: number;
   createdAt: string;
   content: string;
@@ -152,6 +153,8 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
+  const pendingRef = useRef<PendingMessage[]>([]);
+  const localMessageByRunRef = useRef<Record<string, string>>({});
   const skipNextFetchRef = useRef<string | null>(null);
   const isAtBottomRef = useRef(true);
   const wsEvents = useWsEvents({
@@ -368,6 +371,28 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior });
   }
 
+  function markPendingRunSent(runId: string) {
+    if (!runId) return;
+    const localMessageId =
+      localMessageByRunRef.current[runId] ??
+      pendingRef.current.find((p) => p.runId === runId)?.localMessageId;
+    delete localMessageByRunRef.current[runId];
+    setPending((prev) =>
+      prev.map((p) => {
+        if (p.runId !== runId || !p.localMessageId) return p;
+        return { ...p, localMessageId: undefined };
+      }),
+    );
+    if (!localMessageId) return;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.role === "user" && m.id === localMessageId
+          ? { ...m, delivery_state: "sent" }
+          : m,
+      ),
+    );
+  }
+
   async function fetchSession(sessionId: string) {
     try {
       const s = await api.getSession(sessionId);
@@ -403,6 +428,7 @@ export default function App() {
   async function handleEvent(ev: any) {
     const type = ev?.type ?? ev?.event_type;
     if (!type) return;
+    const runId = String(ev?.run_id ?? ev?.runId ?? ev?.data?.run?.id ?? "").trim();
     const eventId = ev?.event_id;
     if (typeof eventId === "number" && Number.isFinite(eventId)) {
       lastEventIdRef.current = Math.max(lastEventIdRef.current, eventId);
@@ -418,6 +444,7 @@ export default function App() {
     }
 
     if (type === "step_start") {
+      markPendingRunSent(runId);
       thinkingStartedAtRef.current = now;
       assistantStartedAtRef.current = null;
       nextThinkingDurationMsRef.current = null;
@@ -426,6 +453,7 @@ export default function App() {
     }
 
     if (type === "assistant_thinking_delta") {
+      markPendingRunSent(runId);
       const delta = ev?.data?.delta ?? "";
       if (!delta) return;
       if (thinkingStartedAtRef.current == null && assistantStartedAtRef.current == null) {
@@ -439,6 +467,7 @@ export default function App() {
     }
 
     if (type === "assistant_delta") {
+      markPendingRunSent(runId);
       const delta = ev?.data?.delta ?? "";
       if (!delta) return;
       if (assistantStartedAtRef.current == null) {
@@ -456,6 +485,7 @@ export default function App() {
     }
 
     if (type === "tool_call") {
+      markPendingRunSent(runId);
       const call = ev?.data?.call;
       if (!call?.name) return;
       const callId = String(call.id ?? "");
@@ -475,6 +505,7 @@ export default function App() {
     }
 
     if (type === "tool_result") {
+      markPendingRunSent(runId);
       const msg = ev?.data?.message;
       if (!msg?.role) return;
       const toolCallId = String(msg?.tool_call_id ?? "");
@@ -492,6 +523,7 @@ export default function App() {
     }
 
     if (type === "assistant_message") {
+      markPendingRunSent(runId);
       const msg = ev?.data?.message;
       if (!msg?.role) return;
       const messageId = String(msg?.id ?? "");
@@ -560,6 +592,9 @@ export default function App() {
     }
 
     if (type === "run_done" || type === "run_error" || type === "run_cancelled") {
+      if (runId) {
+        delete localMessageByRunRef.current[runId];
+      }
       thinkingStartedAtRef.current = null;
       assistantStartedAtRef.current = null;
       nextThinkingDurationMsRef.current = null;
@@ -677,6 +712,7 @@ export default function App() {
           id: localMessageId,
           created_at: localCreatedAt,
           content: text,
+          delivery_state: "queued",
         },
       ]);
       didAppendLocalMessage = true;
@@ -685,11 +721,15 @@ export default function App() {
         input: { type: "text", text },
       });
       createdRunId = String(run?.id ?? "").trim() || null;
+      if (createdRunId) {
+        localMessageByRunRef.current[createdRunId] = localMessageId;
+      }
       setPending((p) => [
         ...p,
         {
           sessionId,
           runId: createdRunId ?? "",
+          localMessageId,
           baseEventId,
           createdAt: new Date().toISOString(),
           content: text,
@@ -1049,6 +1089,10 @@ export default function App() {
     const next = Math.min(maxPx, Math.max(minPx, el.scrollHeight));
     el.style.height = `${next}px`;
   }, [composerText]);
+
+  useEffect(() => {
+    pendingRef.current = pending;
+  }, [pending]);
 
   useEffect(() => {
     setPinnedSessionIds((prev) => {

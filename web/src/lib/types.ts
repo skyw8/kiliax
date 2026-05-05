@@ -93,6 +93,7 @@ export interface UserMessage {
   id: string;
   created_at: string;
   content: string;
+  delivery_state?: "queued" | "sent";
 }
 
 export interface AssistantMessage {

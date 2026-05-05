@@ -93,10 +93,17 @@ export function MessageRow({
     const collapsed = collapsible && !userMessageExpanded;
     const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
+    const queued = msg.delivery_state === "queued";
+    const bubbleTone = queued
+      ? "bg-zinc-300 text-zinc-800"
+      : "bg-zinc-900 text-zinc-50";
+    const collapseButtonTone = queued
+      ? "text-zinc-600 hover:bg-zinc-400/40 hover:text-zinc-900"
+      : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50";
     return (
       <div className="group flex justify-end">
         <div
-          className={`${bubbleWidth} relative rounded-2xl bg-zinc-900 px-4 py-2 text-sm text-zinc-50`}
+          className={`${bubbleWidth} relative rounded-2xl px-4 py-2 text-sm ${bubbleTone}`}
         >
           <div className="absolute right-full top-2 flex items-center gap-1 pr-2 invisible opacity-0 transition-opacity group-hover:visible group-hover:opacity-100">
             <button
@@ -126,7 +133,7 @@ export function MessageRow({
           {collapsible ? (
             <button
               type="button"
-              className="absolute right-2 top-2 rounded-md p-1 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50"
+              className={`absolute right-2 top-2 rounded-md p-1 ${collapseButtonTone}`}
               aria-label={userMessageExpanded ? "Collapse message" : "Expand message"}
               title={userMessageExpanded ? "Collapse" : "Expand"}
               aria-expanded={userMessageExpanded}
