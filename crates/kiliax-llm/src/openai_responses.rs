@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use async_openai::config::Config as OpenAIConfigTrait;
 use async_openai::error::OpenAIError;
+use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest_eventsource::{Event, RequestBuilderExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,6 +18,7 @@ use crate::types::{
 };
 
 use super::api_errors::{map_api_error_response, map_eventsource_error};
+use super::patches::inject_prompt_cache_fields;
 use super::tool_names::{
     to_internal_tool_name, to_wire_tool_choice, to_wire_tool_definition, to_wire_tool_name,
 };
@@ -29,6 +31,7 @@ pub(super) struct OpenAiResponsesProvider {
     http: reqwest::Client,
     cfg: KiliaxOpenAIConfig,
     route: ProviderRoute,
+    prompt_cache_key: Option<String>,
 }
 
 impl OpenAiResponsesProvider {
@@ -38,7 +41,25 @@ impl OpenAiResponsesProvider {
             http: reqwest::Client::new(),
             cfg,
             route,
+            prompt_cache_key: None,
         }
+    }
+
+    pub(super) fn set_prompt_cache_key(&mut self, prompt_cache_key: Option<String>) {
+        self.prompt_cache_key = prompt_cache_key
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+    }
+
+    fn headers(&self) -> HeaderMap {
+        let mut headers = self.cfg.headers();
+        if should_enable_dashscope_session_cache(&self.route) {
+            headers.insert(
+                "x-dashscope-session-cache",
+                HeaderValue::from_static("enable"),
+            );
+        }
+        headers
     }
 }
 
@@ -61,12 +82,18 @@ impl LlmProvider for OpenAiResponsesProvider {
         );
 
         let response: Result<ChatResponse, LlmError> = async {
-            let body = to_responses_request(&self.route.model, req, false).await?;
+            let body = to_responses_request(
+                &self.route.model,
+                req,
+                false,
+                self.prompt_cache_key.as_deref(),
+            )
+            .await?;
             let resp = self
                 .http
                 .post(self.cfg.url("/responses"))
                 .query(&self.cfg.query())
-                .headers(self.cfg.headers())
+                .headers(self.headers())
                 .json(&body)
                 .send()
                 .await
@@ -111,14 +138,19 @@ impl LlmProvider for OpenAiResponsesProvider {
             request.tools = req.tools.len() as u64,
         );
 
-        let body = to_responses_request(&self.route.model, req, true)
-            .instrument(span.clone())
-            .await?;
+        let body = to_responses_request(
+            &self.route.model,
+            req,
+            true,
+            self.prompt_cache_key.as_deref(),
+        )
+        .instrument(span.clone())
+        .await?;
         let event_source = self
             .http
             .post(self.cfg.url("/responses"))
             .query(&self.cfg.query())
-            .headers(self.cfg.headers())
+            .headers(self.headers())
             .json(&body)
             .eventsource()
             .map_err(|err| LlmError::OpenAI(OpenAIError::StreamError(err.to_string())))?;
@@ -194,6 +226,7 @@ async fn to_responses_request(
     model: &str,
     req: ChatRequest,
     stream: bool,
+    prompt_cache_key: Option<&str>,
 ) -> Result<Value, LlmError> {
     let ChatRequest {
         messages,
@@ -309,8 +342,15 @@ async fn to_responses_request(
             json!(max_completion_tokens),
         );
     }
+    inject_prompt_cache_fields(&mut body, prompt_cache_key);
 
     Ok(body)
+}
+
+fn should_enable_dashscope_session_cache(route: &ProviderRoute) -> bool {
+    let provider = route.provider.to_ascii_lowercase();
+    let base_url = route.base_url.to_ascii_lowercase();
+    provider.contains("dashscope") || base_url.contains("dashscope.aliyuncs.com")
 }
 
 async fn user_content_to_responses(content: UserMessageContent) -> Result<Vec<Value>, LlmError> {
@@ -445,7 +485,7 @@ struct ResponseError {
     code: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ResponsesUsage {
     #[serde(default)]
     input_tokens: u32,
@@ -455,6 +495,8 @@ struct ResponsesUsage {
     total_tokens: u32,
     #[serde(default)]
     input_tokens_details: Option<ResponseInputTokenDetails>,
+    #[serde(default)]
+    x_details: Vec<ResponseUsageDetail>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -463,12 +505,25 @@ struct ResponseInputTokenDetails {
     cached_tokens: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct ResponseUsageDetail {
+    #[serde(default)]
+    prompt_tokens_details: Option<ResponseInputTokenDetails>,
+}
+
 impl ResponsesUsage {
     fn into_token_usage(self) -> TokenUsage {
-        let cached = self
+        let top_cached = self
             .input_tokens_details
             .and_then(|d| d.cached_tokens)
             .unwrap_or(0);
+        let detail_cached = self
+            .x_details
+            .iter()
+            .filter_map(|d| d.prompt_tokens_details.and_then(|p| p.cached_tokens))
+            .max()
+            .unwrap_or(0);
+        let cached = top_cached.max(detail_cached);
         TokenUsage {
             prompt_tokens: self.input_tokens,
             completion_tokens: self.output_tokens,
@@ -1019,7 +1074,9 @@ mod tests {
             max_completion_tokens: Some(64),
         };
 
-        let body = to_responses_request("gpt-test", req, false).await.unwrap();
+        let body = to_responses_request("gpt-test", req, false, None)
+            .await
+            .unwrap();
         assert_eq!(body["model"], json!("gpt-test"));
         assert_eq!(body["instructions"], json!("sys\n\ndev"));
         assert_eq!(body["input"][0]["role"], json!("user"));
@@ -1032,6 +1089,38 @@ mod tests {
         );
         assert_eq!(body["parallel_tool_calls"], json!(false));
         assert_eq!(body["max_output_tokens"], json!(64));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn includes_prompt_cache_key_when_present() {
+        let req = ChatRequest::new(vec![user("hi")]);
+
+        let body = to_responses_request("gpt-test", req, false, Some(" session-key "))
+            .await
+            .unwrap();
+
+        assert_eq!(body["prompt_cache_key"], json!("session-key"));
+    }
+
+    #[test]
+    fn enables_dashscope_session_cache_only_for_dashscope_routes() {
+        let dashscope = ProviderRoute {
+            provider: "qwen_dashscope_responses".to_string(),
+            api: crate::ProviderApi::OpenAiResponses,
+            model: "qwen3.5-plus".to_string(),
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+            api_key: None,
+        };
+        let openai = ProviderRoute {
+            provider: "openai".to_string(),
+            api: crate::ProviderApi::OpenAiResponses,
+            model: "gpt-5".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+        };
+
+        assert!(should_enable_dashscope_session_cache(&dashscope));
+        assert!(!should_enable_dashscope_session_cache(&openai));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1062,7 +1151,7 @@ mod tests {
             max_completion_tokens: None,
         };
 
-        let body = to_responses_request("qwen3.5-plus", req, false)
+        let body = to_responses_request("qwen3.5-plus", req, false, None)
             .await
             .unwrap();
 
@@ -1106,7 +1195,9 @@ mod tests {
             },
         ]);
 
-        let body = to_responses_request("gpt-test", req, false).await.unwrap();
+        let body = to_responses_request("gpt-test", req, false, None)
+            .await
+            .unwrap();
         assert_eq!(body["input"][1]["name"], json!("kiliax_web_search"));
         assert_eq!(body["input"][2]["type"], json!("function_call_output"));
         assert_eq!(body["input"][2]["call_id"], json!("call_1"));
@@ -1163,6 +1254,36 @@ mod tests {
         assert_eq!(tool_calls[0].id, "call_1");
         assert_eq!(tool_calls[0].name, "read");
         assert!(provider_metadata.is_some());
+    }
+
+    #[test]
+    fn parses_dashscope_cached_tokens_from_x_details() {
+        let raw = json!({
+            "id": "resp_1",
+            "created_at": 1,
+            "model": "qwen3.5-plus",
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 8072,
+                "output_tokens": 265,
+                "total_tokens": 8337,
+                "input_tokens_details": {"cached_tokens": 0},
+                "x_details": [
+                    {
+                        "prompt_tokens_details": {
+                            "cache_creation_input_tokens": 18,
+                            "cached_tokens": 8048
+                        }
+                    }
+                ]
+            }
+        });
+
+        let parsed: OpenAiResponse = serde_json::from_value(raw).unwrap();
+        let resp = chat_response_from_openai_responses(parsed, "fallback").unwrap();
+
+        assert_eq!(resp.usage.unwrap().cached_tokens, Some(8048));
     }
 
     #[test]

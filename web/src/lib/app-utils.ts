@@ -114,7 +114,9 @@ export function fmtTokenUsage(usage?: {
     `total ${usage.total_tokens}`,
   ];
   const cached = usage.cached_tokens ?? 0;
-  parts.push(`cached ${cached}`);
+  if (cached > 0) {
+    parts.push(`cached ${cached}`);
+  }
   return parts.join(" · ");
 }
 
@@ -141,4 +143,3 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     }
   }
 }
-

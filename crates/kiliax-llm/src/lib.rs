@@ -204,7 +204,10 @@ impl LlmClient {
             ProviderClient::OpenAICompatible(provider) => {
                 provider.set_prompt_cache_key(prompt_cache_key);
             }
-            ProviderClient::OpenAIResponses(_) | ProviderClient::Anthropic(_) => {}
+            ProviderClient::OpenAIResponses(provider) => {
+                provider.set_prompt_cache_key(prompt_cache_key);
+            }
+            ProviderClient::Anthropic(_) => {}
         }
         self
     }

@@ -45,14 +45,14 @@ minimal
 - Provider-neutral LLM facade, provider API routing, shared LLM error classification, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
 - OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
-- OpenAI Responses API provider (request conversion, SSE events, function-call/reasoning item replay + function-tool aliasing): `crates/kiliax-llm/src/openai_responses.rs`
+- OpenAI Responses API provider (request conversion, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing): `crates/kiliax-llm/src/openai_responses.rs`
 - Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + grouped tool_result request blocks + parallel tool-use controls): `crates/kiliax-llm/src/anthropic.rs`
 
 ### crates/kiliax-cli (TUI)
 
 - UI + event loop + slash commands + session bootstrap: `crates/kiliax-cli/src/main.rs`
 - Slash command definitions + popup: `crates/kiliax-cli/src/slash_command.rs`
-- App state + render pipeline + session-local settings changes: `crates/kiliax-cli/src/app/`
+- App state + render pipeline + token usage display + session-local settings changes: `crates/kiliax-cli/src/app/`
 - Terminal init + backend: `crates/kiliax-cli/src/terminal.rs`
 - Server daemon control: `crates/kiliax-cli/src/daemon.rs`
 
@@ -80,7 +80,7 @@ minimal
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
-- API client + explicit session default persistence: `web/src/lib/api.ts`
+- API client + explicit session default persistence + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
 - Types (includes message `usage` and session default writes): `web/src/lib/types.ts`
 
