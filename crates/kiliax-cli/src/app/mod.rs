@@ -93,7 +93,7 @@ enum PendingToolCallKind {
         path: String,
     },
     ShellCommand {
-        argv: Vec<String>,
+        cmd: String,
         cwd: Option<String>,
     },
     WriteStdin {
@@ -1626,7 +1626,7 @@ fn validate_extra_workspace_root(input: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::render::summarize_shell_command_argv;
+    use crate::app::render::summarize_shell_command;
     use kiliax_core::config::ResolvedModel;
     use kiliax_core::config::{Config, ProviderConfig};
     use kiliax_core::llm::LlmClient;
@@ -1751,38 +1751,22 @@ mod tests {
 
     #[test]
     fn shell_command_summary_omits_wrapper_and_setup_steps() {
-        let argv = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "cd /home/skywo/github/kiliax && rg -n shell_command crates/kiliax-cli/src | head -n 5"
-                .to_string(),
-        ];
-        let out = summarize_shell_command_argv(&argv);
+        let cmd =
+            "cd /home/skywo/github/kiliax && rg -n shell_command crates/kiliax-cli/src | head -n 5";
+        let out = summarize_shell_command(cmd);
         assert_eq!(out, "rg -n shell_command crates/kiliax-cli/src | head -n 5");
     }
 
     #[test]
     fn shell_command_summary_strips_env_assignments() {
-        let argv = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "FOO=bar BAR=baz rg -n shell_command crates/kiliax-cli/src".to_string(),
-        ];
-        let out = summarize_shell_command_argv(&argv);
+        let out =
+            summarize_shell_command("FOO=bar BAR=baz rg -n shell_command crates/kiliax-cli/src");
         assert_eq!(out, "rg -n shell_command crates/kiliax-cli/src");
     }
 
     #[test]
-    fn shell_command_summary_falls_back_to_plain_argv() {
-        let argv = vec![
-            "cargo".to_string(),
-            "test".to_string(),
-            "-p".to_string(),
-            "kiliax-core".to_string(),
-            "--".to_string(),
-            "--nocapture".to_string(),
-        ];
-        let out = summarize_shell_command_argv(&argv);
+    fn shell_command_summary_handles_plain_command() {
+        let out = summarize_shell_command("cargo test -p kiliax-core -- --nocapture");
         assert_eq!(out, "cargo test -p kiliax-core -- --nocapture");
     }
 

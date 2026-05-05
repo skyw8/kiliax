@@ -44,7 +44,7 @@ minimal
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
   - `grep_files`: search files for a regex pattern (ripgrep semantics; respects `.gitignore`/`.ignore` by default)
   - `view_image`: attach a local image from the filesystem (png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif)
-  - `shell_command`: run a command in the workspace (argv array, no shell quoting); returns a `session_id` for long-running processes
+  - `shell_command`: run a command string in the workspace through the user's default shell, inheriting the full process environment and using login/profile semantics by default; returns a `session_id` for long-running processes
   - `write_stdin`: write to stdin of a running shell session, or poll its output
   - `write_file`: write/overwrite a file on the local filesystem (requires prior `read_file` when overwriting)
   - `edit_file`: perform exact string replacements in a file (requires prior `read_file`; supports `replaceAll`)

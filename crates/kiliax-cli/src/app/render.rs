@@ -492,39 +492,6 @@ fn summarize_command_tokens(tokens: &[String]) -> String {
     truncate_one_line(&text, MAX_CHARS)
 }
 
-fn wrapped_shell_script(argv: &[String]) -> Option<&str> {
-    let cmd0 = cmd_basename_no_ext(argv.first()?.as_str());
-    let is_posix_shell = cmd0.eq_ignore_ascii_case("bash")
-        || cmd0.eq_ignore_ascii_case("sh")
-        || cmd0.eq_ignore_ascii_case("zsh")
-        || cmd0.eq_ignore_ascii_case("fish");
-    if is_posix_shell {
-        for (idx, arg) in argv.iter().enumerate().skip(1) {
-            if arg == "-c" || arg == "-lc" || arg == "--command" {
-                return argv.get(idx + 1).map(|s| s.as_str());
-            }
-        }
-    }
-
-    if cmd0.eq_ignore_ascii_case("cmd") {
-        for (idx, arg) in argv.iter().enumerate().skip(1) {
-            if arg.eq_ignore_ascii_case("/c") {
-                return argv.get(idx + 1).map(|s| s.as_str());
-            }
-        }
-    }
-
-    if cmd0.eq_ignore_ascii_case("powershell") || cmd0.eq_ignore_ascii_case("pwsh") {
-        for (idx, arg) in argv.iter().enumerate().skip(1) {
-            if arg.eq_ignore_ascii_case("-command") || arg == "-c" {
-                return argv.get(idx + 1).map(|s| s.as_str());
-            }
-        }
-    }
-
-    None
-}
-
 fn summarize_shell_script_command(script: &str) -> String {
     let segments = split_shell_script(script);
     if segments.is_empty() {
@@ -570,14 +537,12 @@ fn summarize_shell_script_command(script: &str) -> String {
     summary
 }
 
-pub(super) fn summarize_shell_command_argv(argv: &[String]) -> String {
-    if let Some(script) = wrapped_shell_script(argv) {
-        let summary = summarize_shell_script_command(script);
-        if !summary.trim().is_empty() {
-            return summary;
-        }
+pub(super) fn summarize_shell_command(cmd: &str) -> String {
+    let summary = summarize_shell_script_command(cmd);
+    if !summary.trim().is_empty() {
+        return summary;
     }
-    summarize_command_tokens(argv)
+    truncate_one_line(cmd, 100)
 }
 
 pub(super) fn format_error_chain_text(err: &dyn std::error::Error) -> String {
@@ -669,7 +634,7 @@ struct ViewImageArgs {
 
 #[derive(Debug, Deserialize)]
 struct ShellCommandArgs {
-    argv: Vec<String>,
+    cmd: String,
     #[serde(default)]
     cwd: Option<String>,
 }
@@ -738,7 +703,7 @@ pub(super) fn classify_tool_call(call: &kiliax_core::protocol::ToolCall) -> Pend
         "shell_command" => serde_json::from_str::<ShellCommandArgs>(&call.arguments)
             .ok()
             .map(|args| PendingToolCallKind::ShellCommand {
-                argv: args.argv,
+                cmd: args.cmd,
                 cwd: args.cwd,
             })
             .unwrap_or(PendingToolCallKind::Other),
@@ -818,8 +783,8 @@ fn summarize_tool_result(
             },
             None,
         ),
-        PendingToolCallKind::ShellCommand { argv, cwd } => {
-            let cmd = summarize_shell_command_argv(argv);
+        PendingToolCallKind::ShellCommand { cmd, cwd } => {
+            let cmd = summarize_shell_command(cmd);
             let mut detail = String::new();
             if let Ok(parsed) = serde_json::from_str::<ShellCommandOutput>(tool_content) {
                 if parsed.running {
@@ -912,8 +877,8 @@ pub(super) fn tool_status_label(pending: &PendingToolCall) -> String {
         PendingToolCallKind::ListDir { path } => format!("list_dir {path}"),
         PendingToolCallKind::GrepFiles { pattern, .. } => format!("grep_files {pattern}"),
         PendingToolCallKind::ViewImage { path } => format!("view_image {path}"),
-        PendingToolCallKind::ShellCommand { argv, .. } => {
-            format!("shell_command {}", summarize_shell_command_argv(argv))
+        PendingToolCallKind::ShellCommand { cmd, .. } => {
+            format!("shell_command {}", summarize_shell_command(cmd))
         }
         PendingToolCallKind::WriteStdin { session_id } => format!("write_stdin {session_id}"),
         PendingToolCallKind::ApplyPatch { files } => match files.len() {

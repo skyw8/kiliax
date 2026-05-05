@@ -803,7 +803,55 @@ mod tests {
             id: "call_1".to_string(),
             name: builtin::TOOL_SHELL_COMMAND.to_string(),
             arguments: serde_json::json!({
-                "argv": ["rm", "-rf", "/"],
+                "cmd": "rm -rf /",
+                "yield_time_ms": 0
+            })
+            .to_string(),
+        };
+
+        let err = engine
+            .execute(&plan_permissions(), &call)
+            .await
+            .unwrap_err();
+        let ToolError::PermissionDenied(_) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plan_denies_disallowed_shell_after_allowed_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = ToolEngine::new(tmp.path(), Config::default());
+
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: builtin::TOOL_SHELL_COMMAND.to_string(),
+            arguments: serde_json::json!({
+                "cmd": "git status && rm -rf /",
+                "yield_time_ms": 0
+            })
+            .to_string(),
+        };
+
+        let err = engine
+            .execute(&plan_permissions(), &call)
+            .await
+            .unwrap_err();
+        let ToolError::PermissionDenied(_) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plan_denies_shell_redirection_even_for_allowed_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = ToolEngine::new(tmp.path(), Config::default());
+
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: builtin::TOOL_SHELL_COMMAND.to_string(),
+            arguments: serde_json::json!({
+                "cmd": "rg hello > out.txt",
                 "yield_time_ms": 0
             })
             .to_string(),

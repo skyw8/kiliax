@@ -50,27 +50,32 @@ pub struct Permissions {
 pub enum ShellPermissions {
     DenyAll,
     AllowAll,
-    /// Allow when argv begins with one of the prefixes (exact token match).
+    /// Allow when the parsed command tokens begin with one of the prefixes.
     AllowList(Vec<Vec<String>>),
 }
 
 impl ShellPermissions {
-    pub fn allows(&self, argv: &[String]) -> bool {
+    pub fn allows_all(&self, command_groups: &[Vec<String>]) -> bool {
         match self {
             ShellPermissions::DenyAll => false,
             ShellPermissions::AllowAll => true,
-            ShellPermissions::AllowList(prefixes) => prefixes.iter().any(|p| is_prefix(p, argv)),
+            ShellPermissions::AllowList(prefixes) => {
+                !command_groups.is_empty()
+                    && command_groups
+                        .iter()
+                        .all(|tokens| prefixes.iter().any(|p| is_prefix(p, tokens)))
+            }
         }
     }
 }
 
-fn is_prefix(prefix: &[String], argv: &[String]) -> bool {
-    if prefix.is_empty() || argv.len() < prefix.len() {
+fn is_prefix(prefix: &[String], command_tokens: &[String]) -> bool {
+    if prefix.is_empty() || command_tokens.len() < prefix.len() {
         return false;
     }
     prefix
         .iter()
-        .zip(argv.iter())
+        .zip(command_tokens.iter())
         .all(|(a, b)| a.as_str() == b.as_str())
 }
 

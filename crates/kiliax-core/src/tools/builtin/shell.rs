@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,18 +20,19 @@ pub fn shell_command_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_SHELL_COMMAND.to_string(),
         description: Some(
-            "Run a command in the workspace (argv array; no shell quoting). If the result includes `session_id`, use `write_stdin` to interact/poll."
+            "Run a command in the workspace through the user's default shell. The command inherits the full kiliax process environment and uses login/profile shell semantics by default. If the result includes `session_id`, use `write_stdin` to interact/poll."
                 .to_string(),
         ),
         parameters: Some(serde_json::json!({
             "type": "object",
             "properties": {
-                "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Command argv array. Do not pass a single shell-quoted string." },
+                "cmd": { "type": "string", "description": "Shell command string to execute." },
                 "cwd": { "type": "string", "description": "Optional working dir relative to workspace root (no `..`)." },
+                "login": { "type": "boolean", "description": "Whether to use login/profile shell semantics. Defaults to true." },
                 "yield_time_ms": { "type": "integer", "minimum": 0, "description": "If >0, return after this time with partial output and a session_id if still running." },
                 "max_output_bytes": { "type": "integer", "minimum": 1, "description": "Maximum bytes to return per call (stdout+stderr best effort)." }
             },
-            "required": ["argv"],
+            "required": ["cmd"],
             "additionalProperties": false
         })),
         strict: Some(true),
@@ -110,9 +113,11 @@ impl ShellSession {
 
 #[derive(Debug, Deserialize)]
 struct ShellCommandArgs {
-    argv: Vec<String>,
+    cmd: String,
     #[serde(default)]
     cwd: Option<String>,
+    #[serde(default)]
+    login: Option<bool>,
     #[serde(default)]
     yield_time_ms: Option<u64>,
     #[serde(default)]
@@ -141,17 +146,26 @@ pub(super) async fn execute_shell_command(
         return Err(ToolError::PermissionDenied(TOOL_SHELL_COMMAND.to_string()));
     }
     let args: ShellCommandArgs = parse_args(call, TOOL_SHELL_COMMAND)?;
-    if args.argv.is_empty() {
+    if args.cmd.trim().is_empty() {
         return Err(ToolError::InvalidCommand(
-            "argv must not be empty".to_string(),
+            "cmd must not be empty".to_string(),
         ));
     }
-    if !perms.shell.allows(&args.argv) {
+    if matches!(perms.shell, ShellPermissions::AllowList(_)) && has_restricted_shell_meta(&args.cmd)
+    {
         return Err(ToolError::PermissionDenied(format!(
-            "shell argv not allowed: {:?}",
-            args.argv
+            "shell command contains restricted shell syntax: {}",
+            args.cmd
         )));
     }
+    let permission_groups = command_permission_token_groups(&args.cmd);
+    if !perms.shell.allows_all(&permission_groups) {
+        return Err(ToolError::PermissionDenied(format!(
+            "shell command not allowed: {}",
+            args.cmd
+        )));
+    }
+    let shell_argv = default_user_shell().derive_exec_args(&args.cmd, args.login.unwrap_or(true));
 
     let cwd = match args.cwd.as_deref() {
         None => workspace_root.to_path_buf(),
@@ -160,8 +174,8 @@ pub(super) async fn execute_shell_command(
 
     let yield_time_ms = args.yield_time_ms.unwrap_or(0);
     if yield_time_ms == 0 {
-        let mut cmd = Command::new(&args.argv[0]);
-        cmd.args(&args.argv[1..])
+        let mut cmd = Command::new(&shell_argv[0]);
+        cmd.args(&shell_argv[1..])
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -181,8 +195,8 @@ pub(super) async fn execute_shell_command(
         return Ok(serde_json::to_string(&out).unwrap_or_else(|_| "ok".to_string()));
     }
 
-    let mut cmd = Command::new(&args.argv[0]);
-    cmd.args(&args.argv[1..])
+    let mut cmd = Command::new(&shell_argv[0]);
+    cmd.args(&shell_argv[1..])
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -328,6 +342,382 @@ pub(super) async fn execute_write_stdin(
     Ok(serde_json::to_string(&out).unwrap_or_else(|_| "ok".to_string()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UserShellKind {
+    Posix,
+    Bash,
+    Zsh,
+    Fish,
+    PowerShell,
+    Cmd,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UserShell {
+    path: PathBuf,
+    kind: UserShellKind,
+}
+
+impl UserShell {
+    fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
+        match self.kind {
+            UserShellKind::Bash | UserShellKind::Zsh | UserShellKind::Posix => {
+                let script = if use_login_shell {
+                    self.profile_script(command)
+                } else {
+                    command.to_string()
+                };
+                vec![
+                    self.path.to_string_lossy().to_string(),
+                    if use_login_shell { "-lc" } else { "-c" }.to_string(),
+                    script,
+                ]
+            }
+            UserShellKind::Fish => {
+                let mut args = vec![self.path.to_string_lossy().to_string()];
+                if use_login_shell {
+                    args.push("-l".to_string());
+                }
+                args.push("-c".to_string());
+                args.push(command.to_string());
+                args
+            }
+            UserShellKind::PowerShell => {
+                let mut args = vec![self.path.to_string_lossy().to_string()];
+                if !use_login_shell {
+                    args.push("-NoProfile".to_string());
+                }
+                args.push("-Command".to_string());
+                args.push(command.to_string());
+                args
+            }
+            UserShellKind::Cmd => vec![
+                self.path.to_string_lossy().to_string(),
+                "/c".to_string(),
+                command.to_string(),
+            ],
+        }
+    }
+
+    fn profile_script(&self, command: &str) -> String {
+        let setup = match self.kind {
+            UserShellKind::Bash => {
+                r#"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
+  . "$HOME/.bashrc"
+fi"#
+            }
+            UserShellKind::Zsh => {
+                r#"if [ -n "$ZDOTDIR" ]; then
+  __kiliax_zshrc="$ZDOTDIR/.zshrc"
+else
+  __kiliax_zshrc="$HOME/.zshrc"
+fi
+if [ -r "$__kiliax_zshrc" ]; then
+  . "$__kiliax_zshrc"
+fi
+unset __kiliax_zshrc"#
+            }
+            UserShellKind::Posix => {
+                r#"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
+  . "$ENV"
+fi"#
+            }
+            _ => "",
+        };
+
+        if setup.is_empty() {
+            command.to_string()
+        } else {
+            format!("{setup}\n{command}")
+        }
+    }
+}
+
+fn default_user_shell() -> UserShell {
+    if let Some(path) = non_empty_env_path("SHELL") {
+        return shell_from_path(path);
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(path) = find_program_in_path("pwsh") {
+            return shell_from_path(path);
+        }
+        if let Some(path) = find_program_in_path("powershell") {
+            return shell_from_path(path);
+        }
+        if let Some(path) = non_empty_env_path("COMSPEC") {
+            return shell_from_path(path);
+        }
+        return shell_from_path(PathBuf::from("cmd.exe"));
+    }
+
+    #[cfg(not(windows))]
+    {
+        for path in ["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/bin/sh"] {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return shell_from_path(path);
+            }
+        }
+        shell_from_path(PathBuf::from("/bin/sh"))
+    }
+}
+
+fn non_empty_env_path(name: &str) -> Option<PathBuf> {
+    let value = std::env::var_os(name)?;
+    if value.as_os_str().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+fn shell_from_path(path: PathBuf) -> UserShell {
+    let kind = shell_kind_from_path(&path);
+    UserShell { path, kind }
+}
+
+fn shell_kind_from_path(path: &Path) -> UserShellKind {
+    let raw = path.to_string_lossy();
+    let name = raw
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(raw.as_ref())
+        .to_ascii_lowercase();
+    let name = name.trim_end_matches(".exe");
+    match name {
+        "bash" => UserShellKind::Bash,
+        "zsh" => UserShellKind::Zsh,
+        "fish" => UserShellKind::Fish,
+        "pwsh" | "powershell" => UserShellKind::PowerShell,
+        "cmd" => UserShellKind::Cmd,
+        _ => UserShellKind::Posix,
+    }
+}
+
+#[cfg(windows)]
+fn find_program_in_path(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let extensions = std::env::var_os("PATHEXT")
+        .map(split_pathext)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| vec![".COM".into(), ".EXE".into(), ".BAT".into(), ".CMD".into()]);
+
+    for dir in std::env::split_paths(&path) {
+        let direct = dir.join(program);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        for ext in &extensions {
+            let candidate = dir.join(format!("{program}{}", ext.to_string_lossy()));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn split_pathext(value: OsString) -> Vec<OsString> {
+    value
+        .to_string_lossy()
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(OsString::from)
+        .collect()
+}
+
+fn command_permission_token_groups(command: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for segment in split_shell_segments(command) {
+        let segment = segment.trim();
+        if segment.is_empty() || is_setup_shell_segment(segment) {
+            continue;
+        }
+
+        for stage in split_shell_pipeline(segment) {
+            let mut words = split_shell_words(stage);
+            if words.first().is_some_and(|w| w == "env") {
+                words.remove(0);
+            }
+            while words.first().is_some_and(|w| is_env_assignment_token(w)) {
+                words.remove(0);
+            }
+            if !words.is_empty() {
+                out.push(words);
+            }
+        }
+    }
+
+    out
+}
+
+fn split_shell_segments(script: &str) -> Vec<&str> {
+    split_shell_top_level(script, &["&&", ";", "\n"])
+}
+
+fn split_shell_pipeline(segment: &str) -> Vec<&str> {
+    split_shell_top_level(segment, &["|"])
+}
+
+fn split_shell_top_level<'a>(text: &'a str, separators: &[&str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    let mut iter = text.char_indices().peekable();
+
+    while let Some((idx, ch)) = iter.next() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+
+        for sep in separators {
+            if text[idx..].starts_with(sep) {
+                out.push(text[start..idx].trim());
+                start = idx + sep.len();
+                for _ in 1..sep.chars().count() {
+                    let _ = iter.next();
+                }
+                break;
+            }
+        }
+    }
+
+    out.push(text[start..].trim());
+    out
+}
+
+fn split_shell_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+
+    for ch in s.chars() {
+        if escape {
+            cur.push(ch);
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                cur.push(ch);
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        cur.push(ch);
+    }
+
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn is_setup_shell_segment(segment: &str) -> bool {
+    let words = split_shell_words(segment);
+    let first = words.first().map(String::as_str);
+    if matches!(
+        first,
+        Some("cd" | "export" | "source" | "." | "unset" | "set")
+    ) {
+        return true;
+    }
+    !words.is_empty() && words.iter().all(|w| is_env_assignment_token(w))
+}
+
+fn is_env_assignment_token(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('_') | Some('a'..='z') | Some('A'..='Z'))
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn has_restricted_shell_meta(command: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    let chars: Vec<char> = command.chars().collect();
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if escape {
+            escape = false;
+            i += 1;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else if q == '"' && (ch == '`' || (ch == '$' && chars.get(i + 1) == Some(&'('))) {
+                return true;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            i += 1;
+            continue;
+        }
+        if ch == '<' || ch == '>' || ch == '`' || (ch == '$' && chars.get(i + 1) == Some(&'(')) {
+            return true;
+        }
+        if ch == '&' {
+            if chars.get(i + 1) == Some(&'&') {
+                i += 2;
+                continue;
+            }
+            return true;
+        }
+        i += 1;
+    }
+
+    false
+}
+
 fn drain_with_limit(buf: &mut String, max_bytes: usize) -> String {
     if buf.is_empty() {
         return String::new();
@@ -353,4 +743,72 @@ fn drain_with_limit(buf: &mut String, max_bytes: usize) -> String {
     let out = buf[..split_idx].to_string();
     buf.drain(..split_idx);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bash_login_command_sources_bashrc_before_user_command() {
+        let shell = shell_from_path(PathBuf::from("/bin/bash"));
+        let argv = shell.derive_exec_args("echo ok", true);
+
+        assert_eq!(argv[0], "/bin/bash");
+        assert_eq!(argv[1], "-lc");
+        assert!(argv[2].contains(r#". "$HOME/.bashrc""#));
+        assert!(argv[2].ends_with("echo ok"));
+    }
+
+    #[test]
+    fn bash_non_login_command_does_not_source_profile() {
+        let shell = shell_from_path(PathBuf::from("/bin/bash"));
+        let argv = shell.derive_exec_args("echo ok", false);
+
+        assert_eq!(argv, vec!["/bin/bash", "-c", "echo ok"]);
+    }
+
+    #[test]
+    fn command_permission_token_groups_skip_setup_and_env() {
+        let groups = command_permission_token_groups(
+            "cd /tmp && FOO=bar BAR=baz rg -n shell_command crates | head -n 5",
+        );
+
+        assert_eq!(
+            groups,
+            vec![
+                vec!["rg", "-n", "shell_command", "crates"],
+                vec!["head", "-n", "5"],
+            ]
+        );
+    }
+
+    #[test]
+    fn command_permission_token_groups_keep_git_subcommand() {
+        let groups = command_permission_token_groups("git status --short");
+
+        assert_eq!(groups, vec![vec!["git", "status", "--short"]]);
+    }
+
+    #[test]
+    fn restricted_shell_meta_detects_write_and_substitution_syntax() {
+        assert!(has_restricted_shell_meta("rg foo > out.txt"));
+        assert!(has_restricted_shell_meta("echo $(rm -rf /)"));
+        assert!(has_restricted_shell_meta("echo `rm -rf /`"));
+        assert!(has_restricted_shell_meta("rg foo & rm -rf /"));
+        assert!(!has_restricted_shell_meta("rg foo && head file"));
+        assert!(!has_restricted_shell_meta("rg '>' file"));
+    }
+
+    #[test]
+    fn shell_kind_detection_handles_windows_exe_case() {
+        assert_eq!(
+            shell_kind_from_path(Path::new(r"C:\Windows\System32\CMD.EXE")),
+            UserShellKind::Cmd
+        );
+        assert_eq!(
+            shell_kind_from_path(Path::new(r"C:\Program Files\PowerShell\7\pwsh.EXE")),
+            UserShellKind::PowerShell
+        );
+    }
 }
