@@ -820,6 +820,7 @@ fn error_chain_vec(err: &dyn std::error::Error) -> Vec<String> {
 fn runtime_error_code(err: &AgentRuntimeError) -> &'static str {
     match err {
         AgentRuntimeError::MaxSteps { .. } => "max_steps_exceeded",
+        AgentRuntimeError::MaxCompletionTokens { .. } => "max_completion_tokens_exceeded",
         AgentRuntimeError::Llm(_) => "llm_error",
         AgentRuntimeError::Tool(_) => "tool_error",
         AgentRuntimeError::Cancelled => "cancelled",
@@ -830,6 +831,9 @@ fn runtime_error_hint(code: &str, agent: &str) -> Option<String> {
     match code {
         "max_steps_exceeded" => Some(format!(
             "Increase `runtime.max_steps` or `agents.{agent}.max_steps` in `kiliax.yaml`, or split the task / ask for earlier output."
+        )),
+        "max_completion_tokens_exceeded" => Some(format!(
+            "Increase `runtime.max_completion_tokens` or `agents.{agent}.max_completion_tokens` in `kiliax.yaml`, or split large file/output generation into smaller steps."
         )),
         "llm_error" => Some(
             "Check provider/base_url/api_key, and use `trace_id` to locate server logs.".to_string(),

@@ -107,6 +107,9 @@ export function SettingsDialog(props: {
   const [runtimeMaxSteps, setRuntimeMaxSteps] = useState("");
   const [agentsPlanMaxSteps, setAgentsPlanMaxSteps] = useState("");
   const [agentsGeneralMaxSteps, setAgentsGeneralMaxSteps] = useState("");
+  const [runtimeMaxCompletionTokens, setRuntimeMaxCompletionTokens] = useState("");
+  const [agentsPlanMaxCompletionTokens, setAgentsPlanMaxCompletionTokens] = useState("");
+  const [agentsGeneralMaxCompletionTokens, setAgentsGeneralMaxCompletionTokens] = useState("");
 
   const [providerDeleteConfirm, setProviderDeleteConfirm] = useState<{
     providerId: string;
@@ -198,11 +201,26 @@ export function SettingsDialog(props: {
   const loadSettingsRuntime = useCallback(async () => {
     const res: ConfigRuntimeResponse = await api.getConfigRuntime();
     setRuntimeMaxSteps(res.runtime_max_steps != null ? String(res.runtime_max_steps) : "");
+    setRuntimeMaxCompletionTokens(
+      res.runtime_max_completion_tokens != null
+        ? String(res.runtime_max_completion_tokens)
+        : "",
+    );
     setAgentsPlanMaxSteps(
       res.agents_plan_max_steps != null ? String(res.agents_plan_max_steps) : "",
     );
+    setAgentsPlanMaxCompletionTokens(
+      res.agents_plan_max_completion_tokens != null
+        ? String(res.agents_plan_max_completion_tokens)
+        : "",
+    );
     setAgentsGeneralMaxSteps(
       res.agents_general_max_steps != null ? String(res.agents_general_max_steps) : "",
+    );
+    setAgentsGeneralMaxCompletionTokens(
+      res.agents_general_max_completion_tokens != null
+        ? String(res.agents_general_max_completion_tokens)
+        : "",
     );
   }, []);
 
@@ -470,14 +488,37 @@ export function SettingsDialog(props: {
     const runtime = parseOptionalPositiveInt("runtime.max_steps", runtimeMaxSteps);
     const plan = parseOptionalPositiveInt("agents.plan.max_steps", agentsPlanMaxSteps);
     const general = parseOptionalPositiveInt("agents.general.max_steps", agentsGeneralMaxSteps);
-    if (runtime === "invalid" || plan === "invalid" || general === "invalid") return;
+    const runtimeTokens = parseOptionalPositiveInt(
+      "runtime.max_completion_tokens",
+      runtimeMaxCompletionTokens,
+    );
+    const planTokens = parseOptionalPositiveInt(
+      "agents.plan.max_completion_tokens",
+      agentsPlanMaxCompletionTokens,
+    );
+    const generalTokens = parseOptionalPositiveInt(
+      "agents.general.max_completion_tokens",
+      agentsGeneralMaxCompletionTokens,
+    );
+    if (
+      runtime === "invalid" ||
+      plan === "invalid" ||
+      general === "invalid" ||
+      runtimeTokens === "invalid" ||
+      planTokens === "invalid" ||
+      generalTokens === "invalid"
+    )
+      return;
 
     setSettingsSaving(true);
     try {
       await api.patchConfigRuntime({
         runtime_max_steps: runtime,
+        runtime_max_completion_tokens: runtimeTokens,
         agents_plan_max_steps: plan,
+        agents_plan_max_completion_tokens: planTokens,
         agents_general_max_steps: general,
+        agents_general_max_completion_tokens: generalTokens,
       });
       await onConfigChanged();
     } catch (err) {
@@ -1055,6 +1096,44 @@ export function SettingsDialog(props: {
                   </div>
                 </div>
                 <div className="mt-2 text-xs text-zinc-500">Leave blank to use defaults.</div>
+                <div className="mt-4 text-sm font-medium text-zinc-900">
+                  Max completion tokens
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div>
+                    <div className="text-xs text-zinc-600">
+                      runtime.max_completion_tokens
+                    </div>
+                    <Input
+                      placeholder="default: 1000000"
+                      value={runtimeMaxCompletionTokens}
+                      onChange={(e) => setRuntimeMaxCompletionTokens(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-zinc-600">
+                      agents.plan.max_completion_tokens
+                    </div>
+                    <Input
+                      placeholder="optional"
+                      value={agentsPlanMaxCompletionTokens}
+                      onChange={(e) => setAgentsPlanMaxCompletionTokens(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-zinc-600">
+                      agents.general.max_completion_tokens
+                    </div>
+                    <Input
+                      placeholder="optional"
+                      value={agentsGeneralMaxCompletionTokens}
+                      onChange={(e) => setAgentsGeneralMaxCompletionTokens(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-zinc-500">
+                  Runs fail with a clear error if the model stops because this limit is reached.
+                </div>
                 <div className="mt-3 flex justify-end gap-2">
                   <Button
                     variant="outline"

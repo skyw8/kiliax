@@ -520,8 +520,11 @@ impl ServerState {
         let config = self.config_snapshot();
         Ok(api::ConfigRuntimeResponse {
             runtime_max_steps: config.runtime.max_steps,
+            runtime_max_completion_tokens: config.runtime.max_completion_tokens,
             agents_plan_max_steps: config.agents.plan.max_steps,
+            agents_plan_max_completion_tokens: config.agents.plan.max_completion_tokens,
             agents_general_max_steps: config.agents.general.max_steps,
+            agents_general_max_completion_tokens: config.agents.general.max_completion_tokens,
         })
     }
 
@@ -544,6 +547,18 @@ impl ServerState {
             };
         }
 
+        if let Some(v) = req.runtime_max_completion_tokens {
+            next.runtime.max_completion_tokens = match v {
+                None => None,
+                Some(0) => {
+                    return Err(ApiError::invalid_argument(
+                        "runtime_max_completion_tokens must be > 0 or null",
+                    ))
+                }
+                Some(n) => Some(n),
+            };
+        }
+
         if let Some(v) = req.agents_plan_max_steps {
             next.agents.plan.max_steps = match v {
                 None => None,
@@ -556,12 +571,36 @@ impl ServerState {
             };
         }
 
+        if let Some(v) = req.agents_plan_max_completion_tokens {
+            next.agents.plan.max_completion_tokens = match v {
+                None => None,
+                Some(0) => {
+                    return Err(ApiError::invalid_argument(
+                        "agents_plan_max_completion_tokens must be > 0 or null",
+                    ))
+                }
+                Some(n) => Some(n),
+            };
+        }
+
         if let Some(v) = req.agents_general_max_steps {
             next.agents.general.max_steps = match v {
                 None => None,
                 Some(0) => {
                     return Err(ApiError::invalid_argument(
                         "agents_general_max_steps must be > 0 or null",
+                    ))
+                }
+                Some(n) => Some(n),
+            };
+        }
+
+        if let Some(v) = req.agents_general_max_completion_tokens {
+            next.agents.general.max_completion_tokens = match v {
+                None => None,
+                Some(0) => {
+                    return Err(ApiError::invalid_argument(
+                        "agents_general_max_completion_tokens must be > 0 or null",
                     ))
                 }
                 Some(n) => Some(n),

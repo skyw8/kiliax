@@ -34,7 +34,7 @@ minimal
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
-- Agent runtime loop + tool scheduling barriers + thinking/body normalization: `crates/kiliax-core/src/runtime.rs`
+- Agent runtime loop + tool scheduling barriers + thinking/body normalization + max completion token handling: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + session-scoped MCP/skills overrides: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`

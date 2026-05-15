@@ -19,7 +19,7 @@ use super::tool_names::{
 use super::{ChatStream, LlmError, LlmProvider, ProviderRoute};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const DEFAULT_MAX_TOKENS: u32 = 4096;
+const DEFAULT_MAX_TOKENS: u32 = 1_000_000;
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -1135,6 +1135,18 @@ mod tests {
             serde_json::json!({"type": "tool", "name": "read"})
         );
         assert_eq!(json["max_tokens"], serde_json::json!(128));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn defaults_max_tokens_to_large_budget() {
+        let req = ChatRequest::new(vec![Message::User {
+            content: UserMessageContent::Text("hi".to_string()),
+        }]);
+
+        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let json = serde_json::to_value(body).unwrap();
+
+        assert_eq!(json["max_tokens"], serde_json::json!(1_000_000));
     }
 
     #[tokio::test(flavor = "current_thread")]

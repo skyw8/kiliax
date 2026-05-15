@@ -10,6 +10,8 @@ use crate::tools::{policy, ToolEngine, ToolError};
 mod streaming;
 mod tool_calls;
 
+const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 1_000_000;
+
 use streaming::{drive_stream_step, normalize_stream_step_tool_calls};
 use tool_calls::{
     group_tool_calls, normalize_tool_call_ids, sanitize_tool_call_history, ToolCallGroup,
@@ -28,6 +30,14 @@ pub enum AgentRuntimeError {
 
     #[error("max steps exceeded: {max_steps}")]
     MaxSteps { max_steps: usize },
+
+    #[error(
+        "LLM output exceeded max completion tokens limit ({max_completion_tokens}) at step {step}"
+    )]
+    MaxCompletionTokens {
+        max_completion_tokens: u32,
+        step: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +67,7 @@ impl Default for AgentRuntimeOptions {
             parallel_tool_calls: None,
             tool_error_mode: ToolErrorMode::ToolMessage,
             temperature: None,
-            max_completion_tokens: None,
+            max_completion_tokens: Some(DEFAULT_MAX_COMPLETION_TOKENS),
             auto_compact_token_limit: None,
         }
     }
@@ -75,6 +85,9 @@ impl AgentRuntimeOptions {
         if let Some(max_steps) = config.runtime.max_steps {
             options.max_steps = max_steps;
         }
+        if let Some(max_completion_tokens) = config.runtime.max_completion_tokens {
+            options.max_completion_tokens = Some(max_completion_tokens);
+        }
         options.auto_compact_token_limit = config.runtime.auto_compact_token_limit;
 
         let agent_cfg = match profile.kind {
@@ -83,6 +96,9 @@ impl AgentRuntimeOptions {
         };
         if let Some(max_steps) = agent_cfg.max_steps {
             options.max_steps = max_steps;
+        }
+        if let Some(max_completion_tokens) = agent_cfg.max_completion_tokens {
+            options.max_completion_tokens = Some(max_completion_tokens);
         }
         if agent_cfg.auto_compact_token_limit.is_some() {
             options.auto_compact_token_limit = agent_cfg.auto_compact_token_limit;
@@ -141,6 +157,14 @@ impl AgentRuntime {
             let resp = self.llm.chat(req).await?;
 
             let mut assistant = resp.message;
+            if resp.finish_reason == Some(FinishReason::Length) {
+                return Err(AgentRuntimeError::MaxCompletionTokens {
+                    max_completion_tokens: options
+                        .max_completion_tokens
+                        .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS),
+                    step: step + 1,
+                });
+            }
             let tool_calls = match &mut assistant {
                 Message::Assistant { tool_calls, .. } => {
                     normalize_tool_call_ids(step, tool_calls);
@@ -377,6 +401,23 @@ impl AgentRuntime {
                         match drive_stream_step(step, stream, &tx).await {
                             Ok(mut step_out) => {
                                 if tx.is_closed() {
+                                    return LoopControl::Return;
+                                }
+                                if step_out.finish_reason == Some(FinishReason::Length) {
+                                    telemetry::metrics::record_run_finished(
+                                        profile.name,
+                                        "max_completion_tokens",
+                                        step_no as u64,
+                                        started.elapsed(),
+                                    );
+                                    let _ = tx
+                                        .send(Err(AgentRuntimeError::MaxCompletionTokens {
+                                            max_completion_tokens: options
+                                                .max_completion_tokens
+                                                .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS),
+                                            step: step_no,
+                                        }))
+                                        .await;
                                     return LoopControl::Return;
                                 }
                                 normalize_stream_step_tool_calls(step, &mut step_out);
@@ -923,6 +964,61 @@ mod tests {
             Some(Message::Tool { tool_call_id, .. }) if tool_call_id == "b"
         ));
         assert!(matches!(messages.get(3), Some(Message::User { .. })));
+    }
+
+    #[test]
+    fn runtime_options_default_to_large_completion_budget() {
+        let options = AgentRuntimeOptions::default();
+
+        assert_eq!(
+            options.max_completion_tokens,
+            Some(DEFAULT_MAX_COMPLETION_TOKENS)
+        );
+    }
+
+    #[test]
+    fn runtime_options_read_max_completion_tokens_from_config() {
+        let config = crate::config::load_from_str(
+            r#"
+providers:
+  test:
+    base_url: http://localhost
+    models: [m]
+runtime:
+  max_completion_tokens: 123
+agents:
+  general:
+    max_completion_tokens: 456
+"#,
+        )
+        .unwrap();
+        let profile = crate::agents::AgentProfile::general();
+
+        let options = AgentRuntimeOptions::from_config(&profile, &config);
+
+        assert_eq!(options.max_completion_tokens, Some(456));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_keeps_length_finish_reason() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+
+        let chunks = vec![Ok(ChatStreamChunk {
+            id: "chat_1".to_string(),
+            created: 0,
+            model: "m".to_string(),
+            content_delta: Some("partial".to_string()),
+            thinking_delta: None,
+            tool_calls: Vec::new(),
+            finish_reason: Some(FinishReason::Length),
+            usage: None,
+            provider_metadata: None,
+        })];
+
+        let stream = tokio_stream::iter(chunks);
+        let out = drive_stream_step(0, stream, &tx).await.unwrap();
+
+        assert_eq!(out.finish_reason, Some(FinishReason::Length));
     }
 
     #[tokio::test(flavor = "current_thread")]

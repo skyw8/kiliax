@@ -49,6 +49,18 @@ pub struct AgentRuntimeConfig {
     #[serde(default, alias = "maxSteps", alias = "max-steps")]
     pub max_steps: Option<usize>,
 
+    /// Maximum number of tokens allowed in one model completion.
+    #[serde(
+        default,
+        alias = "maxCompletionTokens",
+        alias = "max_completion_tokens",
+        alias = "max-completion-tokens",
+        alias = "maxTokens",
+        alias = "max_tokens",
+        alias = "max-tokens"
+    )]
+    pub max_completion_tokens: Option<u32>,
+
     /// Approx token usage threshold triggering auto-compaction of conversation history.
     #[serde(
         default,
