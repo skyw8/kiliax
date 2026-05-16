@@ -98,7 +98,11 @@ function attachmentMediaType(file: File): string {
 }
 
 function attachmentMetadata(a: RunAttachment): MessageAttachment {
-  return { filename: a.filename, media_type: a.media_type };
+  return {
+    filename: a.filename,
+    media_type: a.media_type,
+    data: isImageAttachment(a.media_type) ? a.data : undefined,
+  };
 }
 
 function isImageAttachment(mediaType: string): boolean {

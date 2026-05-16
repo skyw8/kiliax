@@ -100,6 +100,7 @@ export interface UserMessage {
 export interface MessageAttachment {
   filename: string;
   media_type: string;
+  data?: string | null;
 }
 
 export interface AssistantMessage {

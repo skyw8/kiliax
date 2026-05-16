@@ -227,6 +227,7 @@ impl From<domain::MessageAttachment> for api::MessageAttachment {
         Self {
             filename: value.filename,
             media_type: value.media_type,
+            data: value.data,
         }
     }
 }

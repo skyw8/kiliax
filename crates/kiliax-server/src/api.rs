@@ -494,6 +494,9 @@ pub enum Message {
 pub struct MessageAttachment {
     pub filename: String,
     pub media_type: String,
+    /// Raw base64 bytes for renderable previews. Present for uploaded images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

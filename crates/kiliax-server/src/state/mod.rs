@@ -494,6 +494,7 @@ fn user_content_attachments(content: &UserMessageContent) -> Vec<domain::Message
                 media_type: image_media_type_from_path(path)
                     .unwrap_or("image/*")
                     .to_string(),
+                data: image_base64_from_data_url(path).map(str::to_string),
             }),
             UserContentPart::File {
                 filename,
@@ -502,9 +503,25 @@ fn user_content_attachments(content: &UserMessageContent) -> Vec<domain::Message
             } => Some(domain::MessageAttachment {
                 filename: filename.clone(),
                 media_type: media_type.clone(),
+                data: None,
             }),
         })
         .collect()
+}
+
+fn image_base64_from_data_url(path: &str) -> Option<&str> {
+    let rest = path.trim().strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+    if !meta
+        .split(';')
+        .any(|part| part.trim().eq_ignore_ascii_case("base64"))
+    {
+        return None;
+    }
+    if data.trim().is_empty() {
+        return None;
+    }
+    Some(data)
 }
 
 fn image_label_from_path(path: &str) -> String {
@@ -540,6 +557,38 @@ fn image_media_type_from_path(path: &str) -> Option<&'static str> {
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_content_attachments_preserves_image_preview_data() {
+        let attachments = user_content_attachments(&UserMessageContent::Parts(vec![
+            UserContentPart::Text {
+                text: "describe".to_string(),
+            },
+            UserContentPart::Image {
+                path: "data:image/png;base64,AA==".to_string(),
+                filename: Some("image.png".to_string()),
+                detail: None,
+            },
+            UserContentPart::File {
+                filename: "paper.pdf".to_string(),
+                media_type: "application/pdf".to_string(),
+                data: "JVBERi0=".to_string(),
+            },
+        ]));
+
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments[0].filename, "image.png");
+        assert_eq!(attachments[0].media_type, "image/png");
+        assert_eq!(attachments[0].data.as_deref(), Some("AA=="));
+        assert_eq!(attachments[1].filename, "paper.pdf");
+        assert_eq!(attachments[1].media_type, "application/pdf");
+        assert!(attachments[1].data.is_none());
     }
 }
 

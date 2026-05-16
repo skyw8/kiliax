@@ -30,29 +30,59 @@ function shouldCollapseUserMessage(content: string): boolean {
   return content.split(/\r\n|\r|\n/).length > USER_COLLAPSE_LINE_LIMIT;
 }
 
+function attachmentPreviewSrc(a: MessageAttachment): string | undefined {
+  if (!a.media_type.startsWith("image/")) return undefined;
+  const data = (a.data ?? "").trim();
+  if (!data) return undefined;
+  if (data.startsWith("data:")) return data;
+  return `data:${a.media_type};base64,${data}`;
+}
+
 function renderUserAttachments(
   attachments: MessageAttachment[] | undefined,
-  dark: boolean,
-  hasContent: boolean,
+  queued: boolean,
 ) {
   if (!attachments?.length) return null;
   return (
-    <div className={`${hasContent ? "mt-2" : ""} flex flex-wrap gap-1.5`}>
+    <div className="mb-2 flex max-w-full flex-wrap justify-end gap-2">
       {attachments.map((a, idx) => {
         const isPdf = a.media_type === "application/pdf";
+        const previewSrc = attachmentPreviewSrc(a);
         const Icon = isPdf ? FileText : ImageIcon;
+        if (previewSrc) {
+          return (
+            <div
+              key={`${a.filename}-${idx}`}
+              className="relative h-32 w-32 shrink-0 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100 shadow-sm"
+              title={a.filename}
+            >
+              <img
+                src={previewSrc}
+                alt={a.filename}
+                className="h-full w-full object-cover"
+                draggable={false}
+              />
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-2 pb-1.5 pt-6">
+                <div className="truncate text-[11px] font-medium text-white">
+                  {a.filename}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div
             key={`${a.filename}-${idx}`}
             className={[
-              "flex max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-xs",
-              dark
-                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                : "border-zinc-300 bg-zinc-200 text-zinc-800",
+              "flex max-w-[240px] items-center gap-2 rounded-xl border px-3 py-2 text-xs shadow-sm",
+              queued
+                ? "border-zinc-300 bg-zinc-200 text-zinc-800"
+                : "border-zinc-800 bg-zinc-900 text-zinc-100",
             ].join(" ")}
             title={a.filename}
           >
-            <Icon className={["h-3.5 w-3.5 shrink-0", dark ? "text-zinc-300" : "text-zinc-600"].join(" ")} />
+            <Icon className={["h-4 w-4 shrink-0", queued ? "text-zinc-600" : "text-zinc-300"].join(" ")} />
             <span className="max-w-[220px] truncate">{a.filename}</span>
           </div>
         );
@@ -124,10 +154,10 @@ export function MessageRow({
     const wide = hasMermaidFence(msg.content);
     const collapsible = shouldCollapseUserMessage(msg.content);
     const collapsed = collapsible && !userMessageExpanded;
-    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     const queued = msg.delivery_state === "queued";
     const attachments = msg.attachments ?? [];
+    const messageWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
     const bubbleTone = queued
       ? "bg-zinc-300 text-zinc-800"
       : "bg-zinc-900 text-zinc-50";
@@ -136,63 +166,65 @@ export function MessageRow({
       : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50";
     return (
       <div className="group flex justify-end">
-        <div
-          className={`${bubbleWidth} relative rounded-2xl px-4 py-2 text-sm ${bubbleTone}`}
-        >
-          <div className="absolute right-full top-2 flex items-center gap-1 pr-2 invisible opacity-0 transition-opacity group-hover:visible group-hover:opacity-100">
-            <button
-              type="button"
-              className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
-              aria-label="Copy message"
-              title="Copy message"
-              onClick={() => copyToClipboard(msg.content)}
-            >
-              <Copy className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              disabled={!canEdit}
-              className={[
-                "rounded-md p-1 text-zinc-500",
-                canEdit ? "hover:bg-zinc-100" : "cursor-not-allowed opacity-40",
-              ].join(" ")}
-              aria-label="Edit message"
-              title="Edit message"
-              onClick={() => onEditUser?.(msg.id, msg.content)}
-            >
-              <Pencil className="h-4 w-4" />
-            </button>
-          </div>
-
-          {collapsible ? (
-            <button
-              type="button"
-              className={`absolute right-2 top-2 rounded-md p-1 ${collapseButtonTone}`}
-              aria-label={userMessageExpanded ? "Collapse message" : "Expand message"}
-              title={userMessageExpanded ? "Collapse" : "Expand"}
-              aria-expanded={userMessageExpanded}
-              onClick={() => setUserMessageExpanded((v) => !v)}
-            >
-              {userMessageExpanded ? (
-                <ChevronUp className="h-4 w-4" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-            </button>
-          ) : null}
-
+        <div className={`${messageWidth} flex flex-col items-end`}>
+          {renderUserAttachments(attachments, queued)}
           {msg.content ? (
             <div
-              className={[
-                "whitespace-pre-wrap break-words",
-                collapsible ? "pr-7" : "",
-                collapsed ? "max-h-32 overflow-hidden" : "",
-              ].join(" ")}
+              className={`relative max-w-full rounded-2xl px-4 py-2 text-sm ${bubbleTone}`}
             >
-              {msg.content}
+              <div className="absolute right-full top-2 flex items-center gap-1 pr-2 invisible opacity-0 transition-opacity group-hover:visible group-hover:opacity-100">
+                <button
+                  type="button"
+                  className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                  aria-label="Copy message"
+                  title="Copy message"
+                  onClick={() => copyToClipboard(msg.content)}
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  disabled={!canEdit}
+                  className={[
+                    "rounded-md p-1 text-zinc-500",
+                    canEdit ? "hover:bg-zinc-100" : "cursor-not-allowed opacity-40",
+                  ].join(" ")}
+                  aria-label="Edit message"
+                  title="Edit message"
+                  onClick={() => onEditUser?.(msg.id, msg.content)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+              </div>
+
+              {collapsible ? (
+                <button
+                  type="button"
+                  className={`absolute right-2 top-2 rounded-md p-1 ${collapseButtonTone}`}
+                  aria-label={userMessageExpanded ? "Collapse message" : "Expand message"}
+                  title={userMessageExpanded ? "Collapse" : "Expand"}
+                  aria-expanded={userMessageExpanded}
+                  onClick={() => setUserMessageExpanded((v) => !v)}
+                >
+                  {userMessageExpanded ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                </button>
+              ) : null}
+
+              <div
+                className={[
+                  "whitespace-pre-wrap break-words",
+                  collapsible ? "pr-7" : "",
+                  collapsed ? "max-h-32 overflow-hidden" : "",
+                ].join(" ")}
+              >
+                {msg.content}
+              </div>
             </div>
           ) : null}
-          {renderUserAttachments(attachments, !queued, Boolean(msg.content))}
         </div>
       </div>
     );
