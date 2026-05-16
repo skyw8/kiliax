@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, FolderOpen, FolderPlus, GitFork, Image as ImageIcon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
@@ -99,6 +99,15 @@ function attachmentMediaType(file: File): string {
 
 function attachmentMetadata(a: RunAttachment): MessageAttachment {
   return { filename: a.filename, media_type: a.media_type };
+}
+
+function isImageAttachment(mediaType: string): boolean {
+  return mediaType.startsWith("image/");
+}
+
+function attachmentPreviewSrc(a: RunAttachment): string | undefined {
+  if (!isImageAttachment(a.media_type)) return undefined;
+  return `data:${a.media_type};base64,${a.data}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -777,8 +786,8 @@ export default function App() {
     }
   }
 
-  async function onAttachmentFilesSelected(files: FileList | null) {
-    const selected = Array.from(files ?? []);
+  async function onAttachmentFilesSelected(files: File[]) {
+    const selected = files;
     if (!selected.length) return;
     setAttachmentReading(true);
     try {
@@ -822,6 +831,10 @@ export default function App() {
     } finally {
       setAttachmentReading(false);
     }
+  }
+
+  function removeComposerAttachment(id: string) {
+    setComposerAttachments((prev) => prev.filter((item) => item.id !== id));
   }
 
   async function onSend() {
@@ -1257,12 +1270,12 @@ export default function App() {
   useEffect(() => {
     const el = composerRef.current;
     if (!el) return;
-    const minPx = 44;
+    const minPx = 28;
     const maxPx = 240;
     el.style.height = "auto";
     const next = Math.min(maxPx, Math.max(minPx, el.scrollHeight));
     el.style.height = `${next}px`;
-  }, [composerText]);
+  }, [composerText, composerAttachments.length]);
 
   useEffect(() => {
     pendingRef.current = pending;
@@ -2027,54 +2040,87 @@ export default function App() {
             </div>
           ) : null}
 
-          <div className="border-t border-zinc-200 bg-white px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
+          <div className="shrink-0 border-t border-transparent bg-white px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
             <div className="relative mx-auto w-full max-w-4xl">
-              <div className="min-w-0 rounded-3xl border border-zinc-200 bg-white px-3 py-2 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
+              <div className="min-w-0 rounded-[28px] border border-zinc-200 bg-white p-3 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
+                <input
+                  ref={attachmentInputRef}
+                  type="file"
+                  className="hidden"
+                  accept={ATTACHMENT_ACCEPT}
+                  multiple
+                  onChange={(e) => {
+                    const files = Array.from(e.currentTarget.files ?? []);
+                    e.currentTarget.value = "";
+                    void onAttachmentFilesSelected(files);
+                  }}
+                />
+
                 {composerAttachments.length ? (
-                  <div className="mb-2 flex flex-wrap gap-1.5 px-1">
+                  <div className="mb-3 flex max-w-full gap-2 overflow-x-auto pb-1">
                     {composerAttachments.map((a) => {
-                      const isPdf = a.media_type === "application/pdf";
-                      const Icon = isPdf ? FileText : ImageIcon;
+                      const previewSrc = attachmentPreviewSrc(a);
                       return (
                         <div
                           key={a.id}
-                          className="flex max-w-full items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700"
+                          className="group/attachment relative h-28 w-28 shrink-0 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50"
                           title={`${a.filename} • ${formatBytes(a.size)}`}
                         >
-                          <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-                          <span className="max-w-[180px] truncate">{a.filename}</span>
-                          <span className="shrink-0 text-zinc-400">{formatBytes(a.size)}</span>
+                          {previewSrc ? (
+                            <img
+                              src={previewSrc}
+                              alt={a.filename}
+                              className="h-full w-full object-cover"
+                              draggable={false}
+                            />
+                          ) : (
+                            <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-3 text-center">
+                              <FileText className="h-8 w-8 text-violet-600" />
+                              <div className="line-clamp-2 max-w-full break-all text-xs font-medium text-zinc-700">
+                                {a.filename}
+                              </div>
+                            </div>
+                          )}
+
+                          {previewSrc ? (
+                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-2 pb-1.5 pt-6">
+                              <div className="truncate text-[11px] font-medium text-white">
+                                {a.filename}
+                              </div>
+                            </div>
+                          ) : null}
+
                           <button
                             type="button"
-                            className="rounded-full p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900"
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-zinc-950 text-zinc-50 shadow-sm hover:bg-zinc-800"
                             aria-label={`Remove ${a.filename}`}
                             title="Remove"
-                            onClick={() =>
-                              setComposerAttachments((prev) =>
-                                prev.filter((item) => item.id !== a.id),
-                              )
-                            }
+                            onClick={() => removeComposerAttachment(a.id)}
                           >
-                            <X className="h-3 w-3" />
+                            <X className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       );
                     })}
                   </div>
                 ) : null}
-                <div className="flex min-w-0 items-center gap-2">
-                  <input
-                    ref={attachmentInputRef}
-                    type="file"
-                    className="hidden"
-                    accept={ATTACHMENT_ACCEPT}
-                    multiple
-                    onChange={(e) => {
-                      const files = e.currentTarget.files;
-                      e.currentTarget.value = "";
-                      void onAttachmentFilesSelected(files);
-                    }}
-                  />
+
+                <Textarea
+                  ref={composerRef}
+                  rows={1}
+                  value={composerText}
+                  onChange={(e) => setComposerText(e.target.value)}
+                  placeholder="Ask anything…"
+                  className="min-h-7 max-h-[240px] min-w-0 resize-none overflow-y-auto border-0 bg-transparent px-1 py-1 leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      onSend();
+                    }
+                  }}
+                />
+
+                <div className="mt-2 flex items-center justify-between gap-2">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -2084,28 +2130,14 @@ export default function App() {
                     className="h-9 w-9 shrink-0 rounded-full"
                     onClick={() => attachmentInputRef.current?.click()}
                   >
-                    <Plus className="h-4 w-4 text-zinc-700" />
+                    <Plus className="h-5 w-5 text-zinc-800" />
                   </Button>
-
-                  <Textarea
-                    ref={composerRef}
-                    value={composerText}
-                    onChange={(e) => setComposerText(e.target.value)}
-                    placeholder="Ask anything…"
-                    className="min-h-[44px] max-h-[240px] min-w-0 flex-1 resize-none border-0 bg-transparent px-0 py-2 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        onSend();
-                      }
-                    }}
-                  />
 
                   {showInterrupt ? (
                     <Button
                       size="icon"
                       aria-label="Interrupt"
-                      className="shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
+                      className="h-10 w-10 shrink-0 rounded-full bg-red-600 text-zinc-50 hover:bg-red-500"
                       onClick={async () => {
                         if (!cancellableRunId) return;
                         try {
@@ -2124,50 +2156,51 @@ export default function App() {
                       aria-label="Send"
                       onClick={onSend}
                       disabled={!composerHasText || attachmentReading}
-                      className="shrink-0 rounded-full"
+                      className="h-10 w-10 shrink-0 rounded-full"
                     >
-                      <ArrowUp className="h-4 w-4" />
+                      <ArrowUp className="h-5 w-5" />
                     </Button>
                   )}
                 </div>
               </div>
 
-              <div className="absolute left-full top-1/2 hidden -translate-y-1/2 translate-x-2 items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm xl:flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9"
-                  aria-label="Open workspace in VS Code"
-                  title="Open workspace in VS Code"
-                  disabled={!session}
-                  onClick={() => openWorkspace("vscode")}
-                >
-                  <Code className="h-4 w-4 text-blue-600" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9"
-                  aria-label="Open workspace in file manager"
-                  title="Open workspace in file manager"
-                  disabled={!session}
-                  onClick={() => openWorkspace("file_manager")}
-                >
-                  <FolderOpen className="h-4 w-4 text-violet-600" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9"
-                  aria-label="Open workspace in terminal"
-                  title="Open workspace in terminal"
-                  disabled={!session}
-                  onClick={() => openWorkspace("terminal")}
-                >
-                  <Terminal className="h-4 w-4 text-emerald-600" />
-                </Button>
-              </div>
             </div>
+          </div>
+
+          <div className="fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] right-4 z-40 hidden items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm xl:flex">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              aria-label="Open workspace in VS Code"
+              title="Open workspace in VS Code"
+              disabled={!session}
+              onClick={() => openWorkspace("vscode")}
+            >
+              <Code className="h-4 w-4 text-blue-600" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              aria-label="Open workspace in file manager"
+              title="Open workspace in file manager"
+              disabled={!session}
+              onClick={() => openWorkspace("file_manager")}
+            >
+              <FolderOpen className="h-4 w-4 text-violet-600" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              aria-label="Open workspace in terminal"
+              title="Open workspace in terminal"
+              disabled={!session}
+              onClick={() => openWorkspace("terminal")}
+            >
+              <Terminal className="h-4 w-4 text-emerald-600" />
+            </Button>
           </div>
         </main>
       </div>

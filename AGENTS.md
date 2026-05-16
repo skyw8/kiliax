@@ -85,7 +85,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + WS streaming/session actions + workspace folders list + native folder picker triggers + composer image/PDF attachments): `web/src/app.tsx`
+- Main UI (responsive layout + WS streaming/session actions + workspace folders list + native folder picker triggers + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + attachment chips: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
