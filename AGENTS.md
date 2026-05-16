@@ -125,6 +125,11 @@ Subsequent modifications must remain consistent:
 
 - The session status badge (e.g. `step 1`) in the left sidebar must display in a single line and must not wrap to two lines
 
+### Remote Connection
+
+- All features must be designed with remote server usage in mind; the web UI may be running against a remote `kiliax server` rather than localhost
+- Example: file/folder picking must use a server-side web picker (not a native file picker), because native pickers can only access the browser's local filesystem, not the remote server's filesystem
+
 
 ## dev ENV
 
