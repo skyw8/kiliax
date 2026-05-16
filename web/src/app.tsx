@@ -778,7 +778,14 @@ export default function App() {
   }
 
   async function chooseWorkspaceFolder() {
-    setWorkspacePickerPath("");
+    const initialPath =
+      (session?.settings.workspace_root ?? "").trim() ||
+      (selectedSummary?.settings.workspace_root ?? "").trim() ||
+      (workspaceGroups[0]?.root ?? "").trim() ||
+      (sortedSessions.find((s) => (s.settings.workspace_root ?? "").trim())?.settings
+        .workspace_root ??
+        "").trim();
+    setWorkspacePickerPath(initialPath);
     setWorkspaceCreateOpen(true);
   }
 
