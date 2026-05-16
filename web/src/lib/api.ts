@@ -7,7 +7,8 @@ import type {
   ConfigRuntimeResponse,
   ConfigSkillsResponse,
   ConfigUpdateRequest,
-  FsListResponse,
+  FsPickMode,
+  FsPickResponse,
   MessageListResponse,
   McpServerSetting,
   OpenWorkspaceTarget,
@@ -188,9 +189,15 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
-  fsList(path?: string): Promise<FsListResponse> {
-    const qs = path ? `?path=${encodeURIComponent(path)}` : "";
-    return apiFetch<FsListResponse>(`/v1/fs/list${qs}`);
+  pickPath(req: {
+    mode: FsPickMode;
+    title?: string;
+    start_path?: string;
+  }): Promise<FsPickResponse> {
+    return apiFetch<FsPickResponse>("/v1/fs/pick", {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
   },
   openWorkspace(sessionId: string, target: OpenWorkspaceTarget): Promise<void> {
     return apiFetch<void>(`/v1/sessions/${sessionId}/open`, {

@@ -213,16 +213,11 @@ export interface SkillLoadError {
   error: string;
 }
 
-export interface FsEntry {
-  name: string;
-  path: string;
-  is_dir: boolean;
-}
+export type FsPickMode = "file" | "directory";
 
-export interface FsListResponse {
-  path: string;
-  parent?: string | null;
-  entries: FsEntry[];
+export interface FsPickResponse {
+  path?: string | null;
+  cancelled: boolean;
 }
 
 export type OpenWorkspaceTarget = "vscode" | "file_manager" | "terminal";

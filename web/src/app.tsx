@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, FolderOpen, FolderPlus, GitFork, Image as ImageIcon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, FolderOpen, FolderPlus, GitFork, Image as ImageIcon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
@@ -30,10 +30,16 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { CodeBlock } from "./components/code-block";
 import { EmptyState } from "./components/empty-state";
-import { FolderPickerDialog } from "./components/folder-picker";
 import { Markdown, type MermaidErrorInfo } from "./components/markdown";
 import { MessageRow } from "./components/message-row";
 import { SessionItemRow } from "./components/session-item-row";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog";
 import { Separator } from "./components/ui/separator";
 import { Sheet, SheetClose, SheetContent } from "./components/ui/sheet";
 import { Textarea } from "./components/ui/textarea";
@@ -58,6 +64,11 @@ type StreamState = {
   assistant: string;
   assistantStarted: boolean;
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
+};
+
+type WorkspaceFolderItem = {
+  label: string;
+  path: string;
 };
 
 const LIST_PAGE_SIZE = 6;
@@ -195,13 +206,9 @@ export default function App() {
   } | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
-  const [workspacePickerPath, setWorkspacePickerPath] = useState("");
-  const [workspaceCreateSaving, setWorkspaceCreateSaving] = useState(false);
-
-  const [addFolderOpen, setAddFolderOpen] = useState(false);
-  const [extraFolderPickerPath, setExtraFolderPickerPath] = useState("");
-  const [extraFolderSaving, setExtraFolderSaving] = useState(false);
+  const [workspaceFoldersOpen, setWorkspaceFoldersOpen] = useState(false);
+  const [workspacePicking, setWorkspacePicking] = useState(false);
+  const [extraFolderPicking, setExtraFolderPicking] = useState(false);
 
   const [authError, setAuthError] = useState<string | null>(null);
   const { alerts, pushAlert, closeAlert, clearAlerts } = useAlerts();
@@ -271,6 +278,23 @@ export default function App() {
     () => workspaceGroups.slice(0, workspacesVisible),
     [workspaceGroups, workspacesVisible],
   );
+  const workspaceFolderItems = useMemo<WorkspaceFolderItem[]>(() => {
+    const root = (session?.settings.workspace_root ?? "").trim();
+    const seen = new Set<string>();
+    const items: WorkspaceFolderItem[] = [];
+    if (root) {
+      seen.add(root);
+      items.push({ label: "Workspace", path: root });
+    }
+
+    for (const raw of session?.settings.extra_workspace_roots ?? []) {
+      const path = raw.trim();
+      if (!path || seen.has(path)) continue;
+      seen.add(path);
+      items.push({ label: "Folder", path });
+    }
+    return items;
+  }, [session]);
   const deleteSessionSummary = deleteConfirm
     ? sortedSessions.find((s) => s.id === deleteConfirm.sessionId) ?? null
     : null;
@@ -722,20 +746,34 @@ export default function App() {
   async function createSessionWithWorkspaceRoot(path: string) {
     const trimmed = path.trim();
     if (!trimmed) return;
-    setWorkspaceCreateSaving(true);
     try {
       const modelId = inheritedModelIdForNewSession();
       const s = await api.createSession({
         settings: { workspace_root: trimmed, model_id: modelId },
       });
       await refreshSessions();
-      setWorkspaceCreateOpen(false);
-      setWorkspacePickerPath("");
       selectSession(s.id);
     } catch (err) {
       handleApiError(err);
+    }
+  }
+
+  async function chooseWorkspaceFolder() {
+    if (workspacePicking) return;
+    setWorkspacePicking(true);
+    try {
+      const res = await api.pickPath({
+        mode: "directory",
+        title: "Add workspace folder",
+      });
+      const path = res.cancelled ? "" : (res.path ?? "").trim();
+      if (path) {
+        await createSessionWithWorkspaceRoot(path);
+      }
+    } catch (err) {
+      handleApiError(err);
     } finally {
-      setWorkspaceCreateSaving(false);
+      setWorkspacePicking(false);
     }
   }
 
@@ -1110,10 +1148,25 @@ export default function App() {
     await patchSession({ extra_workspace_roots: next });
   }
 
-  async function removeExtraFolder(path: string) {
-    if (!session || !selectedId) return;
-    const next = (session.settings.extra_workspace_roots ?? []).filter((p) => p !== path);
-    await patchSession({ extra_workspace_roots: next });
+  async function chooseExtraFolder() {
+    if (!session || !selectedId || extraFolderPicking) return;
+    setExtraFolderPicking(true);
+    try {
+      const startPath = (session.settings.workspace_root ?? "").trim();
+      const res = await api.pickPath({
+        mode: "directory",
+        title: "Add folder",
+        start_path: startPath || undefined,
+      });
+      const path = res.cancelled ? "" : (res.path ?? "").trim();
+      if (path) {
+        await addExtraFolder(path);
+      }
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setExtraFolderPicking(false);
+    }
   }
 
   async function openWorkspace(target: "vscode" | "file_manager" | "terminal") {
@@ -1498,10 +1551,8 @@ export default function App() {
               size="icon"
               className="h-7 w-7"
               aria-label="Add workspace folder"
-              onClick={() => {
-                setWorkspacePickerPath("");
-                setWorkspaceCreateOpen(true);
-              }}
+              disabled={workspacePicking}
+              onClick={chooseWorkspaceFolder}
             >
               <FolderPlus className="h-4 w-4 text-violet-600" />
             </Button>
@@ -1793,30 +1844,27 @@ export default function App() {
                     <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
                   </Button>
 
-                  <div className="flex min-w-0 max-w-full items-center gap-2 rounded-md px-2 py-1 lg:max-w-[420px]">
-                    <span className="hidden shrink-0 text-xs text-zinc-600 sm:inline">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="min-w-0 max-w-full justify-start gap-2 px-2 lg:max-w-[420px]"
+                    title={session.settings.workspace_root ?? ""}
+                    onClick={() => setWorkspaceFoldersOpen(true)}
+                  >
+                    <span className="hidden shrink-0 text-xs font-normal text-zinc-600 sm:inline">
                       workspace
                     </span>
-                    <button
-                      type="button"
-                      className="min-w-0 truncate font-mono text-xs text-zinc-800 hover:text-zinc-900 active:opacity-80"
-                      title={session.settings.workspace_root ?? ""}
-                      onClick={() =>
-                        copyWithToast(session.settings.workspace_root ?? "", "Workspace path")
-                      }
-                    >
+                    <span className="min-w-0 truncate font-mono text-xs font-normal text-zinc-800">
                       {workspaceDisplayName(session.settings.workspace_root ?? "")}
-                    </button>
-                  </div>
+                    </span>
+                  </Button>
 
                   <Button
                     variant="ghost"
                     size="sm"
                     className="justify-start gap-2"
-                    onClick={() => {
-                      setExtraFolderPickerPath(session.settings.workspace_root ?? "");
-                      setAddFolderOpen(true);
-                    }}
+                    disabled={extraFolderPicking}
+                    onClick={chooseExtraFolder}
                   >
                     <FolderPlus className="h-4 w-4 text-violet-600" />
                     <span className="hidden sm:inline">Add folder</span>
@@ -2286,6 +2334,49 @@ export default function App() {
         }}
       />
 
+      <Dialog open={workspaceFoldersOpen} onOpenChange={setWorkspaceFoldersOpen}>
+        <DialogContent className="w-[min(640px,calc(100vw-24px))]">
+          <DialogHeader>
+            <DialogTitle>Workspace folders</DialogTitle>
+            <DialogDescription>
+              {workspaceDisplayName(session?.settings.workspace_root ?? "")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {workspaceFolderItems.length ? (
+              workspaceFolderItems.map((item) => (
+                <div
+                  key={`${item.label}:${item.path}`}
+                  className="flex min-w-0 items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-2"
+                >
+                  <FolderOpen className="h-4 w-4 shrink-0 text-violet-600" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-zinc-600">{item.label}</div>
+                    <div className="mt-1 truncate font-mono text-xs text-zinc-900" title={item.path}>
+                      {item.path}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    aria-label={`Copy ${item.label} path`}
+                    title="Copy path"
+                    onClick={() => copyWithToast(item.path, `${item.label} path`)}
+                  >
+                    <Copy className="h-4 w-4 text-zinc-500" />
+                  </Button>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                No folders
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <EditMessageDialog
         open={editMessageOpen}
         onOpenChange={(open) => {
@@ -2308,69 +2399,6 @@ export default function App() {
         }}
         onSave={saveEditAndSend}
       />
-
-      <FolderPickerDialog
-        open={workspaceCreateOpen}
-        onOpenChange={setWorkspaceCreateOpen}
-        title="Add workspace folder"
-        description="Creates a new session in this workspace root."
-        path={workspacePickerPath}
-        onPathChange={setWorkspacePickerPath}
-        confirmLabel="Create"
-        confirmPending={workspaceCreateSaving}
-        confirmPendingLabel="Creating…"
-        confirmDisabled={!workspacePickerPath.trim() || workspaceCreateSaving}
-        onConfirm={() => createSessionWithWorkspaceRoot(workspacePickerPath)}
-      />
-
-      <FolderPickerDialog
-        open={addFolderOpen}
-        onOpenChange={setAddFolderOpen}
-        title="Add folder"
-        description="Adds an extra directory this session can read/write."
-        path={extraFolderPickerPath}
-        onPathChange={setExtraFolderPickerPath}
-        confirmLabel="Add"
-        confirmPending={extraFolderSaving}
-        confirmPendingLabel="Adding…"
-        confirmDisabled={!extraFolderPickerPath.trim() || !session || extraFolderSaving}
-        onConfirm={async () => {
-          const path = extraFolderPickerPath.trim();
-          if (!path) return;
-          setExtraFolderSaving(true);
-          try {
-            await addExtraFolder(path);
-            setAddFolderOpen(false);
-          } finally {
-            setExtraFolderSaving(false);
-          }
-        }}
-      >
-        {session?.settings.extra_workspace_roots?.length ? (
-          <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
-            <div className="font-medium text-zinc-600">Existing</div>
-            <div className="mt-1 space-y-1">
-              {session.settings.extra_workspace_roots.map((p) => (
-                <div key={p} className="flex items-center justify-between gap-2">
-                  <div className="min-w-0 truncate font-mono text-xs" title={p}>
-                    {p}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    aria-label="Remove folder"
-                    title="Remove folder"
-                    onClick={() => removeExtraFolder(p)}
-                  >
-                    <Trash2 className="h-4 w-4 text-zinc-500" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </FolderPickerDialog>
     </div>
   );
 }

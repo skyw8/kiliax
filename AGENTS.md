@@ -71,12 +71,12 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/session actions + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
+- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/native file-folder picker/session actions + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - State domain types (events/status/snapshots/runs/messages + attachment metadata/base64 run input): `crates/kiliax-server/src/state/domain.rs`
-- Infra (path validation/tmp workspace helpers/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
-- REST/OpenAPI schemas (includes message `usage`, session default writes, and run/message attachments): `crates/kiliax-server/src/api.rs`
+- Infra (path validation/tmp workspace helpers/workspace hooks/external launchers/native file-folder picker + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
+- REST/OpenAPI schemas (includes message `usage`, native file-folder picker, session default writes, and run/message attachments): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 
 ### crates/kiliax-otel (OpenTelemetry)
@@ -85,14 +85,13 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + WS streaming/session actions + composer image/PDF attachments): `web/src/app.tsx`
+- Main UI (responsive layout + WS streaming/session actions + workspace folders list + native folder picker triggers + composer image/PDF attachments): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + attachment chips: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
-- Folder picker + path entry UX: `web/src/components/folder-picker.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
-- API client + explicit session default persistence + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
+- API client + native path picker + explicit session default persistence + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
 - Types (includes message `usage`, session default writes, and base64 run attachments): `web/src/lib/types.ts`
 
