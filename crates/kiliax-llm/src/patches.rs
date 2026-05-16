@@ -1,21 +1,20 @@
 use async_openai::error::OpenAIError;
 
 use crate::types::Message;
-use crate::ProviderRoute;
+use crate::{ProviderApi, ProviderRoute};
 
-// WHY: Moonshot/Kimi will reject requests when thinking is enabled unless every assistant
-// tool-call message includes `reasoning_content`. Proxies may hide the upstream provider/base_url,
-// so we also match on the model string.
+// WHY: Several OpenAI-compatible thinking APIs reject requests unless every assistant tool-call
+// message includes `reasoning_content`. Apply the compatibility field broadly for chat-completions
+// compatible providers, but avoid official OpenAI chat-completions endpoints because
+// `reasoning_content` is not part of the standard OpenAI message schema.
 pub(super) fn should_inject_reasoning_content(route: &ProviderRoute) -> bool {
+    if route.api != ProviderApi::OpenAiChatCompletions {
+        return false;
+    }
+
     let provider = route.provider.to_ascii_lowercase();
     let base_url = route.base_url.to_ascii_lowercase();
-    let model = route.model.to_ascii_lowercase();
-    provider.contains("moonshot")
-        || base_url.contains("moonshot")
-        || provider.contains("kimi")
-        || base_url.contains("kimi")
-        || model.contains("kimi")
-        || model.contains("moonshot")
+    !(provider == "openai" && base_url.contains("api.openai.com"))
 }
 
 pub(super) fn inject_prompt_cache_fields(
@@ -40,7 +39,7 @@ pub(super) fn inject_reasoning_content_for_tool_calls(
     body: &mut serde_json::Value,
     messages: &[Message],
 ) {
-    // WHY: Moonshot/Kimi (and some proxies) requires a non-empty `reasoning_content` on *every*
+    // WHY: Some thinking-mode providers require a non-empty `reasoning_content` on *every*
     // assistant message that contains tool calls. Even when we don't have reasoning text, we send
     // a single whitespace (`" "`) to avoid gateways treating `""` as "missing".
     let Some(body_messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) else {
@@ -132,5 +131,9 @@ pub(super) fn is_reasoning_content_missing_error(err: &OpenAIError) -> bool {
     };
 
     let msg = msg.to_ascii_lowercase();
-    msg.contains("reasoning_content") && msg.contains("missing")
+    msg.contains("reasoning_content")
+        && (msg.contains("missing")
+            || msg.contains("must be passed back")
+            || msg.contains("must be provided")
+            || msg.contains("required"))
 }

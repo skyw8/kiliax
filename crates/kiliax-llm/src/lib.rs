@@ -1109,15 +1109,52 @@ mod tests {
     }
 
     #[test]
-    fn should_inject_reasoning_content_matches_kimi_model_even_behind_proxy() {
+    fn should_inject_reasoning_content_defaults_on_for_chat_completions_providers() {
         let route = ProviderRoute {
             provider: "proxy".to_string(),
             api: ProviderApi::OpenAiChatCompletions,
-            model: "kimi-k2.5".to_string(),
+            model: "some-thinking-model".to_string(),
             base_url: "http://127.0.0.1:8000/v1".to_string(),
             api_key: None,
         };
         assert!(should_inject_reasoning_content(&route));
+    }
+
+    #[test]
+    fn should_inject_reasoning_content_skips_official_openai_chat_completions() {
+        let route = ProviderRoute {
+            provider: "openai".to_string(),
+            api: ProviderApi::OpenAiChatCompletions,
+            model: "gpt-4.1-mini".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+        };
+        assert!(!should_inject_reasoning_content(&route));
+    }
+
+    #[test]
+    fn should_inject_reasoning_content_skips_non_chat_completions_apis() {
+        let route = ProviderRoute {
+            provider: "proxy".to_string(),
+            api: ProviderApi::OpenAiResponses,
+            model: "some-model".to_string(),
+            base_url: "http://127.0.0.1:8000/v1".to_string(),
+            api_key: None,
+        };
+        assert!(!should_inject_reasoning_content(&route));
+    }
+
+    #[test]
+    fn detects_reasoning_content_must_be_passed_back_error() {
+        let err = OpenAIError::ApiError(async_openai::error::ApiError {
+            message: "The `reasoning_content` in the thinking mode must be passed back to the API."
+                .to_string(),
+            r#type: Some("invalid_request_error".to_string()),
+            param: None,
+            code: Some("invalid_request_error".to_string()),
+        });
+
+        assert!(is_reasoning_content_missing_error(&err));
     }
 
     #[test]

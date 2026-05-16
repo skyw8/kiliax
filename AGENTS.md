@@ -58,7 +58,7 @@ minimal
 
 - Provider-neutral LLM facade, provider API routing, shared LLM error classification, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks + image/PDF user content parts) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
-- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + provider quirks like Moonshot/Kimi `reasoning_content`): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
+- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + thinking-provider `reasoning_content` compatibility): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
 - OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing): `crates/kiliax-llm/src/openai_responses.rs`
 - Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls): `crates/kiliax-llm/src/anthropic.rs`
 
@@ -102,11 +102,11 @@ minimal
 
 ### API
 
-- Symptom: `HTTP 400 ... thinking is enabled but reasoning_content is missing in assistant tool call message at index N`.
-- Why: Moonshot/Kimi validates the full `messages[]` history; when thinking is enabled, every `assistant` message that contains `tool_calls` must include a non-empty `reasoning_content`.
+- Symptom: `HTTP 400 ... thinking is enabled but reasoning_content is missing in assistant tool call message at index N` or `The reasoning_content in the thinking mode must be passed back to the API`.
+- Why: Some OpenAI-compatible thinking APIs validate the full `messages[]` history; when thinking is enabled, every `assistant` message that contains `tool_calls` must include a non-empty `reasoning_content`.
 - Rule: always send `reasoning_content` for `assistant` tool-call messages; if there is no reasoning text, send a single whitespace (`" "`) (some gateways treat `""` as missing).
 - Implementation: patch outbound JSON in `crates/kiliax-llm/src/patches.rs` (`inject_reasoning_content_for_tool_calls(...)`) and retry once when the provider returns this specific error.
-- Provider routing: proxies may hide the upstream base_url/provider; detection should also match on the model string (see `should_inject_reasoning_content(...)`).
+- Provider routing: enable the compatibility field by default for OpenAI Chat Completions-compatible providers, but skip official OpenAI Chat Completions because `reasoning_content` is not part of the standard OpenAI message schema (see `should_inject_reasoning_content(...)`).
 
 ### TUI
 
