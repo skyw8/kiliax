@@ -2045,8 +2045,8 @@ export default function App() {
           ) : null}
 
           <div className="shrink-0 border-t border-transparent bg-white px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
-            <div className="relative mx-auto w-full max-w-4xl">
-              <div className="min-w-0 rounded-[28px] border border-zinc-200 bg-white p-3 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20">
+            <div className="mx-auto flex w-full max-w-[66rem] items-end justify-center gap-3">
+              <div className="min-w-0 flex-1 rounded-[28px] border border-zinc-200 bg-white p-3 shadow-sm hover:border-zinc-300 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500/20 xl:max-w-4xl">
                 <input
                   ref={attachmentInputRef}
                   type="file"
@@ -2168,43 +2168,42 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="hidden shrink-0 items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm xl:flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label="Open workspace in VS Code"
+                  title="Open workspace in VS Code"
+                  disabled={!session}
+                  onClick={() => openWorkspace("vscode")}
+                >
+                  <Code className="h-4 w-4 text-blue-600" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label="Open workspace in file manager"
+                  title="Open workspace in file manager"
+                  disabled={!session}
+                  onClick={() => openWorkspace("file_manager")}
+                >
+                  <FolderOpen className="h-4 w-4 text-violet-600" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label="Open workspace in terminal"
+                  title="Open workspace in terminal"
+                  disabled={!session}
+                  onClick={() => openWorkspace("terminal")}
+                >
+                  <Terminal className="h-4 w-4 text-emerald-600" />
+                </Button>
+              </div>
             </div>
-          </div>
-
-          <div className="fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] right-4 z-40 hidden items-center gap-1 rounded-3xl border border-zinc-200 bg-white px-2 py-2 shadow-sm xl:flex">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              aria-label="Open workspace in VS Code"
-              title="Open workspace in VS Code"
-              disabled={!session}
-              onClick={() => openWorkspace("vscode")}
-            >
-              <Code className="h-4 w-4 text-blue-600" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              aria-label="Open workspace in file manager"
-              title="Open workspace in file manager"
-              disabled={!session}
-              onClick={() => openWorkspace("file_manager")}
-            >
-              <FolderOpen className="h-4 w-4 text-violet-600" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              aria-label="Open workspace in terminal"
-              title="Open workspace in terminal"
-              disabled={!session}
-              onClick={() => openWorkspace("terminal")}
-            >
-              <Terminal className="h-4 w-4 text-emerald-600" />
-            </Button>
           </div>
         </main>
       </div>
