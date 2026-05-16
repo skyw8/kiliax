@@ -596,7 +596,10 @@ fn map_core_message_to_domain(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<
     let id = seq.to_string();
     let created_at = ts_ms_to_rfc3339(ts_ms);
     match msg {
-        CoreMessage::User { content } => {
+        CoreMessage::User { content, hidden } => {
+            if hidden {
+                return None;
+            }
             let text = content.first_text().unwrap_or("");
             if kiliax_core::compact::is_summary_message(text) {
                 None
@@ -651,7 +654,10 @@ fn map_core_message_to_domain_event_message(
 ) -> Option<domain::Message> {
     let id = seq.to_string();
     match msg {
-        CoreMessage::User { content } => {
+        CoreMessage::User { content, hidden } => {
+            if hidden {
+                return None;
+            }
             let text = content.first_text().unwrap_or("");
             if kiliax_core::compact::is_summary_message(text) {
                 None

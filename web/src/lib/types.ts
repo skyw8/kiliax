@@ -1,5 +1,6 @@
 export type SessionRunState = "idle" | "running" | "tooling";
 export type SessionLastOutcome = "none" | "done" | "error";
+export type SessionGoalStatus = "active" | "complete";
 
 export type McpConnectionState =
   | "disabled"
@@ -54,6 +55,17 @@ export interface SessionSummary {
   last_outcome: SessionLastOutcome;
   status: SessionStatus;
   settings: SessionSettings;
+  goal?: SessionGoal | null;
+}
+
+export interface SessionGoal {
+  objective: string;
+  status: SessionGoalStatus;
+  session_id: string;
+  time_used_seconds: number;
+  created_at: string;
+  updated_at: string;
+  tokens_used: number;
 }
 
 export interface McpServerStatus {

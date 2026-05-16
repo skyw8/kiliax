@@ -36,9 +36,9 @@ minimal
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization + max completion token handling: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
-- Session store + snapshots + events + session-scoped MCP/skills overrides: `crates/kiliax-core/src/session.rs`
+- Session store + snapshots + events + session-scoped MCP/skills overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
-- Tools (builtin patch application/MCP dispatch/skills discovery): `crates/kiliax-core/src/tools/`
+- Tools (builtin patch application/MCP dispatch/skills discovery/session goal tools): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
   - `read_file`: read a UTF-8 text file from the workspace (or allowed skills roots), with optional line range and byte cap
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
@@ -50,6 +50,8 @@ minimal
   - `edit_file`: perform exact string replacements in a file (requires prior `read_file`; supports `replaceAll`)
   - `apply_patch`: apply a stripped-down file-oriented diff envelope (`*** Begin Patch` / `*** End Patch`) for multi-file edits
   - `update_plan`: update the UI plan (best effort, surfaced in TUI/web)
+  - `get_goal`: read the active session goal (`SessionGoal`) if present
+  - `update_goal`: mark the active session goal complete (`status=complete` only)
   - `web_search`: search the web via Tavily (`web_search.api_key` / `tools.tavily.api_key` in `kiliax.yaml`, fallback `TAVILY_API_KEY`)
 
 ### crates/kiliax-llm (LLM facade + providers)
@@ -62,7 +64,7 @@ minimal
 
 ### crates/kiliax-cli (TUI)
 
-- UI + event loop + slash commands + session bootstrap: `crates/kiliax-cli/src/main.rs`
+- UI + event loop + slash commands + session bootstrap + local session goal CLI commands: `crates/kiliax-cli/src/main.rs`
 - Slash command definitions + popup: `crates/kiliax-cli/src/slash_command.rs`
 - App state + render pipeline + token usage display + session-local settings changes: `crates/kiliax-cli/src/app/`
 - Terminal init + backend: `crates/kiliax-cli/src/terminal.rs`
@@ -71,10 +73,10 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/native file-folder picker/session actions + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
+- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/native file-folder picker/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
-- State (config/session lifecycle/run queue/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
-- State domain types (events/status/snapshots/runs/messages + attachment metadata/image preview data/base64 run input): `crates/kiliax-server/src/state/domain.rs`
+- State (config/session lifecycle/run queue/goal continuation loop/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- State domain types (events/status/snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input): `crates/kiliax-server/src/state/domain.rs`
 - Infra (path validation/tmp workspace helpers/workspace hooks/external launchers/native file-folder picker + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes message `usage`, native file-folder picker, session default writes, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
@@ -85,13 +87,13 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + WS streaming/session actions + workspace folders list + native folder picker triggers + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
+- Main UI (responsive layout + WS streaming/session actions/goal controls + workspace folders list + native folder picker triggers + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
-- API client + native path picker + explicit session default persistence + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
+- API client + native path picker + explicit session default persistence + goal APIs + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
 - Types (includes message `usage`, session default writes, and base64 run attachments): `web/src/lib/types.ts`
 

@@ -247,7 +247,7 @@ async fn to_responses_request(
                     instructions.push(content);
                 }
             }
-            Message::User { content } => {
+            Message::User { content, .. } => {
                 input.push(json!({
                     "role": "user",
                     "content": user_content_to_responses(content).await?,
@@ -1057,6 +1057,7 @@ mod tests {
     fn user(text: &str) -> Message {
         Message::User {
             content: UserMessageContent::Text(text.to_string()),
+            hidden: false,
         }
     }
 
@@ -1116,6 +1117,7 @@ mod tests {
                     data: "JVBERi0=".to_string(),
                 },
             ]),
+            hidden: false,
         }]);
 
         let body = to_responses_request("gpt-test", req, false, None)

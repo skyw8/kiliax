@@ -1,11 +1,12 @@
 use crate::protocol::ToolDefinition;
 
 use super::{
-    apply_patch_tool_definition, edit_file_tool_definition, grep_files_tool_definition,
-    list_dir_tool_definition, read_file_tool_definition, shell_command_tool_definition,
-    update_plan_tool_definition, view_image_tool_definition, web_search_tool_definition,
-    write_file_tool_definition, write_stdin_tool_definition, TOOL_APPLY_PATCH, TOOL_EDIT_FILE,
-    TOOL_GREP_FILES, TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SHELL_COMMAND, TOOL_UPDATE_PLAN,
+    apply_patch_tool_definition, edit_file_tool_definition, get_goal_tool_definition,
+    grep_files_tool_definition, list_dir_tool_definition, read_file_tool_definition,
+    shell_command_tool_definition, update_goal_tool_definition, update_plan_tool_definition,
+    view_image_tool_definition, web_search_tool_definition, write_file_tool_definition,
+    write_stdin_tool_definition, TOOL_APPLY_PATCH, TOOL_EDIT_FILE, TOOL_GET_GOAL, TOOL_GREP_FILES,
+    TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SHELL_COMMAND, TOOL_UPDATE_GOAL, TOOL_UPDATE_PLAN,
     TOOL_VIEW_IMAGE, TOOL_WEB_SEARCH, TOOL_WRITE_FILE, TOOL_WRITE_STDIN,
 };
 
@@ -22,6 +23,8 @@ pub enum BuiltinToolId {
     EditFile,
     ApplyPatch,
     UpdatePlan,
+    GetGoal,
+    UpdateGoal,
 }
 
 impl BuiltinToolId {
@@ -38,6 +41,8 @@ impl BuiltinToolId {
             Self::EditFile => TOOL_EDIT_FILE,
             Self::ApplyPatch => TOOL_APPLY_PATCH,
             Self::UpdatePlan => TOOL_UPDATE_PLAN,
+            Self::GetGoal => TOOL_GET_GOAL,
+            Self::UpdateGoal => TOOL_UPDATE_GOAL,
         }
     }
 
@@ -54,6 +59,8 @@ impl BuiltinToolId {
             Self::EditFile => edit_file_tool_definition(),
             Self::ApplyPatch => apply_patch_tool_definition(),
             Self::UpdatePlan => update_plan_tool_definition(),
+            Self::GetGoal => get_goal_tool_definition(),
+            Self::UpdateGoal => update_goal_tool_definition(),
         }
     }
 }
@@ -71,6 +78,8 @@ pub fn builtin_tool_id_by_name(name: &str) -> Option<BuiltinToolId> {
         TOOL_EDIT_FILE => Some(BuiltinToolId::EditFile),
         TOOL_APPLY_PATCH => Some(BuiltinToolId::ApplyPatch),
         TOOL_UPDATE_PLAN => Some(BuiltinToolId::UpdatePlan),
+        TOOL_GET_GOAL => Some(BuiltinToolId::GetGoal),
+        TOOL_UPDATE_GOAL => Some(BuiltinToolId::UpdateGoal),
         _ => None,
     }
 }

@@ -1423,6 +1423,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "async-trait",
  "crossterm",
  "dirs",
  "futures-util",
@@ -1523,6 +1524,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
+ "async-trait",
  "axum",
  "dirs",
  "futures-util",

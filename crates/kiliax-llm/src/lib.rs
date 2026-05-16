@@ -984,6 +984,7 @@ mod tests {
                     data: "JVBERi0=".to_string(),
                 },
             ]),
+            hidden: false,
         }]);
 
         let body = build_openai_chat_body(
@@ -1124,6 +1125,7 @@ mod tests {
         let messages = vec![
             Message::User {
                 content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
             },
             Message::Assistant {
                 content: None,
@@ -1226,6 +1228,7 @@ mod tests {
     fn inject_reasoning_content_for_tool_calls_patches_body_even_if_indices_drift() {
         let messages = vec![Message::User {
             content: UserMessageContent::Text("hi".to_string()),
+            hidden: false,
         }];
 
         let mut body = serde_json::json!({

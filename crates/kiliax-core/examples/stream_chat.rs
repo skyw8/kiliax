@@ -51,6 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut req = ChatRequest::new(vec![Message::User {
         content: UserMessageContent::Text(prompt),
+        hidden: false,
     }]);
     req.temperature = Some(0.2);
     req.max_completion_tokens = Some(512);

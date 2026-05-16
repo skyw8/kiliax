@@ -323,7 +323,7 @@ async fn to_anthropic_request(
                     system_parts.push(content);
                 }
             }
-            Message::User { content } => {
+            Message::User { content, .. } => {
                 out_messages.push(AnthropicRequestMessage {
                     role: AnthropicRole::User,
                     content: user_content_to_anthropic(content).await?,
@@ -1099,6 +1099,7 @@ mod tests {
                 },
                 Message::User {
                     content: UserMessageContent::Text("hi".to_string()),
+                    hidden: false,
                 },
             ],
             tools: vec![ToolDefinition {
@@ -1141,6 +1142,7 @@ mod tests {
     async fn defaults_max_tokens_to_large_budget() {
         let req = ChatRequest::new(vec![Message::User {
             content: UserMessageContent::Text("hi".to_string()),
+            hidden: false,
         }]);
 
         let body = to_anthropic_request("claude", req, false).await.unwrap();
@@ -1162,6 +1164,7 @@ mod tests {
                     data: "JVBERi0=".to_string(),
                 },
             ]),
+            hidden: false,
         }]);
 
         let body = to_anthropic_request("claude", req, false).await.unwrap();
@@ -1190,6 +1193,7 @@ mod tests {
         let req = ChatRequest {
             messages: vec![Message::User {
                 content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
             }],
             tools: vec![ToolDefinition {
                 name: "read".to_string(),
@@ -1217,6 +1221,7 @@ mod tests {
             messages: vec![
                 Message::User {
                     content: UserMessageContent::Text("use search".to_string()),
+                    hidden: false,
                 },
                 Message::Assistant {
                     content: None,
@@ -1266,6 +1271,7 @@ mod tests {
             messages: vec![
                 Message::User {
                     content: UserMessageContent::Text("use tool".to_string()),
+                    hidden: false,
                 },
                 Message::Assistant {
                     content: None,
@@ -1314,6 +1320,7 @@ mod tests {
             messages: vec![
                 Message::User {
                     content: UserMessageContent::Text("use tools".to_string()),
+                    hidden: false,
                 },
                 Message::Assistant {
                     content: None,
@@ -1458,6 +1465,7 @@ mod tests {
         let resp = client
             .chat(ChatRequest::new(vec![Message::User {
                 content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
             }]))
             .await
             .unwrap();
@@ -1491,6 +1499,7 @@ mod tests {
         let resp = client
             .chat(ChatRequest::new(vec![Message::User {
                 content: UserMessageContent::Text("read".to_string()),
+                hidden: false,
             }]))
             .await
             .unwrap();
@@ -1529,6 +1538,7 @@ mod tests {
         let mut stream = client
             .chat_stream(ChatRequest::new(vec![Message::User {
                 content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
             }]))
             .await
             .unwrap();
@@ -1575,6 +1585,7 @@ mod tests {
         let mut stream = client
             .chat_stream(ChatRequest::new(vec![Message::User {
                 content: UserMessageContent::Text("read".to_string()),
+                hidden: false,
             }]))
             .await
             .unwrap();
@@ -1609,6 +1620,7 @@ mod tests {
         let err = client
             .chat(ChatRequest::new(vec![Message::User {
                 content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
             }]))
             .await
             .unwrap_err();

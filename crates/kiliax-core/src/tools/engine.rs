@@ -48,6 +48,7 @@ pub struct ToolEngine {
     shell_sessions: Arc<builtin::ShellSessions>,
     file_tracker: Arc<builtin::FileAccessTracker>,
     config: Arc<RwLock<Arc<crate::config::Config>>>,
+    goal_backend: Arc<RwLock<Option<Arc<dyn builtin::GoalBackend>>>>,
     mcp: crate::tools::mcp::McpHub,
     mcp_state: Arc<Mutex<McpState>>,
 }
@@ -61,6 +62,7 @@ impl ToolEngine {
             shell_sessions: Arc::new(builtin::ShellSessions::new()),
             file_tracker: Arc::new(builtin::FileAccessTracker::new()),
             config: Arc::new(RwLock::new(Arc::new(config))),
+            goal_backend: Arc::new(RwLock::new(None)),
             mcp: crate::tools::mcp::McpHub::new(),
             mcp_state: Arc::new(Mutex::new(McpState::default())),
         }
@@ -94,6 +96,18 @@ impl ToolEngine {
             .write()
             .map_err(|_| ToolError::Io(std::io::Error::other("tool config lock poisoned")))?;
         *guard = Arc::new(config);
+        Ok(())
+    }
+
+    pub fn set_goal_backend(
+        &self,
+        backend: Option<Arc<dyn builtin::GoalBackend>>,
+    ) -> Result<(), ToolError> {
+        let mut guard = self
+            .goal_backend
+            .write()
+            .map_err(|_| ToolError::Io(std::io::Error::other("tool goal backend lock poisoned")))?;
+        *guard = backend;
         Ok(())
     }
 
@@ -242,6 +256,24 @@ impl ToolEngine {
             .clone();
 
         let res: Result<String, ToolError> = async {
+            if call.name == builtin::TOOL_GET_GOAL || call.name == builtin::TOOL_UPDATE_GOAL {
+                let backend = self
+                    .goal_backend
+                    .read()
+                    .map_err(|_| {
+                        ToolError::Io(std::io::Error::other("tool goal backend lock poisoned"))
+                    })?
+                    .clone()
+                    .ok_or_else(|| {
+                        ToolError::InvalidCommand("no active session goal backend".to_string())
+                    })?;
+                return if call.name == builtin::TOOL_GET_GOAL {
+                    builtin::goal::execute_get(backend.as_ref()).await
+                } else {
+                    builtin::goal::execute_update(backend.as_ref(), call).await
+                };
+            }
+
             if is_mcp {
                 let Some((server_name, _tool_name)) =
                     crate::tools::mcp::McpHub::parse_exposed_tool_name(call.name.as_str())

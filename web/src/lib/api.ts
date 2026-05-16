@@ -14,6 +14,7 @@ import type {
   OpenWorkspaceTarget,
   RunCreateRequest,
   Session,
+  SessionGoal,
   SessionListResponse,
   SessionSaveDefaultsRequest,
   SkillEnableSetting,
@@ -98,6 +99,18 @@ export const api = {
   },
   getSession(sessionId: string): Promise<Session> {
     return apiFetch<Session>(`/v1/sessions/${sessionId}`);
+  },
+  getGoal(sessionId: string): Promise<SessionGoal | null> {
+    return apiFetch<SessionGoal | null>(`/v1/sessions/${sessionId}/goal`);
+  },
+  setGoal(sessionId: string, objective: string): Promise<SessionGoal> {
+    return apiFetch<SessionGoal>(`/v1/sessions/${sessionId}/goal`, {
+      method: "PUT",
+      body: JSON.stringify({ objective }),
+    });
+  },
+  clearGoal(sessionId: string): Promise<void> {
+    return apiFetch<void>(`/v1/sessions/${sessionId}/goal`, { method: "DELETE" });
   },
   deleteSession(
     sessionId: string,

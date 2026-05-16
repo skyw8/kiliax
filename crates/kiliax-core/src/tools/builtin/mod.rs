@@ -2,6 +2,7 @@ mod apply_patch;
 mod common;
 mod edit_file;
 mod file_tracker;
+pub(crate) mod goal;
 mod grep_files;
 mod list_dir;
 mod read_file;
@@ -15,6 +16,10 @@ mod write_file;
 pub use apply_patch::apply_patch_tool_definition;
 pub use edit_file::edit_file_tool_definition;
 pub use file_tracker::FileAccessTracker;
+pub use goal::{
+    get_goal_tool_definition, update_goal_tool_definition, GoalBackend, TOOL_GET_GOAL,
+    TOOL_UPDATE_GOAL,
+};
 pub use grep_files::grep_files_tool_definition;
 pub use list_dir::list_dir_tool_definition;
 pub use read_file::read_file_tool_definition;

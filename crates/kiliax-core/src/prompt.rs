@@ -113,6 +113,7 @@ impl PromptBuilder {
     pub fn push_user(mut self, content: impl Into<String>) -> Self {
         self.messages.push(Message::User {
             content: UserMessageContent::Text(content.into()),
+            hidden: false,
         });
         self
     }
@@ -396,7 +397,7 @@ mod tests {
             matches!(&msgs[2], Message::System { content } if content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG))
         );
         assert!(
-            matches!(&msgs[3], Message::User { content: UserMessageContent::Text(content) } if content == "hi")
+            matches!(&msgs[3], Message::User { content: UserMessageContent::Text(content), .. } if content == "hi")
         );
     }
 

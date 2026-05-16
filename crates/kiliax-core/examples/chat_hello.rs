@@ -13,6 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resp = llm
         .chat(ChatRequest::new(vec![Message::User {
             content: UserMessageContent::Text("hi".into()),
+            hidden: false,
         }]))
         .await?;
 

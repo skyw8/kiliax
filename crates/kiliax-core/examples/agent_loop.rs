@@ -81,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut s,
                         Message::User {
                             content: UserMessageContent::Text(prompt.clone()),
+                            hidden: false,
                         },
                     )
                     .await?;

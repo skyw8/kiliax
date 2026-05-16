@@ -1,5 +1,5 @@
 import React from "react";
-import { MoreHorizontal, Pin } from "lucide-react";
+import { Flag, MoreHorizontal, Pin } from "lucide-react";
 
 import { modelLabel } from "../lib/app-utils";
 import { statusBadge } from "../lib/session-utils";
@@ -39,6 +39,12 @@ export function SessionItemRow({
         <div className="mt-1 truncate text-xs text-zinc-500">
           {modelLabel(summary.settings.model_id)}
         </div>
+        {summary.goal ? (
+          <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-violet-700">
+            <Flag className="h-3 w-3 shrink-0" />
+            <span className="truncate">{summary.goal.objective}</span>
+          </div>
+        ) : null}
       </button>
 
       <Button
@@ -58,4 +64,3 @@ export function SessionItemRow({
     </div>
   );
 }
-

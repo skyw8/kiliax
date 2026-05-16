@@ -69,7 +69,7 @@ pub(super) async fn to_openai_message(
                 name: None,
             })
         }
-        Message::User { content } => {
+        Message::User { content, .. } => {
             ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
                 content: to_openai_user_content(content).await?,
                 name: None,
@@ -117,7 +117,7 @@ pub(super) async fn to_openai_message(
 
 pub(super) async fn to_openai_message_value(msg: &Message) -> Result<Value, LlmError> {
     match msg {
-        Message::User { content } => Ok(json!({
+        Message::User { content, .. } => Ok(json!({
             "role": "user",
             "content": to_openai_user_content_value(content).await?,
         })),

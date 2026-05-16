@@ -1088,6 +1088,7 @@ impl ServerState {
                         last_event_id,
                     },
                     settings,
+                    goal: meta.goal.clone(),
                 });
             }
         }
@@ -1150,6 +1151,7 @@ impl ServerState {
                     last_event_id,
                 },
                 settings: settings.clone(),
+                goal: state.meta.goal.clone(),
             },
             mcp_status: mcp_status_from_settings(&settings, config.as_ref()),
         })
@@ -1248,6 +1250,31 @@ impl ServerState {
         let live = self.ensure_live(session_id).await?;
         live.patch_settings(patch).await?;
         live.snapshot().await
+    }
+
+    pub async fn get_goal(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<domain::SessionGoal>, ApiError> {
+        if let Some(live) = self.get_live(session_id.as_str()).await {
+            return Ok(live.goal().await);
+        }
+        let state = self.store.load(session_id).await.map_err(map_session_err)?;
+        Ok(state.meta.goal)
+    }
+
+    pub async fn set_goal(
+        &self,
+        session_id: &SessionId,
+        objective: String,
+    ) -> Result<domain::SessionGoal, ApiError> {
+        let live = self.ensure_live(session_id).await?;
+        live.set_goal(objective).await
+    }
+
+    pub async fn clear_goal(&self, session_id: &SessionId) -> Result<(), ApiError> {
+        let live = self.ensure_live(session_id).await?;
+        live.clear_goal().await
     }
 
     pub async fn save_session_defaults(

@@ -33,6 +33,7 @@ pub fn build_app(state: Arc<ServerState>) -> Router {
         .routes(handlers::sessions::open_workspace_routes())
         .routes(handlers::sessions::settings_routes())
         .routes(handlers::sessions::save_defaults_routes())
+        .routes(handlers::sessions::goal_routes())
         .routes(handlers::sessions::messages_routes())
         .routes(handlers::skills::session_routes())
         .routes(handlers::runs::create_routes())

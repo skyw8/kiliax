@@ -35,7 +35,7 @@ pub fn estimate_context_tokens(messages: &[Message]) -> usize {
             Message::Developer { content } | Message::System { content } => {
                 total = total.saturating_add(approx_token_count(content));
             }
-            Message::User { content } => match content {
+            Message::User { content, .. } => match content {
                 UserMessageContent::Text(text) => {
                     total = total.saturating_add(approx_token_count(text));
                 }
@@ -95,9 +95,12 @@ pub fn summary_text(summary_suffix: &str) -> String {
 pub fn collect_real_user_texts(messages: &[Message]) -> Vec<String> {
     let mut out = Vec::new();
     for msg in messages {
-        let Message::User { content } = msg else {
+        let Message::User { content, hidden } = msg else {
             continue;
         };
+        if *hidden {
+            continue;
+        }
         let text = user_content_to_text_for_compaction(content);
         if is_summary_message(&text) {
             continue;
@@ -166,10 +169,12 @@ pub fn build_compacted_user_history(
         }
         out.push(Message::User {
             content: UserMessageContent::Text(message),
+            hidden: false,
         });
     }
     out.push(Message::User {
         content: UserMessageContent::Text(summary_text(summary_suffix)),
+        hidden: false,
     });
     out
 }
@@ -245,6 +250,7 @@ pub async fn run_compaction(llm: &LlmClient, messages: &[Message]) -> Result<Str
         let mut req_messages = working.clone();
         req_messages.push(Message::User {
             content: UserMessageContent::Text(SUMMARIZATION_PROMPT.to_string()),
+            hidden: false,
         });
 
         match llm.chat(ChatRequest::new(req_messages)).await {
@@ -292,7 +298,7 @@ mod tests {
         let msgs = vec!["one".to_string(), "two".to_string()];
         let out = build_compacted_user_history(&msgs, "sum");
         assert!(
-            matches!(out.last(), Some(Message::User { content: UserMessageContent::Text(t) }) if is_summary_message(t))
+            matches!(out.last(), Some(Message::User { content: UserMessageContent::Text(t), .. }) if is_summary_message(t))
         );
     }
 }

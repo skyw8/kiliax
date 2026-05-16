@@ -122,6 +122,9 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoal>,
+
     /// Last appended event sequence number.
     pub last_seq: u64,
 
@@ -129,6 +132,24 @@ pub struct SessionMeta {
     pub last_snapshot_seq: u64,
 
     pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalStatus {
+    Active,
+    Complete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoal {
+    pub objective: String,
+    pub status: SessionGoalStatus,
+    pub session_id: SessionId,
+    pub time_used_seconds: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub tokens_used: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,11 +179,33 @@ pub struct SessionEventLine {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEvent {
-    Message { message: Message },
-    MessageEdit { message_id: u64, message: Message },
-    TruncateAfter { message_id: u64 },
-    Finish { finish_reason: Option<String> },
-    Error { error: String },
+    Message {
+        message: Message,
+    },
+    MessageEdit {
+        message_id: u64,
+        message: Message,
+    },
+    TruncateAfter {
+        message_id: u64,
+    },
+    Finish {
+        finish_reason: Option<String>,
+    },
+    Error {
+        error: String,
+    },
+    GoalSet {
+        goal: SessionGoal,
+    },
+    GoalCleared,
+    GoalCompleted {
+        goal: SessionGoal,
+    },
+    GoalUsage {
+        time_used_seconds: u64,
+        tokens_used: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -302,6 +345,7 @@ impl FileSessionStore {
             last_finish_reason: None,
             last_error: None,
             prompt_cache_key: Some(new_prompt_cache_key()),
+            goal: None,
             last_seq,
             last_snapshot_seq: last_seq,
             message_count: initial_messages.len(),
@@ -347,6 +391,7 @@ impl FileSessionStore {
             rebuilt.meta.message_count = 0;
             rebuilt.meta.last_finish_reason = None;
             rebuilt.meta.last_error = None;
+            rebuilt.meta.goal = None;
 
             self.replay_events_after_snapshot(&mut rebuilt).await?;
             if rebuilt.meta.prompt_cache_key.is_none() {
@@ -460,6 +505,69 @@ impl FileSessionStore {
             state,
             SessionEvent::Error {
                 error: error.into(),
+            },
+        )
+        .await
+    }
+
+    pub async fn set_goal(
+        &self,
+        state: &mut SessionState,
+        objective: impl Into<String>,
+    ) -> Result<SessionGoal, SessionError> {
+        let objective = objective.into().trim().to_string();
+        if objective.is_empty() {
+            return Err(SessionError::InvalidId(
+                "goal objective must not be empty".to_string(),
+            ));
+        }
+        let now = now_rfc3339();
+        let goal = SessionGoal {
+            objective,
+            status: SessionGoalStatus::Active,
+            session_id: state.meta.id.clone(),
+            time_used_seconds: 0,
+            created_at: now.clone(),
+            updated_at: now,
+            tokens_used: 0,
+        };
+        self.record_event(state, SessionEvent::GoalSet { goal: goal.clone() })
+            .await?;
+        Ok(goal)
+    }
+
+    pub async fn clear_goal(&self, state: &mut SessionState) -> Result<(), SessionError> {
+        self.record_event(state, SessionEvent::GoalCleared).await
+    }
+
+    pub async fn complete_goal(
+        &self,
+        state: &mut SessionState,
+    ) -> Result<Option<SessionGoal>, SessionError> {
+        let Some(mut goal) = state.meta.goal.clone() else {
+            return Ok(None);
+        };
+        goal.status = SessionGoalStatus::Complete;
+        goal.updated_at = now_rfc3339();
+        self.record_event(state, SessionEvent::GoalCompleted { goal: goal.clone() })
+            .await?;
+        Ok(Some(goal))
+    }
+
+    pub async fn add_goal_usage(
+        &self,
+        state: &mut SessionState,
+        time_used_seconds: u64,
+        tokens_used: u64,
+    ) -> Result<(), SessionError> {
+        if state.meta.goal.is_none() {
+            return Ok(());
+        }
+        self.record_event(
+            state,
+            SessionEvent::GoalUsage {
+                time_used_seconds,
+                tokens_used,
             },
         )
         .await
@@ -626,7 +734,13 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
     match event {
         SessionEvent::Message { message } => {
             if state.meta.title.is_none() {
-                if let Message::User { content } = &message {
+                if let Message::User { content, hidden } = &message {
+                    if *hidden {
+                        state.messages.push(message);
+                        state.message_ids.push(seq);
+                        state.meta.message_count = state.messages.len();
+                        return;
+                    }
                     if let Some(t) = content.first_text() {
                         let t = t.trim();
                         if !t.is_empty() {
@@ -646,7 +760,10 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
             if let Some(idx) = state.message_ids.iter().position(|id| *id == message_id) {
                 state.messages[idx] = message.clone();
                 if idx == 0 {
-                    if let Message::User { content } = &message {
+                    if let Message::User { content, hidden } = &message {
+                        if *hidden {
+                            return;
+                        }
                         if let Some(t) = content.first_text() {
                             let t = t.trim();
                             if !t.is_empty() {
@@ -672,12 +789,34 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
         SessionEvent::Error { error } => {
             state.meta.last_error = Some(error);
         }
+        SessionEvent::GoalSet { goal } => {
+            state.meta.goal = Some(goal);
+        }
+        SessionEvent::GoalCleared => {
+            state.meta.goal = None;
+        }
+        SessionEvent::GoalCompleted { goal } => {
+            state.meta.goal = Some(goal);
+        }
+        SessionEvent::GoalUsage {
+            time_used_seconds,
+            tokens_used,
+        } => {
+            if let Some(goal) = state.meta.goal.as_mut() {
+                goal.time_used_seconds = goal.time_used_seconds.saturating_add(time_used_seconds);
+                goal.tokens_used = goal.tokens_used.saturating_add(tokens_used);
+                goal.updated_at = now_rfc3339();
+            }
+        }
     }
 }
 
 fn derive_title(messages: &[Message]) -> Option<String> {
     for m in messages {
-        if let Message::User { content } = m {
+        if let Message::User { content, hidden } = m {
+            if *hidden {
+                continue;
+            }
             if let Some(t) = content.first_text() {
                 let t = t.trim();
                 if !t.is_empty() {
@@ -736,6 +875,13 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn now_rfc3339() -> String {
+    use time::format_description::well_known::Rfc3339;
+    time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
 fn new_prompt_cache_key() -> String {
     Uuid::now_v7().to_string()
 }
@@ -767,6 +913,7 @@ mod tests {
                 Vec::new(),
                 vec![Message::User {
                     content: crate::protocol::UserMessageContent::Text("hello".to_string()),
+                    hidden: false,
                 }],
             )
             .await
@@ -805,6 +952,46 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn goal_roundtrip_set_complete_clear() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(tmp.path()).with_checkpoint_every(1000);
+        let mut state = store
+            .create(
+                "general",
+                Some("p/m".to_string()),
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        let goal = store.set_goal(&mut state, "ship goal loop").await.unwrap();
+        assert_eq!(goal.objective, "ship goal loop");
+        assert_eq!(
+            state.meta.goal.as_ref().map(|g| &g.status),
+            Some(&SessionGoalStatus::Active)
+        );
+
+        store.add_goal_usage(&mut state, 3, 42).await.unwrap();
+        let complete = store.complete_goal(&mut state).await.unwrap().unwrap();
+        assert_eq!(complete.status, SessionGoalStatus::Complete);
+        store.checkpoint(&mut state).await.unwrap();
+
+        let loaded = store.load(state.id()).await.unwrap();
+        let loaded_goal = loaded.meta.goal.as_ref().unwrap();
+        assert_eq!(loaded_goal.status, SessionGoalStatus::Complete);
+        assert_eq!(loaded_goal.time_used_seconds, 3);
+        assert_eq!(loaded_goal.tokens_used, 42);
+
+        let mut loaded = loaded;
+        store.clear_goal(&mut loaded).await.unwrap();
+        store.checkpoint(&mut loaded).await.unwrap();
+        assert!(store.load(loaded.id()).await.unwrap().meta.goal.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn load_repairs_corrupted_snapshot_when_message_ids_out_of_sync() {
         let tmp = tempfile::tempdir().unwrap();
         let store = FileSessionStore::new(tmp.path()).with_checkpoint_every(1000);
@@ -822,6 +1009,7 @@ mod tests {
                     },
                     Message::User {
                         content: crate::protocol::UserMessageContent::Text("u1".to_string()),
+                        hidden: false,
                     },
                 ],
             )

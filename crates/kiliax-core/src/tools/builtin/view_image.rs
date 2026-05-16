@@ -99,6 +99,7 @@ pub(crate) async fn execute_with_attachment(
             filename: None,
             detail: None,
         }]),
+        hidden: false,
     };
 
     Ok((tool_text, msg))

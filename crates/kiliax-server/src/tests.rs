@@ -307,6 +307,7 @@ async fn messages_include_usage_when_present() {
             Vec::new(),
             vec![Message::User {
                 content: UserMessageContent::Text("hello".to_string()),
+                hidden: false,
             }],
         )
         .await
@@ -395,6 +396,78 @@ async fn create_session_accepts_empty_body_and_persists_settings() {
 }
 
 #[tokio::test]
+async fn session_goal_api_set_get_clear() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::POST,
+            "/v1/sessions",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PUT,
+            &format!("/v1/sessions/{session_id}/goal"),
+            serde_json::json!({ "objective": "finish the whole task" }),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body.get("status").and_then(|v| v.as_str()), Some("active"));
+    assert_eq!(
+        body.get("objective").and_then(|v| v.as_str()),
+        Some("finish the whole task")
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/goal"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("objective").and_then(|v| v.as_str()),
+        Some("finish the whole task")
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(
+            Method::DELETE,
+            &format!("/v1/sessions/{session_id}/goal"),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .oneshot(req_empty(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/goal"),
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.is_null(), "body: {body}");
+}
+
+#[tokio::test]
 async fn fork_session_inherits_prompt_cache_key() {
     let dir = TempDir::new().expect("tempdir");
     let workspace_root = dir.path().to_path_buf();
@@ -414,6 +487,7 @@ async fn fork_session_inherits_prompt_cache_key() {
             Vec::new(),
             vec![Message::User {
                 content: UserMessageContent::Text("hello".to_string()),
+                hidden: false,
             }],
         )
         .await
@@ -751,6 +825,7 @@ async fn events_stream_auto_loads_session() {
             Vec::new(),
             vec![Message::User {
                 content: UserMessageContent::Text("u1".to_string()),
+                hidden: false,
             }],
         )
         .await
@@ -785,6 +860,7 @@ async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
             Vec::new(),
             vec![Message::User {
                 content: UserMessageContent::Text("u1".to_string()),
+                hidden: false,
             }],
         )
         .await
@@ -807,6 +883,7 @@ async fn edit_user_message_truncates_and_enqueues_from_user_message_run() {
             &mut state,
             Message::User {
                 content: UserMessageContent::Text("u2".to_string()),
+                hidden: false,
             },
         )
         .await
@@ -915,6 +992,7 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
             Vec::new(),
             vec![Message::User {
                 content: UserMessageContent::Text("u1".to_string()),
+                hidden: false,
             }],
         )
         .await
@@ -937,6 +1015,7 @@ async fn regenerate_assistant_truncates_and_enqueues_from_user_message_run() {
             &mut state,
             Message::User {
                 content: UserMessageContent::Text("u2".to_string()),
+                hidden: false,
             },
         )
         .await
@@ -1034,6 +1113,7 @@ async fn history_mutation_endpoints_return_conflict_when_session_busy() {
             Vec::new(),
             vec![Message::User {
                 content: UserMessageContent::Text("u1".to_string()),
+                hidden: false,
             }],
         )
         .await
@@ -1043,6 +1123,7 @@ async fn history_mutation_endpoints_return_conflict_when_session_busy() {
             &mut state,
             Message::User {
                 content: UserMessageContent::Text("u2".to_string()),
+                hidden: false,
             },
         )
         .await

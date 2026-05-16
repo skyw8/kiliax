@@ -1,5 +1,5 @@
 import React from "react";
-import { GitFork, Pin, Trash2 } from "lucide-react";
+import { Flag, GitFork, Info, Pin, Trash2, XCircle } from "lucide-react";
 
 import { ActionSheet } from "./ui/action-sheet";
 import { Button } from "./ui/button";
@@ -10,10 +10,13 @@ export function SessionActionSheet(props: {
   description: string;
   pinLabel: string;
   onFork: () => void;
+  onSetGoal: () => void;
+  onGoalInfo: () => void;
+  onClearGoal: () => void;
   onTogglePinned: () => void;
   onDelete: () => void;
 }) {
-  const { open, onOpenChange, description, pinLabel, onFork, onTogglePinned, onDelete } = props;
+  const { open, onOpenChange, description, pinLabel, onFork, onSetGoal, onGoalInfo, onClearGoal, onTogglePinned, onDelete } = props;
 
   return (
     <ActionSheet
@@ -30,6 +33,30 @@ export function SessionActionSheet(props: {
         >
           <GitFork className="h-5 w-5 text-violet-600" />
           Fork
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
+          onClick={onSetGoal}
+        >
+          <Flag className="h-5 w-5 text-violet-600" />
+          Set Goal
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
+          onClick={onGoalInfo}
+        >
+          <Info className="h-5 w-5 text-violet-600" />
+          Goal Info
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
+          onClick={onClearGoal}
+        >
+          <XCircle className="h-5 w-5 text-violet-600" />
+          Clear Goal
         </button>
         <button
           type="button"
@@ -62,10 +89,13 @@ export function SessionContextMenu(props: {
   y: number;
   pinLabel: string;
   onFork: () => void;
+  onSetGoal: () => void;
+  onGoalInfo: () => void;
+  onClearGoal: () => void;
   onTogglePinned: () => void;
   onDelete: () => void;
 }) {
-  const { open, menuRef, x, y, pinLabel, onFork, onTogglePinned, onDelete } = props;
+  const { open, menuRef, x, y, pinLabel, onFork, onSetGoal, onGoalInfo, onClearGoal, onTogglePinned, onDelete } = props;
 
   if (!open) return null;
 
@@ -84,6 +114,27 @@ export function SessionContextMenu(props: {
       </button>
       <button
         className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
+        onClick={onSetGoal}
+      >
+        <Flag className="h-4 w-4 text-violet-600" />
+        Set Goal
+      </button>
+      <button
+        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
+        onClick={onGoalInfo}
+      >
+        <Info className="h-4 w-4 text-violet-600" />
+        Goal Info
+      </button>
+      <button
+        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
+        onClick={onClearGoal}
+      >
+        <XCircle className="h-4 w-4 text-violet-600" />
+        Clear Goal
+      </button>
+      <button
+        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
         onClick={onTogglePinned}
       >
         <Pin className="h-4 w-4 text-violet-600" />
@@ -99,4 +150,3 @@ export function SessionContextMenu(props: {
     </div>
   );
 }
-

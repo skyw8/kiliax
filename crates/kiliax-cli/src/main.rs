@@ -34,6 +34,48 @@ use kiliax_core::{
 use crate::app::App;
 use crate::app::{AppAction, SubmitDisposition};
 
+#[derive(Clone)]
+struct LocalGoalBackend {
+    store: FileSessionStore,
+    session_id: SessionId,
+}
+
+#[async_trait::async_trait]
+impl kiliax_core::tools::builtin::GoalBackend for LocalGoalBackend {
+    async fn get_goal(
+        &self,
+    ) -> std::result::Result<Option<kiliax_core::session::SessionGoal>, kiliax_core::tools::ToolError>
+    {
+        let session = self
+            .store
+            .load(&self.session_id)
+            .await
+            .map_err(|e| kiliax_core::tools::ToolError::Io(std::io::Error::other(e)))?;
+        Ok(session.meta.goal)
+    }
+
+    async fn complete_goal(
+        &self,
+    ) -> std::result::Result<Option<kiliax_core::session::SessionGoal>, kiliax_core::tools::ToolError>
+    {
+        let mut session = self
+            .store
+            .load(&self.session_id)
+            .await
+            .map_err(|e| kiliax_core::tools::ToolError::Io(std::io::Error::other(e)))?;
+        let goal = self
+            .store
+            .complete_goal(&mut session)
+            .await
+            .map_err(|e| kiliax_core::tools::ToolError::Io(std::io::Error::other(e)))?;
+        self.store
+            .checkpoint(&mut session)
+            .await
+            .map_err(|e| kiliax_core::tools::ToolError::Io(std::io::Error::other(e)))?;
+        Ok(goal)
+    }
+}
+
 const EXAMPLE_CONFIG_YAML: &str = include_str!("../../../kiliax.example.yaml");
 
 fn tui_local_logs() -> kiliax_otel::LocalLogs {
@@ -66,6 +108,9 @@ fn print_help() {
     println!("  {bin} server start");
     println!("  {bin} server stop");
     println!("  {bin} server restart");
+    println!("  {bin} goal get --session <SESSION_ID>");
+    println!("  {bin} goal set --session <SESSION_ID> <OBJECTIVE...>");
+    println!("  {bin} goal clear --session <SESSION_ID>");
     println!();
     println!("Options:");
     println!("  --resume <SESSION_ID>    Resume a session");
@@ -76,6 +121,52 @@ fn print_help() {
     println!("  1) ~/.kiliax/kiliax.yaml");
     println!();
     println!("If no config is found, {bin} will write a template and exit.");
+}
+
+async fn handle_goal_command(args: &[String]) -> Result<()> {
+    let store = FileSessionStore::global()
+        .context("failed to determine home directory for sessions (expected ~/.kiliax/sessions)")?;
+    let Some(action) = args.first().map(String::as_str) else {
+        anyhow::bail!("goal expects one of: get, set, clear");
+    };
+    let mut session_id: Option<SessionId> = None;
+    let mut rest: Vec<String> = Vec::new();
+    let mut iter = args[1..].iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--session" {
+            let Some(id) = iter.next() else {
+                anyhow::bail!("--session expects a session id");
+            };
+            session_id = Some(SessionId::parse(id)?);
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    let Some(session_id) = session_id else {
+        anyhow::bail!("--session <SESSION_ID> is required");
+    };
+    let mut session = store.load(&session_id).await?;
+    match action {
+        "get" => {
+            println!("{}", serde_json::to_string_pretty(&session.meta.goal)?);
+        }
+        "set" => {
+            let objective = rest.join(" ");
+            if objective.trim().is_empty() {
+                anyhow::bail!("goal set expects an objective");
+            }
+            let goal = store.set_goal(&mut session, objective).await?;
+            store.checkpoint(&mut session).await?;
+            println!("{}", serde_json::to_string_pretty(&goal)?);
+        }
+        "clear" => {
+            store.clear_goal(&mut session).await?;
+            store.checkpoint(&mut session).await?;
+            println!("goal cleared");
+        }
+        other => anyhow::bail!("unknown goal command: {other}"),
+    }
+    Ok(())
 }
 
 fn print_version() {
@@ -188,6 +279,11 @@ async fn main() -> Result<()> {
             }
             _ => print_help(),
         }
+        return Ok(());
+    }
+
+    if args.first().is_some_and(|a| a == "goal") {
+        handle_goal_command(&args[1..]).await?;
         return Ok(());
     }
 
@@ -322,6 +418,13 @@ async fn main() -> Result<()> {
     runtime
         .tools()
         .set_extra_workspace_roots(extra_workspace_roots.clone())
+        .map_err(|e| anyhow::anyhow!(e))?;
+    runtime
+        .tools()
+        .set_goal_backend(Some(std::sync::Arc::new(LocalGoalBackend {
+            store: store.clone(),
+            session_id: session.meta.id.clone(),
+        })))
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let options = AgentRuntimeOptions::from_config(&profile, &loaded.config);

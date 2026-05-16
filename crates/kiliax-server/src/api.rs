@@ -84,6 +84,32 @@ pub struct SessionSummary {
     pub last_outcome: SessionLastOutcome,
     pub status: SessionStatus,
     pub settings: SessionSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SessionGoal {
+    pub objective: String,
+    pub status: SessionGoalStatus,
+    pub session_id: String,
+    pub time_used_seconds: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub tokens_used: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalStatus {
+    Active,
+    Complete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetGoalRequest {
+    pub objective: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -249,6 +275,7 @@ pub enum RunInput {
     RegenerateAfterUserMessage {
         user_message_id: u64,
     },
+    GoalContinuation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

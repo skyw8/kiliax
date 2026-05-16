@@ -827,6 +827,7 @@ mod tests {
         let mut messages = vec![
             Message::User {
                 content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
             },
             Message::Assistant {
                 content: None,
@@ -939,6 +940,7 @@ mod tests {
             },
             Message::User {
                 content: UserMessageContent::Text("[img]".to_string()),
+                hidden: false,
             },
             Message::Tool {
                 tool_call_id: "b".to_string(),

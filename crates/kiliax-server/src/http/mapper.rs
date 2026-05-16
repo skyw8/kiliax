@@ -24,6 +24,29 @@ impl From<domain::SessionStatus> for api::SessionStatus {
     }
 }
 
+impl From<kiliax_core::session::SessionGoalStatus> for api::SessionGoalStatus {
+    fn from(value: kiliax_core::session::SessionGoalStatus) -> Self {
+        match value {
+            kiliax_core::session::SessionGoalStatus::Active => Self::Active,
+            kiliax_core::session::SessionGoalStatus::Complete => Self::Complete,
+        }
+    }
+}
+
+impl From<kiliax_core::session::SessionGoal> for api::SessionGoal {
+    fn from(value: kiliax_core::session::SessionGoal) -> Self {
+        Self {
+            objective: value.objective,
+            status: value.status.into(),
+            session_id: value.session_id.to_string(),
+            time_used_seconds: value.time_used_seconds,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            tokens_used: value.tokens_used,
+        }
+    }
+}
+
 impl From<domain::SkillEnableSetting> for api::SkillEnableSetting {
     fn from(value: domain::SkillEnableSetting) -> Self {
         Self {
@@ -156,6 +179,7 @@ impl From<domain::SessionSummary> for api::SessionSummary {
             last_outcome: value.last_outcome.into(),
             status: value.status.into(),
             settings: value.settings.into(),
+            goal: value.goal.map(Into::into),
         }
     }
 }
@@ -327,6 +351,7 @@ impl From<domain::RunInput> for api::RunInput {
             domain::RunInput::RegenerateAfterUserMessage { user_message_id } => {
                 Self::RegenerateAfterUserMessage { user_message_id }
             }
+            domain::RunInput::GoalContinuation => Self::GoalContinuation,
         }
     }
 }
@@ -351,6 +376,7 @@ impl From<api::RunInput> for domain::RunInput {
             api::RunInput::RegenerateAfterUserMessage { user_message_id } => {
                 Self::RegenerateAfterUserMessage { user_message_id }
             }
+            api::RunInput::GoalContinuation => Self::GoalContinuation,
         }
     }
 }

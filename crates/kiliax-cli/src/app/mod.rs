@@ -171,7 +171,9 @@ impl App {
         let prompt_history: Vec<String> = messages
             .iter()
             .filter_map(|msg| match msg {
-                Message::User { content } => content.first_text().map(|t| t.to_string()),
+                Message::User { content, hidden } if !hidden => {
+                    content.first_text().map(|t| t.to_string())
+                }
                 _ => None,
             })
             .filter(|text| !compact::is_summary_message(text))
@@ -801,7 +803,9 @@ impl App {
             .messages
             .iter()
             .filter_map(|msg| match msg {
-                Message::User { content } => content.first_text().map(|t| t.to_string()),
+                Message::User { content, hidden } if !hidden => {
+                    content.first_text().map(|t| t.to_string())
+                }
                 _ => None,
             })
             .filter(|text| !compact::is_summary_message(text))
@@ -954,7 +958,10 @@ impl App {
         self.pending_history_lines
             .extend(render_user_message_lines(&display_text));
 
-        let msg = Message::User { content };
+        let msg = Message::User {
+            content,
+            hidden: false,
+        };
         self.messages.push(msg.clone());
         self.store.record_message(&mut self.session, msg).await?;
         Ok(())
@@ -1010,7 +1017,9 @@ impl App {
             .messages
             .iter()
             .filter_map(|msg| match msg {
-                Message::User { content } => content.first_text().map(|t| t.to_string()),
+                Message::User { content, hidden } if !hidden => {
+                    content.first_text().map(|t| t.to_string())
+                }
                 _ => None,
             })
             .filter(|text| !compact::is_summary_message(text))
@@ -1502,9 +1511,12 @@ impl App {
                                 ));
                         }
                     }
-                    Message::User { content } => {
+                    Message::User { content, hidden } => {
                         let display = content.display_text();
-                        if !compact::is_summary_message(&display) && !display.trim().is_empty() {
+                        if !hidden
+                            && !compact::is_summary_message(&display)
+                            && !display.trim().is_empty()
+                        {
                             self.pending_history_lines
                                 .extend(render_user_message_lines(&display));
                         }
@@ -1781,6 +1793,7 @@ mod tests {
         let store = FileSessionStore::new(tmp.path());
         let messages = vec![Message::User {
             content: UserMessageContent::Text("hi".to_string()),
+            hidden: false,
         }];
         let session = store
             .create(

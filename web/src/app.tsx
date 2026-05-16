@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, Flag, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
@@ -185,6 +185,7 @@ export default function App() {
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+  const [goalDraft, setGoalDraft] = useState("");
 
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
@@ -1077,6 +1078,53 @@ export default function App() {
     }
   }
 
+  async function setSessionGoal(sessionId: string, objectiveOverride?: string) {
+    const current = sessions.find((s) => s.id === sessionId)?.goal?.objective ?? "";
+    const objective = objectiveOverride ?? window.prompt("Set goal", current);
+    if (objective == null) return;
+    const trimmed = objective.trim();
+    if (!trimmed) return;
+    try {
+      await api.setGoal(sessionId, trimmed);
+      await refreshSessions();
+      if (selectedIdRef.current === sessionId) {
+        await fetchSession(sessionId);
+      }
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function clearSessionGoal(sessionId: string) {
+    try {
+      await api.clearGoal(sessionId);
+      await refreshSessions();
+      if (selectedIdRef.current === sessionId) {
+        await fetchSession(sessionId);
+      }
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  function showSessionGoalInfo(sessionId: string) {
+    const goal = sessions.find((s) => s.id === sessionId)?.goal;
+    if (!goal) {
+      window.alert("No goal set.");
+      return;
+    }
+    window.alert(
+      [
+        `Status: ${goal.status}`,
+        `Objective: ${goal.objective}`,
+        `Time used: ${goal.time_used_seconds}s`,
+        `Tokens used: ${goal.tokens_used}`,
+        `Created: ${goal.created_at}`,
+        `Updated: ${goal.updated_at}`,
+      ].join("\n"),
+    );
+  }
+
   function togglePinnedSession(sessionId: string) {
     setPinnedSessionIds((prev) => {
       const exists = prev.includes(sessionId);
@@ -1428,6 +1476,10 @@ export default function App() {
 
   const selectedSummary = sortedSessions.find((s) => s.id === selectedId) ?? null;
   const selectedBadge = selectedSummary ? statusBadge(selectedSummary) : null;
+
+  useEffect(() => {
+    setGoalDraft(selectedSummary?.goal?.objective ?? "");
+  }, [selectedSummary?.id, selectedSummary?.goal?.objective]);
 
   const composerHasAttachments = composerAttachments.length > 0;
   const composerHasText = composerText.trim().length > 0 || composerHasAttachments;
@@ -1894,11 +1946,63 @@ export default function App() {
           <div
             ref={chatScrollRef}
             onScroll={updateIsAtBottom}
-            className="flex-1 overflow-auto bg-zinc-50 px-3 py-4 sm:px-4"
+            className="flex-1 overflow-auto bg-zinc-50 pb-4 pr-3 sm:pr-4"
           >
             {selectedId ? (
-              <div className="mx-auto w-full max-w-4xl space-y-3">
-                {messages.map((m) => (
+              <div className="grid w-full gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
+                <aside className="self-start lg:sticky lg:top-0">
+                  <div className="space-y-3 bg-white/60 px-3 py-3">
+                    <div className="flex items-center gap-2 text-sm font-medium text-zinc-900">
+                      <Flag className="h-4 w-4 text-violet-600" />
+                      Goal
+                    </div>
+                    <textarea
+                      value={goalDraft}
+                      onChange={(e) => setGoalDraft(e.target.value)}
+                      placeholder="Set a persistent goal..."
+                      className="min-h-[112px] w-full resize-y rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        className="h-8 bg-violet-600 px-3 text-white hover:bg-violet-700"
+                        disabled={!selectedId || !goalDraft.trim()}
+                        onClick={() => selectedId && setSessionGoal(selectedId, goalDraft)}
+                      >
+                        Set
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 px-3"
+                        disabled={!selectedSummary?.goal}
+                        onClick={() => selectedId && clearSessionGoal(selectedId)}
+                      >
+                        Clear
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-3"
+                        onClick={() => selectedId && showSessionGoalInfo(selectedId)}
+                      >
+                        Info
+                      </Button>
+                    </div>
+                    {selectedSummary?.goal ? (
+                      <div className="space-y-1 text-xs text-zinc-600">
+                        <div>Status: {selectedSummary.goal.status}</div>
+                        <div>Time: {selectedSummary.goal.time_used_seconds}s</div>
+                        <div>Tokens: {selectedSummary.goal.tokens_used}</div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-zinc-500">No active goal</div>
+                    )}
+                  </div>
+                </aside>
+
+                <div className="min-w-0 space-y-3">
+                  {messages.map((m) => (
                   <MessageRow
                     key={`${m.role}:${m.id}`}
                     msg={m}
@@ -2020,6 +2124,7 @@ export default function App() {
                 ) : null}
 
                 <div ref={chatEndRef} />
+                </div>
               </div>
             ) : (
               <EmptyState />
@@ -2253,6 +2358,24 @@ export default function App() {
             setSessionActionSheet(null);
             forkSessionCopy(id);
           }}
+          onSetGoal={() => {
+            const id = sessionActionSheet?.sessionId;
+            if (!id) return;
+            setSessionActionSheet(null);
+            setSessionGoal(id);
+          }}
+          onGoalInfo={() => {
+            const id = sessionActionSheet?.sessionId;
+            if (!id) return;
+            setSessionActionSheet(null);
+            showSessionGoalInfo(id);
+          }}
+          onClearGoal={() => {
+            const id = sessionActionSheet?.sessionId;
+            if (!id) return;
+            setSessionActionSheet(null);
+            clearSessionGoal(id);
+          }}
           onTogglePinned={() => {
             const id = sessionActionSheet?.sessionId;
             if (!id) return;
@@ -2307,6 +2430,24 @@ export default function App() {
           if (!id) return;
           setSessionMenu(null);
           forkSessionCopy(id);
+        }}
+        onSetGoal={() => {
+          const id = sessionMenu?.sessionId;
+          if (!id) return;
+          setSessionMenu(null);
+          setSessionGoal(id);
+        }}
+        onGoalInfo={() => {
+          const id = sessionMenu?.sessionId;
+          if (!id) return;
+          setSessionMenu(null);
+          showSessionGoalInfo(id);
+        }}
+        onClearGoal={() => {
+          const id = sessionMenu?.sessionId;
+          if (!id) return;
+          setSessionMenu(null);
+          clearSessionGoal(id);
         }}
         onTogglePinned={() => {
           const id = sessionMenu?.sessionId;

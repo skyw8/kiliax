@@ -240,6 +240,8 @@ pub enum Message {
     },
     User {
         content: UserMessageContent,
+        #[serde(default, skip_serializing_if = "is_false")]
+        hidden: bool,
     },
     Assistant {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +259,10 @@ pub enum Message {
         tool_call_id: String,
         content: String,
     },
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -171,7 +171,7 @@ pub struct McpServerStatus {
     pub tools: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionLastOutcome {
     None,
@@ -188,6 +188,15 @@ pub struct SessionSummary {
     pub last_outcome: SessionLastOutcome,
     pub status: SessionStatus,
     pub settings: SessionSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoal>,
+}
+
+pub type SessionGoal = kiliax_core::session::SessionGoal;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetGoalRequest {
+    pub objective: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +288,7 @@ pub enum RunInput {
     RegenerateAfterUserMessage {
         user_message_id: u64,
     },
+    GoalContinuation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,7 +318,7 @@ pub struct RunCreateRequest {
     pub auto_resume: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     Queued,

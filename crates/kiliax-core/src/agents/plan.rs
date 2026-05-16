@@ -16,6 +16,8 @@ pub(super) fn profile() -> AgentProfile {
             builtin::BuiltinToolId::ShellCommand,
             builtin::BuiltinToolId::WriteStdin,
             builtin::BuiltinToolId::UpdatePlan,
+            builtin::BuiltinToolId::GetGoal,
+            builtin::BuiltinToolId::UpdateGoal,
         ],
         permissions: permissions(),
     }

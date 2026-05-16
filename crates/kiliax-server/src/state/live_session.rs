@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -11,6 +12,7 @@ use kiliax_core::config::Config;
 use kiliax_core::protocol::{Message as CoreMessage, UserContentPart, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
 use kiliax_core::session::{FileSessionStore, SessionId, SessionMcpServerSetting, SessionState};
+use kiliax_core::session::{SessionGoal, SessionGoalStatus};
 use kiliax_core::tools::ToolEngine;
 use tokio::sync::{broadcast, watch, Mutex, Notify};
 use tokio_stream::StreamExt;
@@ -47,6 +49,7 @@ pub struct LiveSession {
     worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
 
     tools: Mutex<ToolEngine>,
+    goal_backend: Mutex<Option<Arc<dyn kiliax_core::tools::builtin::GoalBackend>>>,
 
     status: Mutex<domain::SessionStatus>,
     queue: Mutex<VecDeque<QueuedRun>>,
@@ -159,6 +162,17 @@ fn is_supported_image_media_type(media_type: &str) -> bool {
         media_type,
         "image/png" | "image/jpeg" | "image/gif" | "image/webp"
     )
+}
+
+fn goal_continuation_prompt(goal: &SessionGoal) -> String {
+    let mut prompt = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../kiliax-core/prompts/goal/goal_continuation.md"
+    ))
+    .to_string();
+    prompt.push_str("\n\nActive goal:\n");
+    prompt.push_str(goal.objective.trim());
+    prompt
 }
 
 impl LiveSession {
@@ -281,6 +295,7 @@ impl LiveSession {
             closing: AtomicBool::new(false),
             worker: Mutex::new(None),
             tools: Mutex::new(tools),
+            goal_backend: Mutex::new(None),
             status: Mutex::new(domain::SessionStatus {
                 run_state: domain::SessionRunState::Idle,
                 active_run_id: None,
@@ -298,6 +313,15 @@ impl LiveSession {
             events_ring_size: AtomicUsize::new(events_ring_size),
             next_event_id: AtomicU64::new(last_event_id),
         });
+
+        {
+            let backend: Arc<dyn kiliax_core::tools::builtin::GoalBackend> = live.clone();
+            *live.goal_backend.lock().await = Some(backend.clone());
+            let tools = live.tools.lock().await;
+            tools
+                .set_goal_backend(Some(backend))
+                .map_err(ApiError::internal_error)?;
+        }
 
         // Ensure meta reflects current defaults for compatibility with TUI resume.
         {
@@ -416,6 +440,7 @@ impl LiveSession {
             last_outcome,
             status,
             settings,
+            goal: session.meta.goal.clone(),
         })
     }
 
@@ -512,6 +537,65 @@ impl LiveSession {
         Ok(())
     }
 
+    pub async fn goal(&self) -> Option<SessionGoal> {
+        self.session.lock().await.meta.goal.clone()
+    }
+
+    pub async fn set_goal(&self, objective: String) -> Result<SessionGoal, ApiError> {
+        let goal = {
+            let mut session = self.session.lock().await;
+            let goal = self
+                .store
+                .set_goal(&mut session, objective)
+                .await
+                .map_err(map_session_err)?;
+            self.store
+                .checkpoint(&mut session)
+                .await
+                .map_err(map_session_err)?;
+            goal
+        };
+        self.emit_event(domain::Event {
+            event_id: self.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: self.session_id.to_string(),
+            run_id: None,
+            event_type: "session_goal_changed".to_string(),
+            data: serde_json::json!({ "goal": goal }),
+        })
+        .await?;
+        Ok(goal)
+    }
+
+    pub async fn clear_goal(&self) -> Result<(), ApiError> {
+        {
+            let mut q = self.queue.lock().await;
+            q.retain(|item| !matches!(item.run.input, domain::RunInput::GoalContinuation));
+            self.status.lock().await.queue_len = q.len();
+        }
+        {
+            let mut session = self.session.lock().await;
+            self.store
+                .clear_goal(&mut session)
+                .await
+                .map_err(map_session_err)?;
+            self.store
+                .checkpoint(&mut session)
+                .await
+                .map_err(map_session_err)?;
+        }
+        self.emit_event(domain::Event {
+            event_id: self.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: self.session_id.to_string(),
+            run_id: None,
+            event_type: "session_goal_changed".to_string(),
+            data: serde_json::json!({ "goal": null }),
+        })
+        .await?;
+        Ok(())
+    }
+
     async fn ensure_history_mutable(&self) -> Result<(), ApiError> {
         let q = self.queue.lock().await;
         let st = self.status.lock().await;
@@ -559,6 +643,7 @@ impl LiveSession {
                     user_message_id,
                     CoreMessage::User {
                         content: UserMessageContent::Text(text.to_string()),
+                        hidden: false,
                     },
                 )
                 .await
@@ -599,7 +684,12 @@ impl LiveSession {
                 .position(|id| *id == user_message_id)
                 .ok_or_else(|| ApiError::not_found("message not found"))?;
             match &session.messages[idx] {
-                CoreMessage::User { content } => {
+                CoreMessage::User { content, hidden } => {
+                    if *hidden {
+                        return Err(ApiError::invalid_argument(
+                            "user_message_id must refer to a visible user message",
+                        ));
+                    }
                     if !user_content_has_input(content) {
                         return Err(ApiError::invalid_argument(
                             "cannot regenerate: user message is empty",
@@ -737,7 +827,12 @@ impl LiveSession {
                     ));
                 }
                 match &session.messages[idx] {
-                    CoreMessage::User { content } => {
+                    CoreMessage::User { content, hidden } => {
+                        if *hidden {
+                            return Err(ApiError::invalid_argument(
+                                "user_message_id must refer to a visible user message",
+                            ));
+                        }
                         if !user_content_has_input(content) {
                             return Err(ApiError::invalid_argument(
                                 "input text or attachments must not be empty",
@@ -767,6 +862,11 @@ impl LiveSession {
                 }
                 self.apply_regenerate_after_user_message(*user_message_id)
                     .await?;
+            }
+            domain::RunInput::GoalContinuation => {
+                return Err(ApiError::invalid_argument(
+                    "goal continuation runs are internal",
+                ));
             }
         }
 
@@ -840,6 +940,55 @@ impl LiveSession {
             )
         })?;
         let _ = tx.send(true);
+        Ok(())
+    }
+
+    async fn active_goal(&self) -> Option<SessionGoal> {
+        self.session
+            .lock()
+            .await
+            .meta
+            .goal
+            .clone()
+            .filter(|g| g.status == SessionGoalStatus::Active)
+    }
+
+    async fn enqueue_goal_continuation(&self) -> Result<(), ApiError> {
+        if self.closing.load(Ordering::SeqCst) || self.active_goal().await.is_none() {
+            return Ok(());
+        }
+        let run = domain::Run {
+            id: new_run_id(),
+            session_id: self.session_id.to_string(),
+            state: domain::RunState::Queued,
+            created_at: now_rfc3339(),
+            started_at: None,
+            finished_at: None,
+            finish_reason: None,
+            error: None,
+            input: domain::RunInput::GoalContinuation,
+            overrides: None,
+        };
+        {
+            let q = self.queue.lock().await;
+            if q.iter()
+                .any(|item| matches!(item.run.input, domain::RunInput::GoalContinuation))
+            {
+                return Ok(());
+            }
+        }
+        write_run_file(&self.runs_dir, &run).await?;
+        {
+            let mut q = self.queue.lock().await;
+            if q.iter()
+                .any(|item| matches!(item.run.input, domain::RunInput::GoalContinuation))
+            {
+                return Ok(());
+            }
+            q.push_back(QueuedRun { run });
+            self.status.lock().await.queue_len = q.len();
+        }
+        self.notify.notify_one();
         Ok(())
     }
 
@@ -921,11 +1070,13 @@ impl LiveSession {
                         .iter()
                         .position(|id| *id == *user_message_id)
                         .and_then(|idx| match &session.messages[idx] {
-                            CoreMessage::User { content } => Some(content.clone()),
+                            CoreMessage::User { content, hidden } if !hidden => {
+                                Some(content.clone())
+                            }
                             _ => None,
                         });
                     let last_user = session.messages.iter().rev().find_map(|m| match m {
-                        CoreMessage::User { content } => Some(content.clone()),
+                        CoreMessage::User { content, hidden } if !hidden => Some(content.clone()),
                         _ => None,
                     });
                     (
@@ -941,7 +1092,7 @@ impl LiveSession {
                 domain::RunInput::RegenerateAfterUserMessage { .. } => {
                     let session = self.session.lock().await;
                     let last_user = session.messages.iter().rev().find_map(|m| match m {
-                        CoreMessage::User { content } => Some(content.clone()),
+                        CoreMessage::User { content, hidden } if !hidden => Some(content.clone()),
                         _ => None,
                     });
                     (
@@ -949,7 +1100,17 @@ impl LiveSession {
                         false,
                     )
                 }
+                domain::RunInput::GoalContinuation => {
+                    let Some(goal) = self.active_goal().await else {
+                        return Ok(());
+                    };
+                    (
+                        UserMessageContent::Text(goal_continuation_prompt(&goal)),
+                        true,
+                    )
+                }
             };
+            let hidden_user = matches!(run.input, domain::RunInput::GoalContinuation);
             let user_text = user_content_trace_text(&user_content);
 
             let base_settings = self.settings.lock().await.clone();
@@ -1090,6 +1251,7 @@ impl LiveSession {
                 // Persist user message at execution time (after optional pre-turn compaction).
                 self.record_message(CoreMessage::User {
                     content: user_content.clone(),
+                    hidden: hidden_user,
                 })
                 .await?;
             }
@@ -1097,6 +1259,8 @@ impl LiveSession {
             let runtime = AgentRuntime::new(llm, tools_for_run.clone());
 
             let mut messages = { self.session.lock().await.messages.clone() };
+            let persisted_message_count_before_run = messages.len();
+            let goal_time_started = std::time::Instant::now();
             if effective.agent != base_settings.agent
                 || effective.model_id != base_settings.model_id
                 || effective.mcp.servers != base_settings.mcp.servers
@@ -1149,6 +1313,28 @@ impl LiveSession {
                             }
                         }
                     }
+                }
+            }
+
+            {
+                let mut session = self.session.lock().await;
+                if session.meta.goal.is_some() {
+                    let tokens_used = session
+                        .messages
+                        .iter()
+                        .skip(persisted_message_count_before_run)
+                        .filter_map(|msg| match msg {
+                            CoreMessage::Assistant { usage, .. } => {
+                                usage.map(|u| u.total_tokens as u64)
+                            }
+                            _ => None,
+                        })
+                        .sum::<u64>();
+                    let elapsed = goal_time_started.elapsed().as_secs();
+                    let _ = self
+                        .store
+                        .add_goal_usage(&mut session, elapsed, tokens_used)
+                        .await;
                 }
             }
 
@@ -1238,6 +1424,11 @@ impl LiveSession {
             );
 
             write_run_file(&self.runs_dir, &run).await?;
+            let should_continue_goal = run.state == domain::RunState::Done
+                && self
+                    .active_goal()
+                    .await
+                    .is_some_and(|g| g.status == SessionGoalStatus::Active);
 
             match run.state {
                 domain::RunState::Done => {
@@ -1251,6 +1442,9 @@ impl LiveSession {
                         data: serde_json::json!({ "run": run }),
                     })
                     .await?;
+                    if should_continue_goal {
+                        self.enqueue_goal_continuation().await?;
+                    }
                 }
                 domain::RunState::Cancelled => {
                     self.emit_event(domain::Event {
@@ -1306,6 +1500,8 @@ impl LiveSession {
             if tools.workspace_root() != workspace_root.as_path() {
                 let next = ToolEngine::new(&workspace_root, cfg_for_tools);
                 next.set_extra_workspace_roots(extra_workspace_roots)
+                    .map_err(ApiError::internal_error)?;
+                next.set_goal_backend(self.goal_backend.lock().await.clone())
                     .map_err(ApiError::internal_error)?;
                 *tools = next;
             } else {
@@ -1554,6 +1750,21 @@ impl LiveSession {
     }
 }
 
+#[async_trait]
+impl kiliax_core::tools::builtin::GoalBackend for LiveSession {
+    async fn get_goal(&self) -> Result<Option<SessionGoal>, kiliax_core::tools::ToolError> {
+        Ok(self.session.lock().await.meta.goal.clone())
+    }
+
+    async fn complete_goal(&self) -> Result<Option<SessionGoal>, kiliax_core::tools::ToolError> {
+        let mut session = self.session.lock().await;
+        self.store
+            .complete_goal(&mut session)
+            .await
+            .map_err(|e| kiliax_core::tools::ToolError::Io(std::io::Error::other(e)))
+    }
+}
+
 fn apply_run_overrides(
     base: &domain::SessionSettings,
     overrides: Option<&domain::RunOverrides>,
@@ -1635,6 +1846,7 @@ mod tests {
                 Vec::new(),
                 vec![CoreMessage::User {
                     content: UserMessageContent::Text("hello".to_string()),
+                    hidden: false,
                 }],
             )
             .await

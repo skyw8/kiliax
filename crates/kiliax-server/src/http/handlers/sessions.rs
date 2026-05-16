@@ -36,6 +36,10 @@ pub(in crate::http) fn save_defaults_routes() -> UtoipaMethodRouter<Arc<ServerSt
     utoipa_axum::routes!(save_session_defaults)
 }
 
+pub(in crate::http) fn goal_routes() -> UtoipaMethodRouter<Arc<ServerState>> {
+    utoipa_axum::routes!(get_goal, set_goal, clear_goal)
+}
+
 pub(in crate::http) fn messages_routes() -> UtoipaMethodRouter<Arc<ServerState>> {
     utoipa_axum::routes!(get_messages)
 }
@@ -261,6 +265,62 @@ async fn save_session_defaults(
     let id =
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     state.save_session_defaults(&id, req.into()).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/goal",
+    tags = ["Sessions"],
+    params(("session_id" = String, Path, description = "Session id.")),
+    responses((status = 200, body = Option<crate::api::SessionGoal>), (status = "default", body = crate::error::ApiErrorResponse))
+)]
+async fn get_goal(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id =
+        SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let out = state
+        .get_goal(&id)
+        .await?
+        .map(crate::api::SessionGoal::from);
+    Ok(Json(out))
+}
+
+#[utoipa::path(
+    put,
+    path = "/sessions/{session_id}/goal",
+    tags = ["Sessions"],
+    params(("session_id" = String, Path, description = "Session id.")),
+    request_body = crate::api::SetGoalRequest,
+    responses((status = 200, body = crate::api::SessionGoal), (status = "default", body = crate::error::ApiErrorResponse))
+)]
+async fn set_goal(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+    Json(req): Json<crate::api::SetGoalRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id =
+        SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    let out = state.set_goal(&id, req.objective).await?;
+    Ok(Json(crate::api::SessionGoal::from(out)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/sessions/{session_id}/goal",
+    tags = ["Sessions"],
+    params(("session_id" = String, Path, description = "Session id.")),
+    responses((status = 204), (status = "default", body = crate::error::ApiErrorResponse))
+)]
+async fn clear_goal(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id =
+        SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+    state.clear_goal(&id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
