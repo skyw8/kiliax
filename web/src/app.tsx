@@ -21,6 +21,7 @@ import { AlertStack } from "./components/alert-stack";
 import { DeleteSessionDialog } from "./components/delete-session-dialog";
 import { DeleteWorkspaceDialog } from "./components/delete-workspace-dialog";
 import { EditMessageDialog } from "./components/edit-message-dialog";
+import { FolderPickerDialog } from "./components/folder-picker";
 import { SettingsDialog } from "./components/settings-dialog";
 import { SessionActionSheet, SessionContextMenu } from "./components/session-actions";
 import { SkillsDialog } from "./components/skills-dialog";
@@ -221,8 +222,12 @@ export default function App() {
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [workspaceFoldersOpen, setWorkspaceFoldersOpen] = useState(false);
-  const [workspacePicking, setWorkspacePicking] = useState(false);
-  const [extraFolderPicking, setExtraFolderPicking] = useState(false);
+  const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
+  const [workspacePickerPath, setWorkspacePickerPath] = useState("");
+  const [workspaceCreateSaving, setWorkspaceCreateSaving] = useState(false);
+  const [addFolderOpen, setAddFolderOpen] = useState(false);
+  const [extraFolderPickerPath, setExtraFolderPickerPath] = useState("");
+  const [extraFolderSaving, setExtraFolderSaving] = useState(false);
 
   const [authError, setAuthError] = useState<string | null>(null);
   const { alerts, pushAlert, closeAlert, clearAlerts } = useAlerts();
@@ -773,22 +778,8 @@ export default function App() {
   }
 
   async function chooseWorkspaceFolder() {
-    if (workspacePicking) return;
-    setWorkspacePicking(true);
-    try {
-      const res = await api.pickPath({
-        mode: "directory",
-        title: "Add workspace folder",
-      });
-      const path = res.cancelled ? "" : (res.path ?? "").trim();
-      if (path) {
-        await createSessionWithWorkspaceRoot(path);
-      }
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setWorkspacePicking(false);
-    }
+    setWorkspacePickerPath("");
+    setWorkspaceCreateOpen(true);
   }
 
   async function onAttachmentFilesSelected(files: File[]) {
@@ -1214,24 +1205,9 @@ export default function App() {
   }
 
   async function chooseExtraFolder() {
-    if (!session || !selectedId || extraFolderPicking) return;
-    setExtraFolderPicking(true);
-    try {
-      const startPath = (session.settings.workspace_root ?? "").trim();
-      const res = await api.pickPath({
-        mode: "directory",
-        title: "Add folder",
-        start_path: startPath || undefined,
-      });
-      const path = res.cancelled ? "" : (res.path ?? "").trim();
-      if (path) {
-        await addExtraFolder(path);
-      }
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setExtraFolderPicking(false);
-    }
+    if (!session || !selectedId) return;
+    setExtraFolderPickerPath((session.settings.workspace_root ?? "").trim());
+    setAddFolderOpen(true);
   }
 
   async function openWorkspace(target: "vscode" | "file_manager" | "terminal") {
@@ -1620,7 +1596,6 @@ export default function App() {
               size="icon"
               className="h-7 w-7"
               aria-label="Add workspace folder"
-              disabled={workspacePicking}
               onClick={chooseWorkspaceFolder}
             >
               <FolderPlus className="h-4 w-4 text-violet-600" />
@@ -1932,7 +1907,6 @@ export default function App() {
                     variant="ghost"
                     size="sm"
                     className="justify-start gap-2"
-                    disabled={extraFolderPicking}
                     onClick={chooseExtraFolder}
                   >
                     <FolderPlus className="h-4 w-4 text-violet-600" />
@@ -2508,6 +2482,54 @@ export default function App() {
           const root = workspaceDeleteConfirm?.workspaceRoot;
           if (!root) return;
           await deleteWorkspace(root);
+        }}
+      />
+
+      <FolderPickerDialog
+        open={workspaceCreateOpen}
+        onOpenChange={setWorkspaceCreateOpen}
+        title="Add workspace folder"
+        description="Creates a new session in this workspace root."
+        path={workspacePickerPath}
+        onPathChange={setWorkspacePickerPath}
+        confirmLabel="Create"
+        confirmPending={workspaceCreateSaving}
+        confirmPendingLabel="Creating..."
+        confirmDisabled={!workspacePickerPath.trim() || workspaceCreateSaving}
+        onConfirm={async () => {
+          const path = workspacePickerPath.trim();
+          if (!path) return;
+          setWorkspaceCreateSaving(true);
+          try {
+            await createSessionWithWorkspaceRoot(path);
+            setWorkspaceCreateOpen(false);
+          } finally {
+            setWorkspaceCreateSaving(false);
+          }
+        }}
+      />
+
+      <FolderPickerDialog
+        open={addFolderOpen}
+        onOpenChange={setAddFolderOpen}
+        title="Add folder"
+        description="Adds an extra directory this session can read/write."
+        path={extraFolderPickerPath}
+        onPathChange={setExtraFolderPickerPath}
+        confirmLabel="Add"
+        confirmPending={extraFolderSaving}
+        confirmPendingLabel="Adding..."
+        confirmDisabled={!extraFolderPickerPath.trim() || !session || extraFolderSaving}
+        onConfirm={async () => {
+          const path = extraFolderPickerPath.trim();
+          if (!path) return;
+          setExtraFolderSaving(true);
+          try {
+            await addExtraFolder(path);
+            setAddFolderOpen(false);
+          } finally {
+            setExtraFolderSaving(false);
+          }
         }}
       />
 

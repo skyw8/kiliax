@@ -13,8 +13,8 @@ use tokio::sync::{broadcast, Mutex, Notify};
 use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{
-    is_tmp_workspace_root, native_pick_path, open_external, validate_client_extra_workspace_roots,
-    validate_client_workspace_root, NativePickMode,
+    is_tmp_workspace_root, open_external, validate_client_extra_workspace_roots,
+    validate_client_workspace_root,
 };
 
 use super::domain;
@@ -722,23 +722,44 @@ impl ServerState {
         })
     }
 
-    pub async fn fs_pick(&self, req: api::FsPickRequest) -> Result<api::FsPickResponse, ApiError> {
-        let mode = match req.mode {
-            api::FsPickMode::File => NativePickMode::File,
-            api::FsPickMode::Directory => NativePickMode::Directory,
+    pub async fn fs_list(&self, path: Option<String>) -> Result<api::FsListResponse, ApiError> {
+        let candidate = match path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(p) => validate_client_workspace_root(p)?,
+            None => dirs::home_dir()
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| PathBuf::from("/")),
         };
-        let start = req
-            .start_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(|s| validate_client_workspace_root(s).ok())
-            .or_else(|| dirs::home_dir())
-            .or_else(|| std::env::current_dir().ok());
-        let path = native_pick_path(mode, req.title.as_deref(), start.as_deref()).await?;
-        Ok(api::FsPickResponse {
-            cancelled: path.is_none(),
-            path: path.map(|p| p.display().to_string()),
+        let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        let meta = tokio::fs::metadata(&canonical)
+            .await
+            .map_err(|_| ApiError::not_found("path not found"))?;
+        if !meta.is_dir() {
+            return Err(ApiError::invalid_argument("path must be a directory"));
+        }
+
+        let mut rd = tokio::fs::read_dir(&canonical)
+            .await
+            .map_err(ApiError::internal_error)?;
+        let mut entries: Vec<api::FsEntry> = Vec::new();
+        while let Some(ent) = rd.next_entry().await.map_err(ApiError::internal_error)? {
+            let file_type = ent.file_type().await.map_err(ApiError::internal_error)?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = ent.file_name().to_string_lossy().to_string();
+            let path = ent.path().display().to_string();
+            entries.push(api::FsEntry {
+                name,
+                path,
+                is_dir: true,
+            });
+        }
+        entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        Ok(api::FsListResponse {
+            path: canonical.display().to_string(),
+            parent: canonical.parent().map(|p| p.display().to_string()),
+            entries,
         })
     }
 

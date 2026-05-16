@@ -545,28 +545,19 @@ pub struct ForkSessionResponse {
     pub session: Session,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum FsPickMode {
-    File,
-    Directory,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FsPickRequest {
-    pub mode: FsPickMode,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub start_path: Option<String>,
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FsListResponse {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub entries: Vec<FsEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct FsPickResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    pub cancelled: bool,
+pub struct FsEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

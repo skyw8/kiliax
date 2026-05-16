@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum::Json;
 use utoipa_axum::router::UtoipaMethodRouter;
@@ -9,22 +9,30 @@ use crate::error::ApiError;
 use crate::state::ServerState;
 
 pub(in crate::http) fn routes() -> UtoipaMethodRouter<Arc<ServerState>> {
-    utoipa_axum::routes!(fs_pick)
+    utoipa_axum::routes!(fs_list)
+}
+
+#[derive(serde::Deserialize)]
+struct FsListQuery {
+    #[serde(default)]
+    path: Option<String>,
 }
 
 #[utoipa::path(
-    post,
-    path = "/fs/pick",
+    get,
+    path = "/fs/list",
     tags = ["FS"],
-    request_body = crate::api::FsPickRequest,
+    params(
+        ("path" = Option<String>, Query, description = "Path to list (defaults to home or current directory).")
+    ),
     responses(
-        (status = 200, body = crate::api::FsPickResponse),
+        (status = 200, body = crate::api::FsListResponse),
         (status = "default", body = crate::error::ApiErrorResponse)
     )
 )]
-async fn fs_pick(
+async fn fs_list(
     State(state): State<Arc<ServerState>>,
-    Json(req): Json<crate::api::FsPickRequest>,
+    Query(q): Query<FsListQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(state.fs_pick(req).await?))
+    Ok(Json(state.fs_list(q.path).await?))
 }
