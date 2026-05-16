@@ -8,8 +8,9 @@ use tokio_stream::StreamExt;
 use tracing::Instrument;
 
 use crate::types::{
-    ChatRequest, ChatResponse, ChatStreamChunk, FinishReason, Message, TokenUsage, ToolCall,
-    ToolCallDelta, ToolChoice, ToolDefinition, UserContentPart, UserMessageContent,
+    ChatRequest, ChatResponse, ChatStreamChunk, FinishReason, Message, ProviderMessageMetadata,
+    TokenUsage, ToolCall, ToolCallDelta, ToolChoice, ToolDefinition, UserContentPart,
+    UserMessageContent,
 };
 
 use super::openai_conv::validate_pdf_file_data;
@@ -235,6 +236,11 @@ enum AnthropicRole {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicContentBlock {
+    Thinking {
+        thinking: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
     Text {
         text: String,
     },
@@ -331,10 +337,16 @@ async fn to_anthropic_request(
             }
             Message::Assistant {
                 content,
+                reasoning_content,
                 tool_calls,
+                provider_metadata,
                 ..
             } => {
                 let mut blocks = Vec::new();
+                blocks.extend(assistant_thinking_blocks(
+                    reasoning_content,
+                    provider_metadata,
+                ));
                 if let Some(content) = content.filter(|c| !c.trim().is_empty()) {
                     blocks.push(AnthropicContentBlock::Text { text: content });
                 }
@@ -413,6 +425,48 @@ async fn to_anthropic_request(
         temperature,
         stream,
     })
+}
+
+fn assistant_thinking_blocks(
+    reasoning_content: Option<String>,
+    provider_metadata: Option<ProviderMessageMetadata>,
+) -> Vec<AnthropicContentBlock> {
+    let metadata_blocks = provider_metadata
+        .as_ref()
+        .and_then(ProviderMessageMetadata::anthropic_thinking_blocks)
+        .unwrap_or_default();
+
+    let mut blocks = Vec::new();
+    for block in metadata_blocks {
+        if block.get("type").and_then(|v| v.as_str()) != Some("thinking") {
+            continue;
+        }
+        let Some(thinking) = block.get("thinking").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if thinking.trim().is_empty() {
+            continue;
+        }
+        blocks.push(AnthropicContentBlock::Thinking {
+            thinking: thinking.to_string(),
+            signature: block
+                .get("signature")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        });
+    }
+
+    if blocks.is_empty() {
+        if let Some(thinking) = reasoning_content.filter(|v| !v.trim().is_empty()) {
+            blocks.push(AnthropicContentBlock::Thinking {
+                thinking,
+                signature: None,
+            });
+        }
+    }
+
+    blocks
 }
 
 async fn user_content_to_anthropic(
@@ -600,9 +654,17 @@ impl AnthropicUsage {
 
 fn chat_response_from_anthropic(resp: AnthropicMessageResponse) -> ChatResponse {
     let mut content = String::new();
+    let mut reasoning_content = String::new();
+    let mut thinking_blocks = Vec::new();
     let mut tool_calls = Vec::new();
     for block in resp.content {
         match block.get("type").and_then(|v| v.as_str()) {
+            Some("thinking") => {
+                if let Some(thinking) = block.get("thinking").and_then(|v| v.as_str()) {
+                    reasoning_content.push_str(thinking);
+                    thinking_blocks.push(block);
+                }
+            }
             Some("text") => {
                 if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
                     content.push_str(text);
@@ -636,16 +698,22 @@ fn chat_response_from_anthropic(resp: AnthropicMessageResponse) -> ChatResponse 
     }
 
     let usage = resp.usage.map(AnthropicUsage::into_token_usage);
+    let metadata = (!thinking_blocks.is_empty())
+        .then_some(ProviderMessageMetadata::Anthropic { thinking_blocks });
     ChatResponse {
         id: resp.id,
         created: 0,
         model: resp.model,
         message: Message::Assistant {
             content: (!content.is_empty()).then_some(content),
-            reasoning_content: None,
+            reasoning_content: if tool_calls.is_empty() || reasoning_content.is_empty() {
+                None
+            } else {
+                Some(reasoning_content)
+            },
             tool_calls,
             usage,
-            provider_metadata: None,
+            provider_metadata: metadata,
         },
         finish_reason: resp
             .stop_reason
@@ -682,11 +750,18 @@ struct ToolUseStreamBuf {
     partial_json: String,
 }
 
+#[derive(Debug, Default)]
+struct ThinkingStreamBuf {
+    thinking: String,
+    signature: Option<String>,
+}
+
 #[derive(Debug)]
 struct AnthropicStreamState {
     id: String,
     model: String,
     usage: Option<TokenUsage>,
+    thinking_blocks: BTreeMap<u32, ThinkingStreamBuf>,
     tool_uses: BTreeMap<u32, ToolUseStreamBuf>,
 }
 
@@ -696,8 +771,31 @@ impl AnthropicStreamState {
             id: String::new(),
             model,
             usage: None,
+            thinking_blocks: BTreeMap::new(),
             tool_uses: BTreeMap::new(),
         }
+    }
+
+    fn provider_metadata(&self) -> Option<ProviderMessageMetadata> {
+        let blocks = self
+            .thinking_blocks
+            .values()
+            .filter(|buf| !buf.thinking.trim().is_empty())
+            .map(|buf| {
+                let mut block = serde_json::json!({
+                    "type": "thinking",
+                    "thinking": buf.thinking,
+                });
+                if let Some(signature) = buf.signature.as_deref().filter(|s| !s.is_empty()) {
+                    block["signature"] = serde_json::Value::String(signature.to_string());
+                }
+                block
+            })
+            .collect::<Vec<_>>();
+
+        (!blocks.is_empty()).then_some(ProviderMessageMetadata::Anthropic {
+            thinking_blocks: blocks,
+        })
     }
 
     fn chunk(&self) -> ChatStreamChunk {
@@ -710,7 +808,7 @@ impl AnthropicStreamState {
             tool_calls: Vec::new(),
             finish_reason: None,
             usage: None,
-            provider_metadata: None,
+            provider_metadata: self.provider_metadata(),
         }
     }
 }
@@ -755,6 +853,22 @@ fn handle_stream_event(
                             partial_json: String::new(),
                         },
                     );
+                } else if block_type == "thinking" {
+                    let mut buf = ThinkingStreamBuf::default();
+                    if let Some(thinking) = parsed
+                        .content_block
+                        .get("thinking")
+                        .and_then(|v| v.as_str())
+                    {
+                        buf.thinking.push_str(thinking);
+                    }
+                    buf.signature = parsed
+                        .content_block
+                        .get("signature")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    state.thinking_blocks.insert(parsed.index, buf);
                 } else if block_type == "text" {
                     if let Some(text) = parsed.content_block.get("text").and_then(|v| v.as_str()) {
                         if !text.is_empty() {
@@ -792,6 +906,12 @@ fn handle_stream_event(
                 }
                 "thinking_delta" => {
                     if let Some(thinking) = parsed.delta.thinking {
+                        state
+                            .thinking_blocks
+                            .entry(parsed.index)
+                            .or_default()
+                            .thinking
+                            .push_str(&thinking);
                         let mut chunk = state.chunk();
                         chunk.thinking_delta = Some(thinking);
                         Ok(StreamEventAction::Chunk(chunk))
@@ -799,11 +919,26 @@ fn handle_stream_event(
                         Ok(StreamEventAction::None)
                     }
                 }
+                "signature_delta" => {
+                    if let Some(signature) = parsed.delta.signature {
+                        state
+                            .thinking_blocks
+                            .entry(parsed.index)
+                            .or_default()
+                            .signature
+                            .get_or_insert_with(String::new)
+                            .push_str(&signature);
+                    }
+                    Ok(StreamEventAction::None)
+                }
                 _ => Ok(StreamEventAction::None),
             }
         }
         "content_block_stop" => {
             let parsed: ContentBlockStopEvent = serde_json::from_str(data)?;
+            if state.thinking_blocks.contains_key(&parsed.index) {
+                return Ok(StreamEventAction::None);
+            }
             let Some(buf) = state.tool_uses.remove(&parsed.index) else {
                 return Ok(StreamEventAction::None);
             };
@@ -896,6 +1031,8 @@ struct ContentBlockDelta {
     partial_json: Option<String>,
     #[serde(default)]
     thinking: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1315,6 +1452,96 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn maps_assistant_thinking_history_before_tool_calls() {
+        let req = ChatRequest {
+            messages: vec![
+                Message::User {
+                    content: UserMessageContent::Text("use tool".to_string()),
+                    hidden: false,
+                },
+                Message::Assistant {
+                    content: Some("I'll read it.".to_string()),
+                    reasoning_content: Some("need the file first".to_string()),
+                    tool_calls: vec![ToolCall {
+                        id: "toolu_1".to_string(),
+                        name: "read".to_string(),
+                        arguments: "{\"path\":\"README.md\"}".to_string(),
+                    }],
+                    usage: None,
+                    provider_metadata: Some(ProviderMessageMetadata::Anthropic {
+                        thinking_blocks: vec![serde_json::json!({
+                            "type": "thinking",
+                            "thinking": "need the file first",
+                            "signature": "sig_1"
+                        })],
+                    }),
+                },
+            ],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: None,
+            temperature: None,
+            max_completion_tokens: None,
+        };
+
+        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let json = serde_json::to_value(body).unwrap();
+
+        assert_eq!(
+            json["messages"][1]["content"][0],
+            serde_json::json!({
+                "type": "thinking",
+                "thinking": "need the file first",
+                "signature": "sig_1"
+            })
+        );
+        assert_eq!(
+            json["messages"][1]["content"][1]["type"],
+            serde_json::json!("text")
+        );
+        assert_eq!(
+            json["messages"][1]["content"][2]["type"],
+            serde_json::json!("tool_use")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn falls_back_to_reasoning_content_for_anthropic_thinking_history() {
+        let req = ChatRequest {
+            messages: vec![
+                Message::User {
+                    content: UserMessageContent::Text("use tool".to_string()),
+                    hidden: false,
+                },
+                Message::Assistant {
+                    content: None,
+                    reasoning_content: Some("plain thinking".to_string()),
+                    tool_calls: vec![ToolCall {
+                        id: "toolu_1".to_string(),
+                        name: "read".to_string(),
+                        arguments: "{\"path\":\"README.md\"}".to_string(),
+                    }],
+                    usage: None,
+                    provider_metadata: None,
+                },
+            ],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: None,
+            temperature: None,
+            max_completion_tokens: None,
+        };
+
+        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let json = serde_json::to_value(body).unwrap();
+
+        assert_eq!(
+            json["messages"][1]["content"][0],
+            serde_json::json!({"type": "thinking", "thinking": "plain thinking"})
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn groups_parallel_tool_results_into_one_user_message() {
         let req = ChatRequest {
             messages: vec![
@@ -1376,6 +1603,7 @@ mod tests {
             "id": "msg_1",
             "model": "claude",
             "content": [
+                {"type": "thinking", "thinking": "search first", "signature": "sig_1"},
                 {"type": "text", "text": "hello"},
                 {"type": "tool_use", "id": "toolu_1", "name": "kiliax_web_search", "input": {"query": "x"}}
             ],
@@ -1388,15 +1616,22 @@ mod tests {
         assert_eq!(resp.usage.unwrap().cached_tokens, Some(3));
         let Message::Assistant {
             content,
+            reasoning_content,
             tool_calls,
+            provider_metadata,
             ..
         } = resp.message
         else {
             panic!("expected assistant");
         };
         assert_eq!(content.as_deref(), Some("hello"));
+        assert_eq!(reasoning_content.as_deref(), Some("search first"));
         assert_eq!(tool_calls[0].name, "web_search");
         assert_eq!(tool_calls[0].arguments, "{\"query\":\"x\"}");
+        let Some(ProviderMessageMetadata::Anthropic { thinking_blocks }) = provider_metadata else {
+            panic!("expected anthropic metadata");
+        };
+        assert_eq!(thinking_blocks[0]["signature"], serde_json::json!("sig_1"));
     }
 
     #[test]
@@ -1438,6 +1673,58 @@ mod tests {
             chunk.tool_calls[0].arguments.as_deref(),
             Some("{\"path\":\"README.md\"}")
         );
+    }
+
+    #[test]
+    fn streaming_aggregates_thinking_block_metadata() {
+        let mut state = AnthropicStreamState::new("claude".to_string());
+        handle_stream_event(
+            &mut state,
+            "message_start",
+            r#"{"message":{"id":"msg_1","model":"claude","usage":{"input_tokens":7,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+        handle_stream_event(
+            &mut state,
+            "content_block_start",
+            r#"{"index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
+        )
+        .unwrap();
+        let action = handle_stream_event(
+            &mut state,
+            "content_block_delta",
+            r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"search "}}"#,
+        )
+        .unwrap();
+        let StreamEventAction::Chunk(chunk) = action else {
+            panic!("expected thinking chunk");
+        };
+        assert_eq!(chunk.thinking_delta.as_deref(), Some("search "));
+        handle_stream_event(
+            &mut state,
+            "content_block_delta",
+            r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"first"}}"#,
+        )
+        .unwrap();
+        handle_stream_event(
+            &mut state,
+            "content_block_delta",
+            r#"{"index":0,"delta":{"type":"signature_delta","signature":"sig_1"}}"#,
+        )
+        .unwrap();
+        let action =
+            handle_stream_event(&mut state, "content_block_stop", r#"{"index":0}"#).unwrap();
+        assert!(matches!(action, StreamEventAction::None));
+
+        let metadata = state.provider_metadata().unwrap();
+        let ProviderMessageMetadata::Anthropic { thinking_blocks } = metadata else {
+            panic!("expected anthropic metadata");
+        };
+        assert_eq!(
+            thinking_blocks[0]["thinking"],
+            serde_json::json!("search first")
+        );
+        assert_eq!(thinking_blocks[0]["signature"], serde_json::json!("sig_1"));
     }
 
     #[test]

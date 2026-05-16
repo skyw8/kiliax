@@ -157,12 +157,24 @@ pub enum ProviderMessageMetadata {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         output: Vec<serde_json::Value>,
     },
+    Anthropic {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        thinking_blocks: Vec<serde_json::Value>,
+    },
 }
 
 impl ProviderMessageMetadata {
     pub fn openai_responses_output(&self) -> Option<&[serde_json::Value]> {
         match self {
             Self::OpenAiResponses { output } => Some(output.as_slice()),
+            Self::Anthropic { .. } => None,
+        }
+    }
+
+    pub fn anthropic_thinking_blocks(&self) -> Option<&[serde_json::Value]> {
+        match self {
+            Self::Anthropic { thinking_blocks } => Some(thinking_blocks.as_slice()),
+            Self::OpenAiResponses { .. } => None,
         }
     }
 }
