@@ -23,11 +23,11 @@ use crate::infra::{validate_client_extra_workspace_roots, validate_client_worksp
 
 use super::preamble::{build_preamble, replace_preamble, replace_preamble_with_ids};
 use super::{
-    append_event, apply_settings_patch, config_with_mcp_overrides, error_chain_vec,
-    format_error_chain_text, map_core_message_to_domain_event_message, map_mcp_status,
-    map_session_err, merge_mcp_settings, new_run_id, now_rfc3339, read_last_event_id,
-    resolve_session_settings, runtime_error_code, runtime_error_hint, session_events_api_path,
-    custom_tools_config_from_settings, skills_config_from_settings, ts_ms_to_rfc3339,
+    append_event, apply_settings_patch, config_with_mcp_overrides,
+    custom_tools_config_from_settings, error_chain_vec, format_error_chain_text,
+    map_core_message_to_domain_event_message, map_mcp_status, map_session_err, merge_mcp_settings,
+    new_run_id, now_rfc3339, read_last_event_id, resolve_session_settings, runtime_error_code,
+    runtime_error_hint, session_events_api_path, skills_config_from_settings, ts_ms_to_rfc3339,
     write_run_file, ServerState,
 };
 
@@ -762,10 +762,15 @@ impl LiveSession {
             .unwrap_or(0);
 
         let skills_config = skills_config_from_settings(&base_settings.skills);
+        let project_prompt = {
+            let session = self.session.lock().await;
+            session.meta.project_prompt.clone()
+        };
         let new_preamble = build_preamble(
             profile,
             &effective.model_id,
             &effective.workspace_root,
+            project_prompt,
             tools_for_run,
             &skills_config,
         )
@@ -783,12 +788,7 @@ impl LiveSession {
             let mut last_seq = session.meta.last_seq;
             let mut messages = std::mem::take(&mut session.messages);
             let mut message_ids = std::mem::take(&mut session.message_ids);
-            replace_preamble_with_ids(
-                &mut messages,
-                &mut message_ids,
-                &mut last_seq,
-                new_preamble,
-            );
+            replace_preamble_with_ids(&mut messages, &mut message_ids, &mut last_seq, new_preamble);
             session.messages = messages;
             session.message_ids = message_ids;
             session.meta.last_seq = last_seq;
@@ -1179,7 +1179,8 @@ impl LiveSession {
             }
 
             // Per-run tool config.
-            let mut cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
+            let mut cfg_for_run =
+                config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
             cfg_for_run.custom_tools = custom_tools_config_from_settings(&effective.custom_tools);
             let workspace_root = effective.workspace_root.clone();
             Span::current().record(
@@ -1277,7 +1278,8 @@ impl LiveSession {
             if effective.agent != base_settings.agent
                 || effective.model_id != base_settings.model_id
                 || effective.mcp.servers != base_settings.mcp.servers
-                || effective.custom_tools.default_enable != base_settings.custom_tools.default_enable
+                || effective.custom_tools.default_enable
+                    != base_settings.custom_tools.default_enable
                 || effective.custom_tools.overrides != base_settings.custom_tools.overrides
             {
                 let skills_config = skills_config_from_settings(&base_settings.skills);
@@ -1285,6 +1287,10 @@ impl LiveSession {
                     &profile,
                     &effective.model_id,
                     &workspace_root,
+                    {
+                        let session = self.session.lock().await;
+                        session.meta.project_prompt.clone()
+                    },
                     &tools_for_run,
                     &skills_config,
                 )
@@ -1545,6 +1551,10 @@ impl LiveSession {
             &profile,
             &settings.model_id,
             &workspace_root,
+            {
+                let session = self.session.lock().await;
+                session.meta.project_prompt.clone()
+            },
             &tools,
             &skills_config,
         )
@@ -1554,12 +1564,7 @@ impl LiveSession {
         let mut last_seq = session.meta.last_seq;
         let mut messages = std::mem::take(&mut session.messages);
         let mut message_ids = std::mem::take(&mut session.message_ids);
-        replace_preamble_with_ids(
-            &mut messages,
-            &mut message_ids,
-            &mut last_seq,
-            preamble,
-        );
+        replace_preamble_with_ids(&mut messages, &mut message_ids, &mut last_seq, preamble);
         session.messages = messages;
         session.message_ids = message_ids;
         session.meta.last_seq = last_seq;

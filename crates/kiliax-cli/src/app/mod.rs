@@ -769,6 +769,8 @@ impl App {
             &self.profile,
             &self.model_id,
             &self.workspace_root,
+            kiliax_core::prompt::capture_project_prompt(Some(&self.workspace_root))
+                .or_else(|| Some(String::new())),
             self.runtime.tools(),
             &self.config.skills,
         )
@@ -1000,6 +1002,7 @@ impl App {
             &self.profile,
             &self.model_id,
             &self.workspace_root,
+            self.session.meta.project_prompt.clone(),
             self.runtime.tools(),
             &skills_config,
         )
@@ -1090,6 +1093,7 @@ impl App {
             &self.profile,
             &self.model_id,
             &self.workspace_root,
+            self.session.meta.project_prompt.clone(),
             self.runtime.tools(),
             &skills_config,
         )
@@ -1203,6 +1207,7 @@ impl App {
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
+                self.session.meta.project_prompt.clone(),
                 self.runtime.tools(),
                 &skills_config,
             )
@@ -1326,6 +1331,7 @@ impl App {
                 &self.profile,
                 &self.model_id,
                 &self.workspace_root,
+                self.session.meta.project_prompt.clone(),
                 self.runtime.tools(),
                 &skills_config,
             )

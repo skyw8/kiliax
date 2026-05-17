@@ -34,10 +34,10 @@ minimal
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
-- Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
+- Prompt assembly + nested project instruction scoping + session-frozen project prompts: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization + max completion token handling: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
-- Session store + snapshots + events + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
+- Session store + snapshots + events + frozen project prompt metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + tool telemetry categories/outcomes): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):

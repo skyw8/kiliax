@@ -126,6 +126,11 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
 
+    /// Frozen project instructions captured for this session. `Some("")` means no project
+    /// instructions were present when the session was captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_prompt: Option<String>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<SessionGoal>,
 
@@ -350,6 +355,8 @@ impl FileSessionStore {
             last_finish_reason: None,
             last_error: None,
             prompt_cache_key: Some(new_prompt_cache_key()),
+            project_prompt: project_prompt_from_messages(&initial_messages)
+                .or_else(|| Some(String::new())),
             goal: None,
             last_seq,
             last_snapshot_seq: last_seq,
@@ -402,6 +409,7 @@ impl FileSessionStore {
             if rebuilt.meta.prompt_cache_key.is_none() {
                 rebuilt.meta.prompt_cache_key = Some(new_prompt_cache_key());
             }
+            self.ensure_project_prompt(&mut rebuilt).await?;
             let _ = self.checkpoint(&mut rebuilt).await;
             return Ok(rebuilt);
         }
@@ -411,7 +419,21 @@ impl FileSessionStore {
             state.meta.prompt_cache_key = Some(new_prompt_cache_key());
             let _ = self.write_meta(&state.meta).await;
         }
+        self.ensure_project_prompt(&mut state).await?;
         Ok(state)
+    }
+
+    async fn ensure_project_prompt(&self, state: &mut SessionState) -> Result<(), SessionError> {
+        if state.meta.project_prompt.is_some() {
+            return Ok(());
+        }
+
+        state.meta.project_prompt = project_prompt_from_messages(&state.messages).or_else(|| {
+            let root = state.meta.workspace_root.as_deref().map(Path::new);
+            crate::prompt::capture_project_prompt(root).or_else(|| Some(String::new()))
+        });
+        self.checkpoint(state).await?;
+        Ok(())
     }
 
     pub async fn list(&self) -> Result<Vec<SessionMeta>, SessionError> {
@@ -851,6 +873,17 @@ fn truncate_title(input: &str) -> String {
     s
 }
 
+fn project_prompt_from_messages(messages: &[Message]) -> Option<String> {
+    messages.iter().find_map(|m| match m {
+        Message::System { content }
+            if content.trim_start().starts_with("# Project Instructions") =>
+        {
+            Some(content.clone())
+        }
+        _ => None,
+    })
+}
+
 async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), SessionError> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     tokio::fs::create_dir_all(dir).await?;
@@ -949,11 +982,88 @@ mod tests {
         assert_eq!(loaded.message_ids, vec![1, 2]);
         assert_eq!(loaded.meta.message_count, 2);
         assert_eq!(loaded.meta.prompt_cache_key, state.meta.prompt_cache_key);
+        assert_eq!(loaded.meta.project_prompt.as_deref(), Some(""));
 
         let list = store.list().await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, state.meta.id);
         assert_eq!(list[0].title.as_deref(), Some("hello"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_freezes_project_prompt_from_initial_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(tmp.path()).with_checkpoint_every(1000);
+        let project = "# Project Instructions\n## /repo/AGENTS.md\nroot rules".to_string();
+
+        let state = store
+            .create(
+                "general",
+                Some("p/m".to_string()),
+                None,
+                None,
+                Vec::new(),
+                vec![Message::System {
+                    content: project.clone(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(state.meta.project_prompt.as_deref(), Some(project.as_str()));
+        assert_eq!(
+            store
+                .load(state.id())
+                .await
+                .unwrap()
+                .meta
+                .project_prompt
+                .as_deref(),
+            Some(project.as_str())
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_backfills_missing_project_prompt_from_messages_before_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("AGENTS.md"), "disk rules").unwrap();
+        let store = FileSessionStore::new(tmp.path()).with_checkpoint_every(1000);
+        let old_project = "# Project Instructions\n## /repo/AGENTS.md\nmessage rules".to_string();
+
+        let state = store
+            .create(
+                "general",
+                Some("p/m".to_string()),
+                None,
+                Some(workspace.path().display().to_string()),
+                Vec::new(),
+                vec![Message::System {
+                    content: old_project.clone(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let snapshot_path = store.snapshot_path(state.id());
+        let raw = tokio::fs::read_to_string(&snapshot_path).await.unwrap();
+        let mut snapshot: SessionSnapshot = serde_json::from_str(&raw).unwrap();
+        snapshot.meta.project_prompt = None;
+        tokio::fs::write(&snapshot_path, serde_json::to_string(&snapshot).unwrap())
+            .await
+            .unwrap();
+
+        let loaded = store.load(state.id()).await.unwrap();
+        assert_eq!(
+            loaded.meta.project_prompt.as_deref(),
+            Some(old_project.as_str())
+        );
+        assert!(!loaded
+            .meta
+            .project_prompt
+            .as_deref()
+            .unwrap()
+            .contains("disk rules"));
     }
 
     #[tokio::test(flavor = "current_thread")]

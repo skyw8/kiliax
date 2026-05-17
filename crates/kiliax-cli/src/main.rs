@@ -362,6 +362,8 @@ async fn main() -> Result<()> {
         None => {
             let llm = client_from_config(&loaded.config, None)?;
             let model_id = llm.route().model_id();
+            let project_prompt = kiliax_core::prompt::capture_project_prompt(Some(&workspace_root))
+                .or_else(|| Some(String::new()));
             let mut builder = PromptBuilder::for_agent(&profile)
                 .with_tools({
                     kiliax_core::tools::policy::tool_definitions_for_agent(
@@ -372,7 +374,8 @@ async fn main() -> Result<()> {
                     .await
                 })
                 .with_model_id(model_id.clone())
-                .with_workspace_root(&workspace_root);
+                .with_workspace_root(&workspace_root)
+                .with_project_prompt(project_prompt.clone());
             let discovered = tools::skills::discover_skills(&workspace_root);
             let cfg = &loaded.config.skills;
             let filtered = discovered.items.into_iter().filter(|s| {
@@ -393,6 +396,7 @@ async fn main() -> Result<()> {
                     messages.clone(),
                 )
                 .await?;
+            session.meta.project_prompt = project_prompt;
             session.meta.mcp_servers = session_mcp_servers_from_config(&loaded.config);
             session.meta.skills = Some(loaded.config.skills.clone());
             store.checkpoint(&mut session).await?;

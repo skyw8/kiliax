@@ -149,11 +149,7 @@ pub fn discover_custom_agents() -> CustomAgentDiscovery {
     }
 }
 
-fn load_custom_agent(
-    id: &str,
-    dir: &Path,
-    manifest_path: &Path,
-) -> Result<AgentProfile, String> {
+fn load_custom_agent(id: &str, dir: &Path, manifest_path: &Path) -> Result<AgentProfile, String> {
     let raw = std::fs::read_to_string(manifest_path).map_err(|err| err.to_string())?;
     let manifest: CustomAgentManifest =
         serde_yaml::from_str(&raw).map_err(|err| err.to_string())?;
@@ -259,7 +255,10 @@ fn resolve_prompt_path(dir: &Path, path: &Path) -> Result<PathBuf, String> {
         return Err("prompt path must be relative".into());
     }
     for component in path.components() {
-        if matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)) {
+        if matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        ) {
             return Err("prompt path must stay inside the agent directory".into());
         }
     }

@@ -25,6 +25,7 @@ pub struct PromptBuilder {
     include_environment_prompt: bool,
     include_tools_prompt: bool,
     include_project_prompt: bool,
+    project_prompt: Option<Option<String>>,
     tool_definitions: Vec<ToolDefinition>,
     skills: Vec<Skill>,
     messages: Vec<Message>,
@@ -40,6 +41,7 @@ impl PromptBuilder {
             include_environment_prompt: true,
             include_tools_prompt: true,
             include_project_prompt: true,
+            project_prompt: None,
             tool_definitions: Vec::new(),
             skills: Vec::new(),
             messages: Vec::new(),
@@ -82,6 +84,11 @@ impl PromptBuilder {
 
     pub fn include_project_prompt(mut self, on: bool) -> Self {
         self.include_project_prompt = on;
+        self
+    }
+
+    pub fn with_project_prompt(mut self, prompt: Option<String>) -> Self {
+        self.project_prompt = Some(prompt);
         self
     }
 
@@ -154,7 +161,10 @@ impl PromptBuilder {
         }
 
         if self.include_project_prompt {
-            if let Some(project) = render_project_prompt(self.workspace_root.as_deref()) {
+            let project = self
+                .project_prompt
+                .unwrap_or_else(|| capture_project_prompt(self.workspace_root.as_deref()));
+            if let Some(project) = project.filter(|p| !p.trim().is_empty()) {
                 out.push(Message::System { content: project });
             }
         }
@@ -229,7 +239,7 @@ fn today_ymd() -> String {
         .unwrap_or_else(|_| date.to_string())
 }
 
-fn render_project_prompt(workspace_root: Option<&Path>) -> Option<String> {
+pub fn capture_project_prompt(workspace_root: Option<&Path>) -> Option<String> {
     let root = workspace_root?;
 
     let sections: Vec<String> = project_instruction_paths(root)
@@ -487,6 +497,58 @@ mod tests {
 
         assert!(root_idx < crate_idx);
         assert!(crate_idx < nested_idx);
+    }
+
+    #[test]
+    fn frozen_project_prompt_does_not_reread_changed_nested_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let nested = repo.join("crates").join("kiliax-server");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "root rules v1").unwrap();
+        std::fs::write(nested.join("AGENTS.md"), "nested rules v1").unwrap();
+
+        let frozen = capture_project_prompt(Some(&nested));
+        std::fs::write(repo.join("AGENTS.md"), "root rules v2").unwrap();
+        std::fs::write(nested.join("AGENTS.md"), "nested rules v2").unwrap();
+
+        let msgs = PromptBuilder::new()
+            .include_tools_prompt(false)
+            .with_workspace_root(&nested)
+            .with_project_prompt(frozen)
+            .build();
+
+        let project = msgs
+            .iter()
+            .find_map(|m| match m {
+                Message::System { content } if content.contains("# Project Instructions") => {
+                    Some(content.clone())
+                }
+                _ => None,
+            })
+            .expect("project prompt");
+
+        assert!(project.contains("root rules v1"));
+        assert!(project.contains("nested rules v1"));
+        assert!(!project.contains("root rules v2"));
+        assert!(!project.contains("nested rules v2"));
+    }
+
+    #[test]
+    fn frozen_empty_project_prompt_does_not_read_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let frozen = capture_project_prompt(Some(dir.path()));
+        std::fs::write(dir.path().join("AGENTS.md"), "late rules").unwrap();
+
+        let msgs = PromptBuilder::new()
+            .include_tools_prompt(false)
+            .with_workspace_root(dir.path())
+            .with_project_prompt(frozen)
+            .build();
+
+        assert!(!msgs
+            .iter()
+            .any(|m| matches!(m, Message::System { content } if content.contains("# Project Instructions"))));
     }
 
     #[test]

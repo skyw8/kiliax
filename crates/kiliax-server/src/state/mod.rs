@@ -105,10 +105,7 @@ fn resolve_session_settings(
 
     let skills = meta.skills.as_ref().unwrap_or(&config.skills);
     let skills = skills_settings_from_config(skills);
-    let custom_tools = meta
-        .custom_tools
-        .as_ref()
-        .unwrap_or(&config.custom_tools);
+    let custom_tools = meta.custom_tools.as_ref().unwrap_or(&config.custom_tools);
     let custom_tools = custom_tools_settings_from_config(custom_tools);
 
     let by_id: HashMap<&str, bool> = meta
@@ -346,7 +343,9 @@ fn merge_custom_tool_overrides(
     for p in patch {
         let id = p.id.trim();
         if id.is_empty() {
-            return Err(ApiError::invalid_argument("custom tool id must not be empty"));
+            return Err(ApiError::invalid_argument(
+                "custom tool id must not be empty",
+            ));
         }
         map.insert(id.to_string(), p.enable);
     }

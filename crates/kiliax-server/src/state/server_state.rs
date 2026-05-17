@@ -20,10 +20,10 @@ use crate::infra::{
 use super::domain;
 use super::preamble::build_preamble;
 use super::{
-    apply_settings_patch, config_with_mcp_overrides, default_settings, list_models,
-    map_core_message_to_domain, map_mcp_status, map_session_err, mcp_status_from_settings, now_ms,
-    read_events_after, read_last_event_id, read_run_file, resolve_session_settings,
-    custom_tools_config_from_settings, session_events_api_path, skills_config_from_settings,
+    apply_settings_patch, config_with_mcp_overrides, custom_tools_config_from_settings,
+    default_settings, list_models, map_core_message_to_domain, map_mcp_status, map_session_err,
+    mcp_status_from_settings, now_ms, read_events_after, read_last_event_id, read_run_file,
+    resolve_session_settings, session_events_api_path, skills_config_from_settings,
     ts_ms_to_rfc3339, write_text_atomic, LiveSession,
 };
 
@@ -682,7 +682,9 @@ impl ServerState {
         }
         for s in req.custom_tools {
             if s.id.trim().is_empty() {
-                return Err(ApiError::invalid_argument("custom tool id must not be empty"));
+                return Err(ApiError::invalid_argument(
+                    "custom tool id must not be empty",
+                ));
             }
             next.custom_tools.overrides.insert(s.id, s.enable);
         }
@@ -1066,10 +1068,13 @@ impl ServerState {
             .map_err(ApiError::internal_error)?;
 
         let skills_config = skills_config_from_settings(&settings.skills);
+        let project_prompt = kiliax_core::prompt::capture_project_prompt(Some(&workspace_root))
+            .or_else(|| Some(String::new()));
         let messages = build_preamble(
             &profile,
             &settings.model_id,
             &workspace_root,
+            project_prompt.clone(),
             &tools,
             &skills_config,
         )
@@ -1096,6 +1101,7 @@ impl ServerState {
         let created_agent = settings.agent.clone();
         let created_model_id = settings.model_id.clone();
         let created_workspace_root = settings.workspace_root.clone();
+        session.meta.project_prompt = project_prompt;
         session.meta.custom_tools = Some(custom_tools_config_from_settings(&settings.custom_tools));
 
         if let Some(title) = req
@@ -1105,11 +1111,11 @@ impl ServerState {
             .filter(|t| !t.is_empty())
         {
             session.meta.title = Some(title.to_string());
-            self.store
-                .checkpoint(&mut session)
-                .await
-                .map_err(map_session_err)?;
         }
+        self.store
+            .checkpoint(&mut session)
+            .await
+            .map_err(map_session_err)?;
 
         let live = LiveSession::from_state(self, session, settings, tools, true).await?;
         self.sessions.lock().await.insert(

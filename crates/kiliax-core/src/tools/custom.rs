@@ -183,7 +183,10 @@ pub fn tool_definitions(config: &CustomToolsConfig) -> Vec<ToolDefinition> {
         .collect()
 }
 
-pub fn tool_parallelism(config: &CustomToolsConfig, exposed: &str) -> crate::tools::ToolParallelism {
+pub fn tool_parallelism(
+    config: &CustomToolsConfig,
+    exposed: &str,
+) -> crate::tools::ToolParallelism {
     let Some(name) = parse_exposed_tool_name(exposed) else {
         return crate::tools::ToolParallelism::Exclusive;
     };
@@ -268,8 +271,9 @@ impl CustomToolProcess {
                 "workspace_root": workspace_root,
             }
         });
-        let line = serde_json::to_string(&request)
-            .map_err(|err| ToolError::InvalidCommand(format!("failed to encode custom tool request: {err}")))?;
+        let line = serde_json::to_string(&request).map_err(|err| {
+            ToolError::InvalidCommand(format!("failed to encode custom tool request: {err}"))
+        })?;
 
         let timeout_dur = Duration::from_millis(self.tool.timeout_ms);
         let res = timeout(timeout_dur, async {
@@ -321,11 +325,10 @@ impl CustomToolProcess {
         }
         self.stop().await;
 
-        let (cmd, args) = self
-            .tool
-            .command
-            .split_first()
-            .ok_or_else(|| ToolError::InvalidCommand("custom tool command is empty".to_string()))?;
+        let (cmd, args) =
+            self.tool.command.split_first().ok_or_else(|| {
+                ToolError::InvalidCommand("custom tool command is empty".to_string())
+            })?;
         let mut command = Command::new(cmd);
         command
             .args(args)

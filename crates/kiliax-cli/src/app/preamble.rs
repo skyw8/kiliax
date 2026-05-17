@@ -32,6 +32,7 @@ pub(super) async fn build_preamble(
     profile: &AgentProfile,
     model_id: &str,
     workspace_root: &PathBuf,
+    project_prompt: Option<String>,
     tools: &kiliax_core::tools::ToolEngine,
     skills_config: &kiliax_core::config::SkillsConfig,
 ) -> Vec<Message> {
@@ -40,7 +41,8 @@ pub(super) async fn build_preamble(
             kiliax_core::tools::policy::tool_definitions_for_agent(profile, tools, model_id).await
         })
         .with_model_id(model_id.to_string())
-        .with_workspace_root(workspace_root);
+        .with_workspace_root(workspace_root)
+        .with_project_prompt(project_prompt);
     let discovered = kiliax_core::tools::skills::discover_skills(workspace_root);
     let filtered = discovered.items.into_iter().filter(|s| {
         skills_config
