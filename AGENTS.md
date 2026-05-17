@@ -38,7 +38,7 @@ minimal
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + session-scoped MCP/skills overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
-- Tools (builtin patch application/MCP dispatch/skills discovery/session goal tools): `crates/kiliax-core/src/tools/`
+- Tools (builtin patch application/MCP dispatch/skills discovery/session goal tools + tool telemetry categories/outcomes): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
   - `read_file`: read a UTF-8 text file from the workspace (or allowed skills roots), with optional line range and byte cap
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit

@@ -203,11 +203,13 @@ impl ToolEngine {
         }
         .unwrap_or_else(|| ("".to_string(), "".to_string()));
 
+        let category = tool_category(&call.name, kind);
         let span = tracing::info_span!(
             "kiliax.tool",
             tool.name = %call.name,
             tool.call_id = %call.id,
             tool.kind = %kind,
+            tool.category = %category,
             mcp.server = %mcp_server,
             mcp.tool = %mcp_tool,
             tool.duration_ms = tracing::field::Empty,
@@ -224,6 +226,7 @@ impl ToolEngine {
         }
 
         telemetry::spans::set_attribute(&span, "langfuse.observation.type", "tool");
+        telemetry::spans::set_attribute(&span, "tool.category", category);
         if telemetry::capture_full() {
             let captured = telemetry::capture_text(&call.arguments);
             telemetry::spans::set_attribute(
@@ -318,6 +321,7 @@ impl ToolEngine {
 
         let outcome = if res.is_ok() { "ok" } else { "error" };
         telemetry::metrics::record_tool_call(&call.name, kind, outcome, latency);
+        telemetry::spans::set_attribute(&span, "tool.outcome", outcome);
 
         match &res {
             Ok(output) => {
@@ -346,6 +350,8 @@ impl ToolEngine {
                 }
             }
             Err(err) => {
+                telemetry::spans::set_attribute(&span, "tool.error_type", tool_error_type(err));
+                telemetry::spans::set_attribute(&span, "langfuse.observation.level", "ERROR");
                 telemetry::spans::set_attribute(
                     &span,
                     "langfuse.observation.status_message",
@@ -386,11 +392,13 @@ impl ToolEngine {
         if call.name == builtin::TOOL_VIEW_IMAGE {
             let started = Instant::now();
             let kind = "builtin";
+            let category = tool_category(&call.name, kind);
             let span = tracing::info_span!(
                 "kiliax.tool",
                 tool.name = %call.name,
                 tool.call_id = %call.id,
                 tool.kind = %kind,
+                tool.category = %category,
                 mcp.server = "",
                 mcp.tool = "",
                 tool.duration_ms = tracing::field::Empty,
@@ -398,6 +406,7 @@ impl ToolEngine {
             telemetry::spans::update_name(&span, format!("kiliax.tool.{}", call.name));
 
             telemetry::spans::set_attribute(&span, "langfuse.observation.type", "tool");
+            telemetry::spans::set_attribute(&span, "tool.category", category);
             if telemetry::capture_full() {
                 let captured = telemetry::capture_text(&call.arguments);
                 telemetry::spans::set_attribute(
@@ -441,6 +450,7 @@ impl ToolEngine {
 
             let outcome = if res.is_ok() { "ok" } else { "error" };
             telemetry::metrics::record_tool_call(&call.name, kind, outcome, latency);
+            telemetry::spans::set_attribute(&span, "tool.outcome", outcome);
 
             match &res {
                 Ok((output, _image_message)) => {
@@ -469,6 +479,8 @@ impl ToolEngine {
                     }
                 }
                 Err(err) => {
+                    telemetry::spans::set_attribute(&span, "tool.error_type", tool_error_type(err));
+                    telemetry::spans::set_attribute(&span, "langfuse.observation.level", "ERROR");
                     telemetry::spans::set_attribute(
                         &span,
                         "langfuse.observation.status_message",
@@ -749,6 +761,36 @@ impl ToolEngine {
     }
 }
 
+fn tool_category(tool_name: &str, kind: &str) -> &'static str {
+    if kind == "mcp" {
+        return "mcp";
+    }
+
+    match tool_name {
+        builtin::TOOL_READ_FILE | builtin::TOOL_LIST_DIR | builtin::TOOL_GREP_FILES => "file_read",
+        builtin::TOOL_WRITE_FILE | builtin::TOOL_EDIT_FILE => "file_write",
+        builtin::TOOL_APPLY_PATCH => "patch",
+        builtin::TOOL_VIEW_IMAGE => "image",
+        builtin::TOOL_SHELL_COMMAND | builtin::TOOL_WRITE_STDIN => "shell",
+        builtin::TOOL_WEB_SEARCH => "web",
+        builtin::TOOL_UPDATE_PLAN => "plan",
+        builtin::TOOL_GET_GOAL | builtin::TOOL_UPDATE_GOAL => "goal",
+        _ => "other",
+    }
+}
+
+fn tool_error_type(err: &ToolError) -> &'static str {
+    match err {
+        ToolError::PermissionDenied(_) => "permission_denied",
+        ToolError::UnknownTool(_) => "unknown_tool",
+        ToolError::InvalidArgs { .. } => "invalid_args",
+        ToolError::InvalidPath { .. } => "invalid_path",
+        ToolError::InvalidCommand(_) => "invalid_command",
+        ToolError::Mcp(_) => "mcp",
+        ToolError::Io(_) => "io",
+    }
+}
+
 fn mcp_retry_backoff(attempt: u32) -> Duration {
     const BASE: Duration = Duration::from_secs(10);
     const MAX: Duration = Duration::from_secs(300);
@@ -801,6 +843,44 @@ mod tests {
             file_write: true,
             shell: ShellPermissions::AllowAll,
         }
+    }
+
+    #[test]
+    fn classifies_builtin_tool_categories() {
+        assert_eq!(
+            tool_category(builtin::TOOL_READ_FILE, "builtin"),
+            "file_read"
+        );
+        assert_eq!(
+            tool_category(builtin::TOOL_WRITE_FILE, "builtin"),
+            "file_write"
+        );
+        assert_eq!(tool_category(builtin::TOOL_APPLY_PATCH, "builtin"), "patch");
+        assert_eq!(
+            tool_category(builtin::TOOL_SHELL_COMMAND, "builtin"),
+            "shell"
+        );
+        assert_eq!(tool_category(builtin::TOOL_WEB_SEARCH, "builtin"), "web");
+        assert_eq!(tool_category(builtin::TOOL_UPDATE_PLAN, "builtin"), "plan");
+        assert_eq!(tool_category(builtin::TOOL_GET_GOAL, "builtin"), "goal");
+    }
+
+    #[test]
+    fn classifies_mcp_tools_by_kind() {
+        assert_eq!(tool_category("server__tool", "mcp"), "mcp");
+    }
+
+    #[test]
+    fn classifies_tool_error_types() {
+        assert_eq!(
+            tool_error_type(&ToolError::PermissionDenied("x".to_string())),
+            "permission_denied"
+        );
+        assert_eq!(
+            tool_error_type(&ToolError::InvalidCommand("bad".to_string())),
+            "invalid_command"
+        );
+        assert_eq!(tool_error_type(&ToolError::Mcp("bad".to_string())), "mcp");
     }
 
     #[tokio::test(flavor = "current_thread")]
