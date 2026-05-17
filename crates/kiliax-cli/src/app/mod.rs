@@ -998,11 +998,15 @@ impl App {
             .skills
             .clone()
             .unwrap_or_else(|| self.config.skills.clone());
+        let project_prompt =
+            kiliax_core::prompt::capture_project_prompt(Some(&self.workspace_root))
+                .or_else(|| Some(String::new()));
+        self.session.meta.project_prompt = project_prompt.clone();
         let new_preamble = build_preamble(
             &self.profile,
             &self.model_id,
             &self.workspace_root,
-            self.session.meta.project_prompt.clone(),
+            project_prompt,
             self.runtime.tools(),
             &skills_config,
         )

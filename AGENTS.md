@@ -34,7 +34,7 @@ minimal
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
-- Prompt assembly + nested project instruction scoping + session-frozen project prompts: `crates/kiliax-core/src/prompt.rs`
+- Prompt assembly + nested project instruction scoping + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization + max completion token handling: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + frozen project prompt metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
@@ -100,6 +100,12 @@ minimal
 
 ## constraints
 **All UI languages default to English, including any prompts, outputs, etc.**
+
+### Prompt Cache
+
+- Keep stable prompt parts before volatile content to improve provider prompt-cache reuse.
+- Place project instructions (`AGENTS.md`/`CLAUDE.md`) last in the system preamble.
+- Reuse the session project prompt during normal turns; refresh it only after successful `/compact` or auto-compaction.
 
 ### API
 

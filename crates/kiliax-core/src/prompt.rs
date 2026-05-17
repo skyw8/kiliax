@@ -160,15 +160,6 @@ impl PromptBuilder {
             out.push(Message::System { content: skills });
         }
 
-        if self.include_project_prompt {
-            let project = self
-                .project_prompt
-                .unwrap_or_else(|| capture_project_prompt(self.workspace_root.as_deref()));
-            if let Some(project) = project.filter(|p| !p.trim().is_empty()) {
-                out.push(Message::System { content: project });
-            }
-        }
-
         if self.include_environment_prompt {
             out.push(Message::System {
                 content: render_environment_prompt(
@@ -176,6 +167,15 @@ impl PromptBuilder {
                     self.model_id.as_deref(),
                 ),
             });
+        }
+
+        if self.include_project_prompt {
+            let project = self
+                .project_prompt
+                .unwrap_or_else(|| capture_project_prompt(self.workspace_root.as_deref()));
+            if let Some(project) = project.filter(|p| !p.trim().is_empty()) {
+                out.push(Message::System { content: project });
+            }
         }
 
         out.extend(self.messages);
@@ -552,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn environment_prompt_is_last_system_message() {
+    fn regression_project_prompt_is_last_system_message_before_conversation() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "project rules").unwrap();
 
@@ -588,7 +588,6 @@ mod tests {
             .iter()
             .rposition(|m| matches!(m, Message::System { .. }))
             .unwrap();
-        assert_eq!(env_idx, last_system_idx);
 
         let tools_idx = msgs
             .iter()
@@ -612,7 +611,15 @@ mod tests {
                 matches!(m, Message::System { content } if content.contains("# Project Instructions"))
             })
             .unwrap();
-        assert!(project_idx < env_idx);
+        assert!(env_idx < project_idx);
+        assert_eq!(project_idx, last_system_idx);
+        assert!(matches!(
+            msgs.get(project_idx + 1),
+            Some(Message::User {
+                content: UserMessageContent::Text(text),
+                ..
+            }) if text == "hi"
+        ));
 
         let Message::System { content } = &msgs[env_idx] else {
             panic!("expected environment prompt to be a system message");

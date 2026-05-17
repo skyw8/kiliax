@@ -762,15 +762,14 @@ impl LiveSession {
             .unwrap_or(0);
 
         let skills_config = skills_config_from_settings(&base_settings.skills);
-        let project_prompt = {
-            let session = self.session.lock().await;
-            session.meta.project_prompt.clone()
-        };
+        let project_prompt =
+            kiliax_core::prompt::capture_project_prompt(Some(effective.workspace_root.as_path()))
+                .or_else(|| Some(String::new()));
         let new_preamble = build_preamble(
             profile,
             &effective.model_id,
             &effective.workspace_root,
-            project_prompt,
+            project_prompt.clone(),
             tools_for_run,
             &skills_config,
         )
@@ -791,6 +790,7 @@ impl LiveSession {
             replace_preamble_with_ids(&mut messages, &mut message_ids, &mut last_seq, new_preamble);
             session.messages = messages;
             session.message_ids = message_ids;
+            session.meta.project_prompt = project_prompt;
             session.meta.last_seq = last_seq;
             for msg in compacted_history {
                 self.store
