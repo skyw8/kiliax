@@ -31,7 +31,7 @@ pub(super) fn group_tool_calls(tool_calls: &[ToolCall]) -> Vec<ToolCallGroup<'_>
     out
 }
 
-pub(super) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
+pub(crate) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
     if messages.iter().all(|m| {
         !matches!(m, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty())
             && !matches!(m, Message::Tool { .. })

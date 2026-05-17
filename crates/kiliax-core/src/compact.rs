@@ -1,5 +1,6 @@
 use crate::llm::{LlmClient, LlmError};
-use crate::protocol::{ChatRequest, Message, UserContentPart, UserMessageContent};
+use crate::protocol::{ChatRequest, Message, ToolCall, UserContentPart, UserMessageContent};
+use crate::runtime::tool_calls::sanitize_tool_call_history;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -12,6 +13,7 @@ pub const SUMMARY_PREFIX: &str = include_str!(concat!(
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+const COMPACT_TOOL_OUTPUT_MAX_TOKENS: usize = 4_000;
 
 pub fn approx_token_count(text: &str) -> usize {
     let len = text.len();
@@ -245,7 +247,7 @@ pub fn find_preamble_cutoff_id(messages: &[Message], message_ids: &[u64]) -> Opt
 }
 
 pub async fn run_compaction(llm: &LlmClient, messages: &[Message]) -> Result<String, LlmError> {
-    let mut working: Vec<Message> = messages.to_vec();
+    let mut working = prepare_messages_for_compaction(messages);
     loop {
         let mut req_messages = working.clone();
         req_messages.push(Message::User {
@@ -262,7 +264,9 @@ pub async fn run_compaction(llm: &LlmClient, messages: &[Message]) -> Result<Str
                 return Ok(summary);
             }
             Err(err) => {
-                if err.is_context_window_exceeded() && drop_oldest_non_system(&mut working) {
+                if err.is_context_window_exceeded()
+                    && drop_oldest_non_preamble_item_preserving_tool_pair(&mut working)
+                {
                     continue;
                 }
                 return Err(err);
@@ -271,20 +275,86 @@ pub async fn run_compaction(llm: &LlmClient, messages: &[Message]) -> Result<Str
     }
 }
 
-fn drop_oldest_non_system(messages: &mut Vec<Message>) -> bool {
+fn prepare_messages_for_compaction(messages: &[Message]) -> Vec<Message> {
+    let mut out = messages.to_vec();
+    sanitize_tool_call_history(&mut out);
+    truncate_tool_outputs_for_compaction(&mut out);
+    out
+}
+
+fn truncate_tool_outputs_for_compaction(messages: &mut [Message]) {
+    for msg in messages {
+        let Message::Tool { content, .. } = msg else {
+            continue;
+        };
+        if approx_token_count(content) <= COMPACT_TOOL_OUTPUT_MAX_TOKENS {
+            continue;
+        }
+        *content = truncate_middle_with_token_budget(content, COMPACT_TOOL_OUTPUT_MAX_TOKENS);
+    }
+}
+
+fn drop_oldest_non_preamble_item_preserving_tool_pair(messages: &mut Vec<Message>) -> bool {
     let idx = messages
         .iter()
         .position(|m| !matches!(m, Message::System { .. } | Message::Developer { .. }));
     let Some(idx) = idx else {
         return false;
     };
-    messages.remove(idx);
+
+    let removed = messages.remove(idx);
+    match removed {
+        Message::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
+            remove_matching_tool_results_at(messages, idx, &tool_calls);
+        }
+        Message::Tool { tool_call_id, .. } => {
+            remove_matching_assistant_tool_call(messages, &tool_call_id);
+        }
+        _ => {}
+    }
     true
+}
+
+fn remove_matching_tool_results_at(
+    messages: &mut Vec<Message>,
+    start_idx: usize,
+    calls: &[ToolCall],
+) {
+    let expected: std::collections::HashSet<&str> = calls.iter().map(|c| c.id.as_str()).collect();
+    if expected.is_empty() {
+        return;
+    }
+
+    let mut idx = start_idx;
+    while idx < messages.len() {
+        match &messages[idx] {
+            Message::Tool { tool_call_id, .. } if expected.contains(tool_call_id.as_str()) => {
+                messages.remove(idx);
+            }
+            Message::Tool { .. } => {
+                idx += 1;
+            }
+            _ => break,
+        }
+    }
+}
+
+fn remove_matching_assistant_tool_call(messages: &mut Vec<Message>, tool_call_id: &str) {
+    let Some(idx) = messages.iter().position(|m| {
+        matches!(m, Message::Assistant { tool_calls, .. } if tool_calls.iter().any(|c| c.id == tool_call_id))
+    }) else {
+        return;
+    };
+    let removed = messages.remove(idx);
+    if let Message::Assistant { tool_calls, .. } = removed {
+        remove_matching_tool_results_at(messages, idx, &tool_calls);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ToolCall;
 
     #[test]
     fn detects_summary_messages() {
@@ -300,5 +370,128 @@ mod tests {
         assert!(
             matches!(out.last(), Some(Message::User { content: UserMessageContent::Text(t), .. }) if is_summary_message(t))
         );
+    }
+
+    fn assistant_with_calls(ids: &[&str]) -> Message {
+        Message::Assistant {
+            content: None,
+            reasoning_content: None,
+            tool_calls: ids
+                .iter()
+                .map(|id| ToolCall {
+                    id: (*id).to_string(),
+                    name: "read_file".to_string(),
+                    arguments: "{}".to_string(),
+                })
+                .collect(),
+            usage: None,
+            provider_metadata: None,
+        }
+    }
+
+    fn tool(id: &str, content: &str) -> Message {
+        Message::Tool {
+            tool_call_id: id.to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn prepare_messages_for_compaction_reorders_tool_results() {
+        let messages = vec![
+            assistant_with_calls(&["a", "b"]),
+            tool("b", "B"),
+            tool("a", "A"),
+        ];
+
+        let prepared = prepare_messages_for_compaction(&messages);
+
+        assert!(matches!(
+            prepared.get(1),
+            Some(Message::Tool { tool_call_id, content }) if tool_call_id == "a" && content == "A"
+        ));
+        assert!(matches!(
+            prepared.get(2),
+            Some(Message::Tool { tool_call_id, content }) if tool_call_id == "b" && content == "B"
+        ));
+    }
+
+    #[test]
+    fn prepare_messages_for_compaction_inserts_missing_tool_result() {
+        let messages = vec![
+            assistant_with_calls(&["x"]),
+            Message::User {
+                content: UserMessageContent::Text("next".to_string()),
+                hidden: false,
+            },
+        ];
+
+        let prepared = prepare_messages_for_compaction(&messages);
+
+        assert!(matches!(
+            prepared.get(1),
+            Some(Message::Tool { tool_call_id, content })
+                if tool_call_id == "x" && content.contains("missing tool response")
+        ));
+    }
+
+    #[test]
+    fn prepare_messages_for_compaction_truncates_long_tool_output() {
+        let long = "0123456789".repeat(COMPACT_TOOL_OUTPUT_MAX_TOKENS);
+        let messages = vec![assistant_with_calls(&["x"]), tool("x", &long)];
+
+        let prepared = prepare_messages_for_compaction(&messages);
+
+        let Message::Tool { content, .. } = &prepared[1] else {
+            panic!("expected tool message");
+        };
+        assert!(content.len() < long.len());
+        assert!(content.contains("tokens truncated"));
+    }
+
+    #[test]
+    fn drop_oldest_non_preamble_item_removes_tool_call_pair() {
+        let mut messages = vec![
+            Message::System {
+                content: "sys".to_string(),
+            },
+            assistant_with_calls(&["a", "b"]),
+            tool("a", "A"),
+            tool("b", "B"),
+            Message::User {
+                content: UserMessageContent::Text("keep".to_string()),
+                hidden: false,
+            },
+        ];
+
+        assert!(drop_oldest_non_preamble_item_preserving_tool_pair(
+            &mut messages
+        ));
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(messages[0], Message::System { .. }));
+        assert!(matches!(messages[1], Message::User { .. }));
+    }
+
+    #[test]
+    fn drop_oldest_non_preamble_item_drops_orphan_tool() {
+        let mut messages = vec![
+            Message::System {
+                content: "sys".to_string(),
+            },
+            tool("orphan", "old"),
+            Message::User {
+                content: UserMessageContent::Text("keep".to_string()),
+                hidden: false,
+            },
+        ];
+
+        assert!(drop_oldest_non_preamble_item_preserving_tool_pair(
+            &mut messages
+        ));
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(messages[0], Message::System { .. }));
+        assert!(matches!(messages[1], Message::User { .. }));
     }
 }

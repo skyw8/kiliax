@@ -8,7 +8,7 @@ use crate::telemetry;
 use crate::tools::{policy, ToolEngine, ToolError};
 
 mod streaming;
-mod tool_calls;
+pub(crate) mod tool_calls;
 
 const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 1_000_000;
 
