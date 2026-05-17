@@ -40,7 +40,7 @@ minimal
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin patch application/MCP dispatch/skills discovery/session goal tools + tool telemetry categories/outcomes): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
-  - `read_file`: read a UTF-8 text file from the workspace (or allowed skills roots), with optional line range and byte cap
+  - `read_file`: read a line-numbered UTF-8 text file from the workspace (or allowed skills roots) using `filePath`, `offset`, and `limit`
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
   - `grep_files`: search files for a regex pattern (ripgrep semantics; respects `.gitignore`/`.ignore` by default)
   - `view_image`: attach a local image from the filesystem (png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif)

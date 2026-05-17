@@ -612,7 +612,8 @@ pub(super) fn render_error_lines(text: &str) -> Vec<Line<'static>> {
 
 #[derive(Debug, Deserialize)]
 struct ReadFileArgs {
-    path: String,
+    #[serde(rename = "filePath")]
+    file_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -683,7 +684,9 @@ pub(super) fn classify_tool_call(call: &kiliax_core::protocol::ToolCall) -> Pend
     match call.name.as_str() {
         "read_file" => serde_json::from_str::<ReadFileArgs>(&call.arguments)
             .ok()
-            .map(|args| PendingToolCallKind::ReadFile { path: args.path })
+            .map(|args| PendingToolCallKind::ReadFile {
+                path: args.file_path,
+            })
             .unwrap_or(PendingToolCallKind::Other),
         "list_dir" => serde_json::from_str::<ListDirArgs>(&call.arguments)
             .ok()
