@@ -673,12 +673,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         if let Some(usage) = chunk.usage {
                                             last_usage = Some(usage);
                                         }
-                                        if ttft.is_none()
-                                            && chunk
-                                                .content_delta
-                                                .as_deref()
-                                                .is_some_and(|d| !d.is_empty())
-                                        {
+                                        if ttft.is_none() && chunk_has_output_delta(&chunk) {
                                             let seen = started.elapsed();
                                             ttft = Some(seen);
                                             if let Some(wall) = started_wall_time.checked_add(seen)
@@ -905,6 +900,25 @@ fn format_system_time_rfc3339(ts: std::time::SystemTime) -> Option<String> {
     dt.format(&Rfc3339).ok()
 }
 
+fn chunk_has_output_delta(chunk: &ChatStreamChunk) -> bool {
+    chunk
+        .content_delta
+        .as_deref()
+        .is_some_and(|delta| !delta.is_empty())
+        || chunk
+            .thinking_delta
+            .as_deref()
+            .is_some_and(|delta| !delta.is_empty())
+        || chunk.tool_calls.iter().any(|call| {
+            call.id.as_deref().is_some_and(|value| !value.is_empty())
+                || call.name.as_deref().is_some_and(|value| !value.is_empty())
+                || call
+                    .arguments
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+        })
+}
+
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatStreamChunk, LlmError>> + Send>>;
 
 #[cfg(test)]
@@ -1033,6 +1047,23 @@ mod tests {
         let chunk = chat_stream_chunk_from_byot(resp);
         assert_eq!(chunk.thinking_delta.as_deref(), Some("step 1\nstep 2\n"));
         assert_eq!(chunk.content_delta.as_deref(), Some("final"));
+    }
+
+    #[test]
+    fn thinking_delta_starts_stream_completion_timing() {
+        let chunk = ChatStreamChunk {
+            id: "chat_1".to_string(),
+            created: 0,
+            model: "m".to_string(),
+            content_delta: None,
+            thinking_delta: Some("reasoning".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: None,
+            usage: None,
+            provider_metadata: None,
+        };
+
+        assert!(chunk_has_output_delta(&chunk));
     }
 
     #[test]
