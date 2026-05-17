@@ -46,8 +46,8 @@ minimal
   - `view_image`: attach a local image from the filesystem (png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif)
   - `shell_command`: run a command string in the workspace through the user's default shell, inheriting the full process environment and using login/profile semantics by default; returns a `session_id` for long-running processes
   - `write_stdin`: write to stdin of a running shell session, or poll its output
-  - `write_file`: write/overwrite a file on the local filesystem (requires prior `read_file` when overwriting)
-  - `edit_file`: perform exact string replacements in a file (requires prior `read_file`; supports `replaceAll`)
+  - `write_file`: write/overwrite a UTF-8 text file using `filePath` and `content`, creating parent directories and preserving UTF-8 BOM
+  - `edit_file`: perform opencode-style text edits using `filePath`, `oldString`, `newString`, and `replaceAll`, preserving BOM/line endings and allowing empty `oldString` for whole-file create/overwrite
   - `apply_patch`: apply a stripped-down file-oriented diff envelope (`*** Begin Patch` / `*** End Patch`) for multi-file edits
   - `update_plan`: update the UI plan (best effort, surfaced in TUI/web)
   - `get_goal`: read the active session goal (`SessionGoal`) if present

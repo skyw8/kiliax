@@ -1,4 +1,6 @@
-Performs exact string replacements in files. 
-- You must use the `read_file` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. 
-- The edit will FAIL if `oldString` is found multiple times in the file with an error "Found multiple matches for oldString. Provide more surrounding lines in oldString to identify the correct match." Either provide a larger string with more surrounding context to make it unique or use `replaceAll` to change every instance of `oldString`. 
-- Use `replaceAll` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.
+Edits text files.
+- From `read_file` output, use only the content after `N: ` in `oldString`/`newString`.
+- Empty `oldString` creates or replaces a whole file with `newString`.
+- Prefer editing existing files; create files only when required.
+- If `oldString` is missing or ambiguous, use more context or `replaceAll`.
+- Avoid emojis unless explicitly requested.
