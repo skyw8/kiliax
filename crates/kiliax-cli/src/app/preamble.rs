@@ -3,41 +3,29 @@ use std::path::PathBuf;
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::protocol::Message;
 
-pub(super) fn preamble_updates(messages: &[Message], new_preamble: Vec<Message>) -> Vec<Message> {
-    const HEADER: &str =
-        "Session update: the following system messages override earlier system context.";
-
-    let mut seen: std::collections::HashSet<String> = messages
+pub(super) fn replace_preamble(
+    messages: &mut Vec<Message>,
+    message_ids: &mut Vec<u64>,
+    last_seq: &mut u64,
+    new_preamble: Vec<Message>,
+) {
+    let end = messages
         .iter()
-        .filter_map(|m| match m {
-            Message::System { content } => Some(content.clone()),
-            _ => None,
-        })
-        .collect();
-    let header_seen = seen.contains(HEADER);
+        .position(|m| !matches!(m, Message::System { .. }))
+        .unwrap_or(messages.len());
+    let new_len = new_preamble.len();
+    messages.splice(0..end, new_preamble);
 
-    let mut updates: Vec<Message> = Vec::new();
-    for msg in new_preamble {
-        let Message::System { content } = &msg else {
-            continue;
-        };
-        if seen.insert(content.clone()) {
-            updates.push(msg);
+    let mut replacement_ids = Vec::with_capacity(new_len);
+    for idx in 0..new_len {
+        if idx < end && idx < message_ids.len() {
+            replacement_ids.push(message_ids[idx]);
+        } else {
+            *last_seq += 1;
+            replacement_ids.push(*last_seq);
         }
     }
-
-    if updates.is_empty() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::with_capacity(updates.len().saturating_add(1));
-    if !header_seen {
-        out.push(Message::System {
-            content: HEADER.to_string(),
-        });
-    }
-    out.extend(updates);
-    out
+    message_ids.splice(0..end.min(message_ids.len()), replacement_ids);
 }
 
 pub(super) async fn build_preamble(

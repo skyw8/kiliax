@@ -75,19 +75,81 @@ pub async fn tool_definitions_for_agent(
 ) -> Vec<ToolDefinition> {
     let policy = ToolPolicy::for_model_id(model_id);
     let mut out: Vec<ToolDefinition> = profile
-        .tool_ids
+        .tools
+        .builtin
         .iter()
         .copied()
         .filter(|id| policy.allows_builtin(*id))
         .map(BuiltinToolId::definition)
         .collect();
 
-    out.extend(tools.extra_tool_definitions().await);
+    out.extend(
+        tools
+            .extra_tool_definitions()
+            .await
+            .into_iter()
+            .filter(|def| allows_extra_tool(profile, &def.name)),
+    );
     out
+}
+
+fn allows_extra_tool(profile: &AgentProfile, tool_name: &str) -> bool {
+    if let Some((server, _tool)) = crate::tools::mcp::McpHub::parse_exposed_tool_name(tool_name) {
+        return profile.tools.mcp.allows(server);
+    }
+    if let Some(name) = crate::tools::custom::parse_exposed_tool_name(tool_name) {
+        return profile.tools.custom.allows(name);
+    }
+    false
 }
 
 fn is_gpt5_family(model_id: &str) -> bool {
     let model = model_id.rsplit('/').next().unwrap_or(model_id).trim();
     let model = model.to_ascii_lowercase();
     model.starts_with("gpt-5")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use crate::agents::{AgentKind, AgentProfile, AgentSource, AgentToolFilter, ToolAllow};
+    use crate::config::AgentRuntimeConfig;
+    use crate::tools::{Permissions, ShellPermissions};
+
+    use super::allows_extra_tool;
+
+    fn profile(custom: ToolAllow, mcp: ToolAllow) -> AgentProfile {
+        AgentProfile {
+            kind: AgentKind::Custom,
+            source: AgentSource::Custom,
+            name: "custom".to_string(),
+            display_name: None,
+            description: None,
+            developer_prompt: "prompt".to_string(),
+            tools: AgentToolFilter::custom(Vec::new(), mcp, custom),
+            permissions: Permissions {
+                file_read: true,
+                file_write: false,
+                shell: ShellPermissions::DenyAll,
+            },
+            runtime: Option::<AgentRuntimeConfig>::None,
+        }
+    }
+
+    #[test]
+    fn custom_agent_filters_custom_tools() {
+        let allowed = ToolAllow::Only(BTreeSet::from(["alert_ubuntu".to_string()]));
+        let profile = profile(allowed, ToolAllow::None);
+        assert!(allows_extra_tool(&profile, "custom__alert_ubuntu"));
+        assert!(!allows_extra_tool(&profile, "custom__repo_stats"));
+    }
+
+    #[test]
+    fn custom_agent_filters_mcp_servers() {
+        let allowed = ToolAllow::Only(BTreeSet::from(["github".to_string()]));
+        let profile = profile(ToolAllow::None, allowed);
+        assert!(allows_extra_tool(&profile, "mcp__github__create_issue"));
+        assert!(!allows_extra_tool(&profile, "mcp__figma__inspect"));
+    }
 }

@@ -90,18 +90,25 @@ impl AgentRuntimeOptions {
         }
         options.auto_compact_token_limit = config.runtime.auto_compact_token_limit;
 
+        let custom_cfg;
         let agent_cfg = match profile.kind {
-            AgentKind::Plan => &config.agents.plan,
-            AgentKind::General => &config.agents.general,
+            AgentKind::Plan => Some(&config.agents.plan),
+            AgentKind::General => Some(&config.agents.general),
+            AgentKind::Custom => {
+                custom_cfg = profile.runtime.clone();
+                custom_cfg.as_ref()
+            }
         };
-        if let Some(max_steps) = agent_cfg.max_steps {
+        if let Some(max_steps) = agent_cfg.and_then(|cfg| cfg.max_steps) {
             options.max_steps = max_steps;
         }
-        if let Some(max_completion_tokens) = agent_cfg.max_completion_tokens {
+        if let Some(max_completion_tokens) = agent_cfg.and_then(|cfg| cfg.max_completion_tokens) {
             options.max_completion_tokens = Some(max_completion_tokens);
         }
-        if agent_cfg.auto_compact_token_limit.is_some() {
-            options.auto_compact_token_limit = agent_cfg.auto_compact_token_limit;
+        if let Some(auto_compact_token_limit) =
+            agent_cfg.and_then(|cfg| cfg.auto_compact_token_limit)
+        {
+            options.auto_compact_token_limit = Some(auto_compact_token_limit);
         }
 
         options
@@ -388,7 +395,7 @@ impl AgentRuntime {
                             Ok(s) => s,
                             Err(err) => {
                                 telemetry::metrics::record_run_finished(
-                                    profile.name,
+                                    &profile.name,
                                     "error",
                                     step_no as u64,
                                     started.elapsed(),
@@ -405,7 +412,7 @@ impl AgentRuntime {
                                 }
                                 if step_out.finish_reason == Some(FinishReason::Length) {
                                     telemetry::metrics::record_run_finished(
-                                        profile.name,
+                                        &profile.name,
                                         "max_completion_tokens",
                                         step_no as u64,
                                         started.elapsed(),
@@ -455,7 +462,7 @@ impl AgentRuntime {
                                         })))
                                         .await;
                                     telemetry::metrics::record_run_finished(
-                                        profile.name,
+                                        &profile.name,
                                         "done",
                                         step_no as u64,
                                         started.elapsed(),
@@ -756,7 +763,7 @@ impl AgentRuntime {
                             }
                             Err(err) => {
                                 telemetry::metrics::record_run_finished(
-                                    profile.name,
+                                    &profile.name,
                                     "error",
                                     step_no as u64,
                                     started.elapsed(),
@@ -778,7 +785,7 @@ impl AgentRuntime {
                 }
 
                 telemetry::metrics::record_run_finished(
-                    profile.name,
+                    &profile.name,
                     "max_steps",
                     options.max_steps as u64,
                     started.elapsed(),

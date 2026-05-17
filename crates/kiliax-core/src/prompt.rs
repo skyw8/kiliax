@@ -47,7 +47,7 @@ impl PromptBuilder {
     }
 
     pub fn for_agent(profile: &AgentProfile) -> Self {
-        Self::new().with_agent_prompt(profile.developer_prompt)
+        Self::new().with_agent_prompt(profile.developer_prompt.clone())
     }
 
     pub fn with_workspace_root(mut self, root: impl Into<PathBuf>) -> Self {

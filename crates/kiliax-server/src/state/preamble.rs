@@ -1,63 +1,41 @@
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use kiliax_core::agents::AgentProfile;
 use kiliax_core::protocol::Message as CoreMessage;
 use kiliax_core::tools::ToolEngine;
 
-pub(super) fn preamble_updates(
-    messages: &[CoreMessage],
-    new_preamble: Vec<CoreMessage>,
-) -> Vec<CoreMessage> {
-    const HEADER: &str =
-        "Session update: the following system messages override earlier system context.";
-
-    let mut seen: HashSet<String> = messages
+pub(super) fn replace_preamble(messages: &mut Vec<CoreMessage>, new_preamble: Vec<CoreMessage>) {
+    let end = messages
         .iter()
-        .filter_map(|m| match m {
-            CoreMessage::System { content } => Some(content.clone()),
-            _ => None,
-        })
-        .collect();
-    let header_seen = seen.contains(HEADER);
-
-    let mut updates: Vec<CoreMessage> = Vec::new();
-    for msg in new_preamble {
-        let CoreMessage::System { content } = &msg else {
-            continue;
-        };
-        if seen.insert(content.clone()) {
-            updates.push(msg);
-        }
-    }
-
-    if updates.is_empty() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::with_capacity(updates.len().saturating_add(1));
-    if !header_seen {
-        out.push(CoreMessage::System {
-            content: HEADER.to_string(),
-        });
-    }
-    out.extend(updates);
-    out
+        .position(|m| !matches!(m, CoreMessage::System { .. }))
+        .unwrap_or(messages.len());
+    messages.splice(0..end, new_preamble);
 }
 
-pub(super) fn insert_preamble_updates_before_last_user(
+pub(super) fn replace_preamble_with_ids(
     messages: &mut Vec<CoreMessage>,
+    message_ids: &mut Vec<u64>,
+    last_seq: &mut u64,
     new_preamble: Vec<CoreMessage>,
 ) {
-    let updates = preamble_updates(messages.as_slice(), new_preamble);
-    if updates.is_empty() {
-        return;
-    }
-    let idx = messages
+    let end = messages
         .iter()
-        .rposition(|m| matches!(m, CoreMessage::User { .. }))
+        .position(|m| !matches!(m, CoreMessage::System { .. }))
         .unwrap_or(messages.len());
-    messages.splice(idx..idx, updates);
+    let new_len = new_preamble.len();
+
+    messages.splice(0..end, new_preamble);
+
+    let mut replacement_ids = Vec::with_capacity(new_len);
+    for idx in 0..new_len {
+        if idx < end && idx < message_ids.len() {
+            replacement_ids.push(message_ids[idx]);
+        } else {
+            *last_seq += 1;
+            replacement_ids.push(*last_seq);
+        }
+    }
+    message_ids.splice(0..end.min(message_ids.len()), replacement_ids);
 }
 
 pub(super) async fn build_preamble(
@@ -83,4 +61,44 @@ pub(super) async fn build_preamble(
     });
     builder = builder.add_skills(filtered);
     builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use kiliax_core::protocol::{Message, UserMessageContent};
+
+    use super::replace_preamble_with_ids;
+
+    #[test]
+    fn replace_preamble_removes_old_system_messages_and_keeps_ids_aligned() {
+        let mut messages = vec![
+            Message::System {
+                content: "old plan prompt".to_string(),
+            },
+            Message::System {
+                content: "old tools".to_string(),
+            },
+            Message::User {
+                content: UserMessageContent::Text("hello".to_string()),
+                hidden: false,
+            },
+        ];
+        let mut ids = vec![1, 2, 3];
+        let mut last_seq = 3;
+
+        replace_preamble_with_ids(
+            &mut messages,
+            &mut ids,
+            &mut last_seq,
+            vec![Message::System {
+                content: "new reviewer prompt".to_string(),
+            }],
+        );
+
+        assert_eq!(messages.len(), ids.len());
+        assert_eq!(ids, vec![1, 3]);
+        assert!(matches!(&messages[0], Message::System { content } if content == "new reviewer prompt"));
+        assert!(matches!(&messages[1], Message::User { .. }));
+        assert_eq!(last_seq, 3);
+    }
 }

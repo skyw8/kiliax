@@ -33,6 +33,7 @@ minimal
 - Protocol compatibility re-exports (messages/tool-calls/usage + base64 image/PDF content parts): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
+- Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
 - Prompt assembly + nested project instruction scoping: `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization + max completion token handling: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`

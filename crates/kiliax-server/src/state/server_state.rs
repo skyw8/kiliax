@@ -1541,7 +1541,7 @@ impl ServerState {
     pub async fn get_capabilities(&self) -> Result<api::Capabilities, ApiError> {
         let config = self.config_snapshot();
         Ok(api::Capabilities {
-            agents: vec!["general".to_string(), "plan".to_string()],
+            agents: AgentProfile::list_names(),
             models: list_models(config.as_ref()),
             mcp_servers: map_mcp_status(self.tools_for_caps.mcp_status().await)
                 .into_iter()

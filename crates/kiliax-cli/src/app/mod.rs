@@ -35,7 +35,7 @@ mod tokens;
 pub use submissions::PendingImage;
 pub(crate) use submissions::QueuedSubmission;
 
-use preamble::{build_preamble, preamble_updates};
+use preamble::{build_preamble, replace_preamble};
 use render::{
     classify_tool_call, format_error_chain_text, render_dir_list_lines, render_error_lines,
     render_thinking_start_line, render_token_usage_line, render_tool_result_fallback_lines,
@@ -251,7 +251,7 @@ impl App {
     }
 
     pub fn agent_name(&self) -> &str {
-        self.profile.name
+        &self.profile.name
     }
 
     pub fn set_screen_width(&mut self, width: u16) {
@@ -1004,9 +1004,14 @@ impl App {
             &skills_config,
         )
         .await;
-        for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
-            self.store.record_message(&mut self.session, msg).await?;
-        }
+        let mut last_seq = self.session.meta.last_seq;
+        replace_preamble(
+            &mut self.session.messages,
+            &mut self.session.message_ids,
+            &mut last_seq,
+            new_preamble,
+        );
+        self.session.meta.last_seq = last_seq;
         for msg in compacted_history {
             self.store.record_message(&mut self.session, msg).await?;
         }
@@ -1089,9 +1094,14 @@ impl App {
             &skills_config,
         )
         .await;
-        for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
-            self.store.record_message(&mut self.session, msg).await?;
-        }
+        let mut last_seq = self.session.meta.last_seq;
+        replace_preamble(
+            &mut self.session.messages,
+            &mut self.session.message_ids,
+            &mut last_seq,
+            new_preamble,
+        );
+        self.session.meta.last_seq = last_seq;
         self.messages = self.session.messages.clone();
 
         self.store.checkpoint(&mut self.session).await?;
@@ -1197,9 +1207,14 @@ impl App {
                 &skills_config,
             )
             .await;
-            for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
-                self.store.record_message(&mut self.session, msg).await?;
-            }
+            let mut last_seq = self.session.meta.last_seq;
+            replace_preamble(
+                &mut self.session.messages,
+                &mut self.session.message_ids,
+                &mut last_seq,
+                new_preamble,
+            );
+            self.session.meta.last_seq = last_seq;
             self.messages = self.session.messages.clone();
 
             let _ = self.store.checkpoint(&mut self.session).await;
@@ -1315,9 +1330,14 @@ impl App {
                 &skills_config,
             )
             .await;
-            for msg in preamble_updates(self.session.messages.as_slice(), new_preamble) {
-                self.store.record_message(&mut self.session, msg).await?;
-            }
+            let mut last_seq = self.session.meta.last_seq;
+            replace_preamble(
+                &mut self.session.messages,
+                &mut self.session.message_ids,
+                &mut last_seq,
+                new_preamble,
+            );
+            self.session.meta.last_seq = last_seq;
             self.messages = self.session.messages.clone();
             let _ = self.store.checkpoint(&mut self.session).await;
 

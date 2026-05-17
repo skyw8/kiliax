@@ -21,7 +21,7 @@ use tracing::{Instrument, Span};
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{validate_client_extra_workspace_roots, validate_client_workspace_root};
 
-use super::preamble::{build_preamble, insert_preamble_updates_before_last_user, preamble_updates};
+use super::preamble::{build_preamble, replace_preamble, replace_preamble_with_ids};
 use super::{
     append_event, apply_settings_patch, config_with_mcp_overrides, error_chain_vec,
     format_error_chain_text, map_core_message_to_domain_event_message, map_mcp_status,
@@ -780,12 +780,18 @@ impl LiveSession {
                     .map_err(map_session_err)?;
             }
 
-            for msg in preamble_updates(session.messages.as_slice(), new_preamble) {
-                self.store
-                    .record_message(&mut session, msg)
-                    .await
-                    .map_err(map_session_err)?;
-            }
+            let mut last_seq = session.meta.last_seq;
+            let mut messages = std::mem::take(&mut session.messages);
+            let mut message_ids = std::mem::take(&mut session.message_ids);
+            replace_preamble_with_ids(
+                &mut messages,
+                &mut message_ids,
+                &mut last_seq,
+                new_preamble,
+            );
+            session.messages = messages;
+            session.message_ids = message_ids;
+            session.meta.last_seq = last_seq;
             for msg in compacted_history {
                 self.store
                     .record_message(&mut session, msg)
@@ -1283,7 +1289,7 @@ impl LiveSession {
                     &skills_config,
                 )
                 .await;
-                insert_preamble_updates_before_last_user(&mut messages, preamble);
+                replace_preamble(&mut messages, preamble);
             }
 
             let stream = runtime
@@ -1545,13 +1551,18 @@ impl LiveSession {
         .await;
 
         let mut session = self.session.lock().await;
-        let updates = preamble_updates(session.messages.as_slice(), preamble);
-        for msg in updates {
-            self.store
-                .record_message(&mut session, msg)
-                .await
-                .map_err(map_session_err)?;
-        }
+        let mut last_seq = session.meta.last_seq;
+        let mut messages = std::mem::take(&mut session.messages);
+        let mut message_ids = std::mem::take(&mut session.message_ids);
+        replace_preamble_with_ids(
+            &mut messages,
+            &mut message_ids,
+            &mut last_seq,
+            preamble,
+        );
+        session.messages = messages;
+        session.message_ids = message_ids;
+        session.meta.last_seq = last_seq;
         session.meta.agent = profile.name.to_string();
         session.meta.model_id = Some(settings.model_id.clone());
         session.meta.workspace_root = Some(settings.workspace_root.display().to_string());

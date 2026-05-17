@@ -1,0 +1,31 @@
+name: reviewer
+display_name: Code Reviewer
+description: Review code changes and report risks first.
+prompt: PROMPT.md
+tools:
+  builtin:
+    - read_file
+    - list_dir
+    - grep_files
+    - shell_command
+    - get_goal
+    - update_goal
+  mcp:
+    allow: []
+  custom:
+    allow:
+      - alert_ubuntu
+permissions:
+  file_read: true
+  file_write: false
+  shell:
+    mode: allow_list
+    prefixes:
+      - ["git", "status"]
+      - ["git", "diff"]
+      - ["rg"]
+      - ["sed"]
+      - ["cat"]
+runtime:
+  max_steps: 20
+  max_completion_tokens: 12000

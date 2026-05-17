@@ -1,13 +1,16 @@
 use crate::tools::{builtin, Permissions, ShellPermissions};
 
-use super::{AgentKind, AgentProfile};
+use super::{AgentKind, AgentProfile, AgentSource, AgentToolFilter};
 
 pub(super) fn profile() -> AgentProfile {
     AgentProfile {
         kind: AgentKind::General,
-        name: "general",
-        developer_prompt: PROMPT,
-        tool_ids: vec![
+        source: AgentSource::Builtin,
+        name: "general".to_string(),
+        display_name: Some("General".to_string()),
+        description: Some("General-purpose agent.".to_string()),
+        developer_prompt: PROMPT.to_string(),
+        tools: AgentToolFilter::builtin_with_extra(vec![
             builtin::BuiltinToolId::ReadFile,
             builtin::BuiltinToolId::ListDir,
             builtin::BuiltinToolId::GrepFiles,
@@ -21,8 +24,9 @@ pub(super) fn profile() -> AgentProfile {
             builtin::BuiltinToolId::UpdatePlan,
             builtin::BuiltinToolId::GetGoal,
             builtin::BuiltinToolId::UpdateGoal,
-        ],
+        ]),
         permissions: permissions(),
+        runtime: None,
     }
 }
 
