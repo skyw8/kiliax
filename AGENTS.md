@@ -73,7 +73,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/auth/logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
+- HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue/goal continuation loop/durable-vs-ephemeral events/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - State domain types (events/status/snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input): `crates/kiliax-server/src/state/domain.rs`

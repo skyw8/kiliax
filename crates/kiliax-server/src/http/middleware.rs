@@ -1,12 +1,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::{ConnectInfo, MatchedPath, State};
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
-use tower_http::trace::TraceLayer;
-use tracing::Span;
 
 use crate::error::{ApiError, ApiErrorCode};
 use crate::state::ServerState;
@@ -55,50 +53,6 @@ fn http_version(version: axum::http::Version) -> &'static str {
         axum::http::Version::HTTP_3 => "HTTP/3.0",
         _ => "HTTP/?",
     }
-}
-
-pub(crate) fn http_trace_layer() -> TraceLayer<
-    tower_http::trace::HttpMakeClassifier,
-    impl tower_http::trace::MakeSpan<axum::body::Body> + Clone,
-    (),
-    impl tower_http::trace::OnResponse<axum::body::Body> + Clone,
-> {
-    TraceLayer::new_for_http()
-        .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
-            let route = request
-                .extensions()
-                .get::<MatchedPath>()
-                .map(|p| p.as_str())
-                .unwrap_or_else(|| request.uri().path());
-            let user_agent = request
-                .headers()
-                .get(axum::http::header::USER_AGENT)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let target = strip_token_query(request.uri());
-
-            let span = tracing::info_span!(
-                "http.request",
-                otel.kind = "server",
-                http.method = %request.method(),
-                http.route = %route,
-                http.target = %target,
-                http.user_agent = %user_agent,
-                http.status_code = tracing::field::Empty,
-                http.latency_ms = tracing::field::Empty,
-            );
-            let _ = kiliax_otel::set_parent_from_http_headers(&span, request.headers());
-            span
-        })
-        .on_request(())
-        .on_response(
-            |response: &axum::http::Response<axum::body::Body>,
-             latency: std::time::Duration,
-             span: &Span| {
-                span.record("http.status_code", response.status().as_u16() as u64);
-                span.record("http.latency_ms", latency.as_millis() as u64);
-            },
-        )
 }
 
 pub(crate) async fn auth_middleware(

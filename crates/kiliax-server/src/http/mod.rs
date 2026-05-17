@@ -44,8 +44,7 @@ pub fn build_app(state: Arc<ServerState>) -> Router {
         .routes(handlers::admin::stop_routes())
         .routes(handlers::events::list_routes())
         .routes(handlers::events::stream_sse_routes())
-        .routes(handlers::events::stream_ws_routes())
-        .route_layer(middleware::http_trace_layer());
+        .routes(handlers::events::stream_ws_routes());
 
     let (v1_router, v1_openapi) = v1.split_for_parts();
     let openapi = crate::openapi::ApiDoc::openapi().nest("/v1", v1_openapi);
