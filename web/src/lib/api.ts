@@ -1,5 +1,6 @@
 import type {
   Capabilities,
+  ConfigCustomToolsResponse,
   ConfigResponse,
   ConfigProvidersPatchRequest,
   ConfigProvidersResponse,
@@ -7,6 +8,8 @@ import type {
   ConfigRuntimeResponse,
   ConfigSkillsResponse,
   ConfigUpdateRequest,
+  CustomToolEnableSetting,
+  CustomToolListResponse,
   FsListResponse,
   MessageListResponse,
   McpServerSetting,
@@ -186,11 +189,29 @@ export const api = {
       body: JSON.stringify(req),
     });
   },
+  getConfigCustomTools(): Promise<ConfigCustomToolsResponse> {
+    return apiFetch<ConfigCustomToolsResponse>("/v1/config/custom-tools");
+  },
+  patchConfigCustomTools(req: {
+    default_enable?: boolean;
+    custom_tools: CustomToolEnableSetting[];
+  }): Promise<void> {
+    return apiFetch<void>("/v1/config/custom-tools", {
+      method: "PATCH",
+      body: JSON.stringify(req),
+    });
+  },
   listSkills(sessionId: string): Promise<SkillListResponse> {
     return apiFetch<SkillListResponse>(`/v1/sessions/${sessionId}/skills`);
   },
   listGlobalSkills(): Promise<SkillListResponse> {
     return apiFetch<SkillListResponse>("/v1/skills");
+  },
+  listCustomTools(sessionId: string): Promise<CustomToolListResponse> {
+    return apiFetch<CustomToolListResponse>(`/v1/sessions/${sessionId}/custom-tools`);
+  },
+  listGlobalCustomTools(): Promise<CustomToolListResponse> {
+    return apiFetch<CustomToolListResponse>("/v1/custom-tools");
   },
   forkSession(sessionId: string, messageId?: string): Promise<any> {
     const body: any = {};

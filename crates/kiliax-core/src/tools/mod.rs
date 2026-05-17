@@ -1,4 +1,5 @@
 pub mod builtin;
+pub mod custom;
 pub mod engine;
 pub mod mcp;
 pub mod policy;
@@ -23,6 +24,11 @@ impl ToolParallelism {
 }
 
 pub fn tool_parallelism(tool_name: &str) -> ToolParallelism {
+    if custom::is_custom_tool_name(tool_name) {
+        let cfg = crate::config::CustomToolsConfig::default();
+        return custom::tool_parallelism(&cfg, tool_name);
+    }
+
     match tool_name {
         builtin::TOOL_READ_FILE
         | builtin::TOOL_LIST_DIR

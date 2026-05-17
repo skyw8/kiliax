@@ -76,11 +76,60 @@ impl From<domain::SkillsSettingsPatch> for api::SkillsSettingsPatch {
     }
 }
 
+impl From<domain::CustomToolEnableSetting> for api::CustomToolEnableSetting {
+    fn from(value: domain::CustomToolEnableSetting) -> Self {
+        Self {
+            id: value.id,
+            enable: value.enable,
+        }
+    }
+}
+
+impl From<domain::CustomToolsSettings> for api::CustomToolsSettings {
+    fn from(value: domain::CustomToolsSettings) -> Self {
+        Self {
+            default_enable: value.default_enable,
+            overrides: value.overrides.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<domain::CustomToolsSettingsPatch> for api::CustomToolsSettingsPatch {
+    fn from(value: domain::CustomToolsSettingsPatch) -> Self {
+        Self {
+            default_enable: value.default_enable,
+            overrides: value
+                .overrides
+                .map(|v| v.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+
 impl From<api::SkillEnableSetting> for domain::SkillEnableSetting {
     fn from(value: api::SkillEnableSetting) -> Self {
         Self {
             id: value.id,
             enable: value.enable,
+        }
+    }
+}
+
+impl From<api::CustomToolEnableSetting> for domain::CustomToolEnableSetting {
+    fn from(value: api::CustomToolEnableSetting) -> Self {
+        Self {
+            id: value.id,
+            enable: value.enable,
+        }
+    }
+}
+
+impl From<api::CustomToolsSettingsPatch> for domain::CustomToolsSettingsPatch {
+    fn from(value: api::CustomToolsSettingsPatch) -> Self {
+        Self {
+            default_enable: value.default_enable,
+            overrides: value
+                .overrides
+                .map(|v| v.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -148,6 +197,7 @@ impl From<domain::SessionSettings> for api::SessionSettings {
             agent: value.agent,
             model_id: value.model_id,
             skills: value.skills.into(),
+            custom_tools: value.custom_tools.into(),
             mcp: value.mcp.into(),
             workspace_root: value.workspace_root.display().to_string(),
             extra_workspace_roots: value
@@ -465,6 +515,7 @@ impl From<api::SessionCreateSettings> for domain::SessionCreateSettings {
             agent: value.agent,
             model_id: value.model_id,
             skills: value.skills.map(Into::into),
+            custom_tools: value.custom_tools.map(Into::into),
             mcp: value.mcp.map(Into::into),
             workspace_root: value.workspace_root,
             extra_workspace_roots: value.extra_workspace_roots,
@@ -487,6 +538,7 @@ impl From<api::SessionSettingsPatch> for domain::SessionSettingsPatch {
             agent: value.agent,
             model_id: value.model_id,
             skills: value.skills.map(Into::into),
+            custom_tools: value.custom_tools.map(Into::into),
             mcp: value.mcp.map(Into::into),
             extra_workspace_roots: value.extra_workspace_roots,
         }
@@ -500,6 +552,7 @@ impl From<api::SessionSaveDefaultsRequest> for domain::SessionSaveDefaultsReques
             agent: value.agent,
             mcp: value.mcp,
             skills: value.skills,
+            custom_tools: value.custom_tools,
         }
     }
 }

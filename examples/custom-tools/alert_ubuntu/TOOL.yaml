@@ -1,0 +1,26 @@
+name: alert_ubuntu
+display_name: Alert Ubuntu
+description: Send an Ubuntu desktop notification and play a notification sound.
+command: ["python3", "tool.py"]
+timeout_ms: 10000
+parallel: true
+input_schema:
+  type: object
+  properties:
+    title:
+      type: string
+      description: Notification title.
+      default: Kiliax
+    message:
+      type: string
+      description: Notification body text.
+    urgency:
+      type: string
+      enum: ["low", "normal", "critical"]
+      default: normal
+    ring:
+      type: boolean
+      description: Play a notification sound.
+      default: true
+  required: ["message"]
+  additionalProperties: false

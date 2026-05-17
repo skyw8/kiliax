@@ -109,6 +109,10 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<SkillsConfig>,
 
+    /// Session-scoped custom tools enablement overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_tools: Option<crate::config::CustomToolsConfig>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
@@ -341,6 +345,7 @@ impl FileSessionStore {
             extra_workspace_roots,
             mcp_servers: Vec::new(),
             skills: None,
+            custom_tools: None,
             title: derive_title(&initial_messages),
             last_finish_reason: None,
             last_error: None,

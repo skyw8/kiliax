@@ -29,6 +29,10 @@ pub(in crate::http) fn skills_routes() -> UtoipaMethodRouter<Arc<ServerState>> {
     utoipa_axum::routes!(get_config_skills, patch_config_skills)
 }
 
+pub(in crate::http) fn custom_tools_routes() -> UtoipaMethodRouter<Arc<ServerState>> {
+    utoipa_axum::routes!(get_config_custom_tools, patch_config_custom_tools)
+}
+
 #[utoipa::path(
     get,
     path = "/config",
@@ -173,5 +177,38 @@ async fn patch_config_skills(
     Json(req): Json<crate::api::ConfigSkillsPatchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.patch_config_skills(req).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/config/custom-tools",
+    tags = ["Config"],
+    responses(
+        (status = 200, body = crate::api::ConfigCustomToolsResponse),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
+async fn get_config_custom_tools(
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.get_config_custom_tools().await?))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/config/custom-tools",
+    tags = ["Config"],
+    request_body = crate::api::ConfigCustomToolsPatchRequest,
+    responses(
+        (status = 204, description = "No Content"),
+        (status = "default", body = crate::error::ApiErrorResponse)
+    )
+)]
+async fn patch_config_custom_tools(
+    State(state): State<Arc<ServerState>>,
+    Json(req): Json<crate::api::ConfigCustomToolsPatchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.patch_config_custom_tools(req).await?;
     Ok(StatusCode::NO_CONTENT)
 }

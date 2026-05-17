@@ -145,6 +145,8 @@ pub struct SessionCreateSettings {
     #[serde(default)]
     pub skills: Option<SkillsSettingsPatch>,
     #[serde(default)]
+    pub custom_tools: Option<CustomToolsSettingsPatch>,
+    #[serde(default)]
     pub mcp: Option<McpServersPatch>,
     #[serde(default)]
     pub workspace_root: Option<String>,
@@ -162,6 +164,8 @@ pub struct SessionSettingsPatch {
     #[serde(default)]
     pub skills: Option<SkillsSettingsPatch>,
     #[serde(default)]
+    pub custom_tools: Option<CustomToolsSettingsPatch>,
+    #[serde(default)]
     pub mcp: Option<McpServersPatch>,
     #[serde(default)]
     pub extra_workspace_roots: Option<Vec<String>>,
@@ -176,6 +180,8 @@ pub struct SessionSaveDefaultsRequest {
     pub mcp: bool,
     #[serde(default)]
     pub skills: bool,
+    #[serde(default)]
+    pub custom_tools: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -194,6 +200,16 @@ pub struct SkillsSettingsPatch {
     pub overrides: Option<Vec<SkillEnableSetting>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CustomToolsSettingsPatch {
+    #[serde(default)]
+    pub default_enable: Option<bool>,
+
+    #[serde(default)]
+    pub overrides: Option<Vec<CustomToolEnableSetting>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct McpServerSetting {
     pub id: String,
@@ -208,10 +224,18 @@ pub struct SkillsSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CustomToolsSettings {
+    pub default_enable: bool,
+    #[serde(default)]
+    pub overrides: Vec<CustomToolEnableSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SessionSettings {
     pub agent: String,
     pub model_id: String,
     pub skills: SkillsSettings,
+    pub custom_tools: CustomToolsSettings,
     pub mcp: McpServers,
     pub workspace_root: String,
     #[serde(default)]
@@ -456,6 +480,18 @@ pub struct SkillEnableSetting {
     pub enable: bool,
 }
 
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ConfigCustomToolsResponse {
+    pub default_enable: bool,
+    pub custom_tools: Vec<CustomToolEnableSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct CustomToolEnableSetting {
+    pub id: String,
+    pub enable: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigSkillsPatchRequest {
@@ -464,6 +500,16 @@ pub struct ConfigSkillsPatchRequest {
 
     #[serde(default)]
     pub skills: Vec<SkillEnableSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigCustomToolsPatchRequest {
+    #[serde(default)]
+    pub default_enable: Option<bool>,
+
+    #[serde(default)]
+    pub custom_tools: Vec<CustomToolEnableSetting>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -483,6 +529,29 @@ pub struct SkillSummary {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SkillLoadError {
+    pub id: String,
+    pub path: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CustomToolListResponse {
+    pub items: Vec<CustomToolSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<CustomToolLoadError>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CustomToolSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub parallel: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CustomToolLoadError {
     pub id: String,
     pub path: String,
     pub error: String,

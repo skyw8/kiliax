@@ -23,8 +23,8 @@ use super::{
     apply_settings_patch, config_with_mcp_overrides, default_settings, list_models,
     map_core_message_to_domain, map_mcp_status, map_session_err, mcp_status_from_settings, now_ms,
     read_events_after, read_last_event_id, read_run_file, resolve_session_settings,
-    session_events_api_path, skills_config_from_settings, ts_ms_to_rfc3339, write_text_atomic,
-    LiveSession,
+    custom_tools_config_from_settings, session_events_api_path, skills_config_from_settings,
+    ts_ms_to_rfc3339, write_text_atomic, LiveSession,
 };
 
 pub struct ServerState {
@@ -653,6 +653,47 @@ impl ServerState {
         Ok(())
     }
 
+    pub async fn get_config_custom_tools(
+        &self,
+    ) -> Result<api::ConfigCustomToolsResponse, ApiError> {
+        let config = self.config_snapshot();
+        Ok(api::ConfigCustomToolsResponse {
+            default_enable: config.custom_tools.default_enable,
+            custom_tools: config
+                .custom_tools
+                .overrides
+                .iter()
+                .map(|(id, enable)| api::CustomToolEnableSetting {
+                    id: id.clone(),
+                    enable: *enable,
+                })
+                .collect(),
+        })
+    }
+
+    pub async fn patch_config_custom_tools(
+        &self,
+        req: api::ConfigCustomToolsPatchRequest,
+    ) -> Result<(), ApiError> {
+        let current = self.config_snapshot();
+        let mut next = current.as_ref().clone();
+        if let Some(v) = req.default_enable {
+            next.custom_tools.default_enable = v;
+        }
+        for s in req.custom_tools {
+            if s.id.trim().is_empty() {
+                return Err(ApiError::invalid_argument("custom tool id must not be empty"));
+            }
+            next.custom_tools.overrides.insert(s.id, s.enable);
+        }
+
+        let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;
+        let _ = self
+            .update_config(api::ConfigUpdateRequest { yaml })
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_skills(
         &self,
         session_id: &SessionId,
@@ -714,6 +755,38 @@ impl ServerState {
                 .errors
                 .into_iter()
                 .map(|e| api::SkillLoadError {
+                    id: e.id,
+                    path: e.path.display().to_string(),
+                    error: e.error,
+                })
+                .collect(),
+        })
+    }
+
+    pub async fn list_custom_tools(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<api::CustomToolListResponse, ApiError> {
+        self.list_global_custom_tools().await
+    }
+
+    pub async fn list_global_custom_tools(&self) -> Result<api::CustomToolListResponse, ApiError> {
+        let discovered = kiliax_core::tools::custom::list_custom_tools();
+        Ok(api::CustomToolListResponse {
+            items: discovered
+                .items
+                .into_iter()
+                .map(|tool| api::CustomToolSummary {
+                    id: tool.id,
+                    name: tool.display_name.unwrap_or(tool.name),
+                    description: Some(tool.description),
+                    parallel: tool.parallel,
+                })
+                .collect(),
+            errors: discovered
+                .errors
+                .into_iter()
+                .map(|e| api::CustomToolLoadError {
                     id: e.id,
                     path: e.path.display().to_string(),
                     error: e.error,
@@ -881,7 +954,8 @@ impl ServerState {
             .await
             .map_err(ApiError::internal_error)?;
 
-        let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        let mut cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        cfg_for_tools.custom_tools = custom_tools_config_from_settings(&settings.custom_tools);
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
         tools
             .set_extra_workspace_roots(settings.extra_workspace_roots.clone())
@@ -948,6 +1022,7 @@ impl ServerState {
                 agent: create.agent,
                 model_id: create.model_id,
                 skills: create.skills,
+                custom_tools: create.custom_tools,
                 mcp: create.mcp,
                 extra_workspace_roots: None,
             };
@@ -983,7 +1058,8 @@ impl ServerState {
                 validate_client_extra_workspace_roots(extra, &workspace_root)?;
         }
 
-        let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        let mut cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        cfg_for_tools.custom_tools = custom_tools_config_from_settings(&settings.custom_tools);
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
         tools
             .set_extra_workspace_roots(settings.extra_workspace_roots.clone())
@@ -1020,6 +1096,7 @@ impl ServerState {
         let created_agent = settings.agent.clone();
         let created_model_id = settings.model_id.clone();
         let created_workspace_root = settings.workspace_root.clone();
+        session.meta.custom_tools = Some(custom_tools_config_from_settings(&settings.custom_tools));
 
         if let Some(title) = req
             .title
@@ -1346,6 +1423,10 @@ impl ServerState {
 
         if req.skills {
             next.skills = skills_config_from_settings(&settings.skills);
+        }
+
+        if req.custom_tools {
+            next.custom_tools = custom_tools_config_from_settings(&settings.custom_tools);
         }
 
         let yaml = serde_yaml::to_string(&next).map_err(ApiError::internal_error)?;

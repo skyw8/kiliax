@@ -76,6 +76,28 @@ pub struct SkillsSettingsPatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomToolEnableSetting {
+    pub id: String,
+    pub enable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomToolsSettings {
+    pub default_enable: bool,
+    #[serde(default)]
+    pub overrides: Vec<CustomToolEnableSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomToolsSettingsPatch {
+    #[serde(default)]
+    pub default_enable: Option<bool>,
+
+    #[serde(default)]
+    pub overrides: Option<Vec<CustomToolEnableSetting>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpServerSetting {
     pub id: String,
     pub enable: bool,
@@ -97,6 +119,7 @@ pub struct SessionSettings {
     pub agent: String,
     pub model_id: String,
     pub skills: SkillsSettings,
+    pub custom_tools: CustomToolsSettings,
     pub mcp: McpServers,
     pub workspace_root: PathBuf,
     #[serde(default)]
@@ -120,6 +143,8 @@ pub struct SessionCreateSettings {
     #[serde(default)]
     pub skills: Option<SkillsSettingsPatch>,
     #[serde(default)]
+    pub custom_tools: Option<CustomToolsSettingsPatch>,
+    #[serde(default)]
     pub mcp: Option<McpServersPatch>,
     #[serde(default)]
     pub workspace_root: Option<String>,
@@ -136,6 +161,8 @@ pub struct SessionSettingsPatch {
     #[serde(default)]
     pub skills: Option<SkillsSettingsPatch>,
     #[serde(default)]
+    pub custom_tools: Option<CustomToolsSettingsPatch>,
+    #[serde(default)]
     pub mcp: Option<McpServersPatch>,
     #[serde(default)]
     pub extra_workspace_roots: Option<Vec<String>>,
@@ -149,6 +176,8 @@ pub struct SessionSaveDefaultsRequest {
     pub mcp: bool,
     #[serde(default)]
     pub skills: bool,
+    #[serde(default)]
+    pub custom_tools: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

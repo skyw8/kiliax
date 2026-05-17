@@ -31,6 +31,9 @@ impl ToolPolicy {
         if tool_name.starts_with("mcp__") {
             return true;
         }
+        if tool_name.starts_with("custom__") {
+            return true;
+        }
 
         match self.file_edit_tools {
             FileEditTools::ApplyPatch => !matches!(tool_name, TOOL_WRITE_FILE | TOOL_EDIT_FILE),

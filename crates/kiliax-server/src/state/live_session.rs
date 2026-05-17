@@ -27,7 +27,8 @@ use super::{
     format_error_chain_text, map_core_message_to_domain_event_message, map_mcp_status,
     map_session_err, merge_mcp_settings, new_run_id, now_rfc3339, read_last_event_id,
     resolve_session_settings, runtime_error_code, runtime_error_hint, session_events_api_path,
-    skills_config_from_settings, ts_ms_to_rfc3339, write_run_file, ServerState,
+    custom_tools_config_from_settings, skills_config_from_settings, ts_ms_to_rfc3339,
+    write_run_file, ServerState,
 };
 
 use super::domain;
@@ -256,7 +257,8 @@ impl LiveSession {
         let resumed_model_id = settings.model_id.clone();
         let resumed_workspace_root = settings.workspace_root.clone();
 
-        let cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        let mut cfg_for_tools = config_with_mcp_overrides(config.as_ref(), &settings.mcp.servers)?;
+        cfg_for_tools.custom_tools = custom_tools_config_from_settings(&settings.custom_tools);
         let tools = ToolEngine::new(&workspace_root, cfg_for_tools);
 
         let live = Self::from_state(server, session, settings, tools, true).await?;
@@ -344,6 +346,8 @@ impl LiveSession {
                 })
                 .collect();
             session.meta.skills = Some(skills_config_from_settings(&settings.skills));
+            session.meta.custom_tools =
+                Some(custom_tools_config_from_settings(&settings.custom_tools));
             live.store
                 .checkpoint(&mut session)
                 .await
@@ -520,6 +524,8 @@ impl LiveSession {
                 })
                 .collect();
             session.meta.skills = Some(skills_config_from_settings(&settings.skills));
+            session.meta.custom_tools =
+                Some(custom_tools_config_from_settings(&settings.custom_tools));
             self.store
                 .checkpoint(&mut session)
                 .await
@@ -1166,8 +1172,9 @@ impl LiveSession {
                 );
             }
 
-            // Per-run MCP config.
-            let cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
+            // Per-run tool config.
+            let mut cfg_for_run = config_with_mcp_overrides(config.as_ref(), &effective.mcp.servers)?;
+            cfg_for_run.custom_tools = custom_tools_config_from_settings(&effective.custom_tools);
             let workspace_root = effective.workspace_root.clone();
             Span::current().record(
                 "workspace_root",
@@ -1264,6 +1271,8 @@ impl LiveSession {
             if effective.agent != base_settings.agent
                 || effective.model_id != base_settings.model_id
                 || effective.mcp.servers != base_settings.mcp.servers
+                || effective.custom_tools.default_enable != base_settings.custom_tools.default_enable
+                || effective.custom_tools.overrides != base_settings.custom_tools.overrides
             {
                 let skills_config = skills_config_from_settings(&base_settings.skills);
                 let preamble = build_preamble(
@@ -1346,8 +1355,10 @@ impl LiveSession {
 
             // Restore tool config to current session defaults (may have changed).
             let current_settings = self.settings.lock().await.clone();
-            let cfg_for_tools =
+            let mut cfg_for_tools =
                 config_with_mcp_overrides(config.as_ref(), &current_settings.mcp.servers)?;
+            cfg_for_tools.custom_tools =
+                custom_tools_config_from_settings(&current_settings.custom_tools);
             {
                 let tools = self.tools.lock().await;
                 let _ = tools.set_config(cfg_for_tools);
@@ -1559,6 +1570,7 @@ impl LiveSession {
             })
             .collect();
         session.meta.skills = Some(skills_config_from_settings(&settings.skills));
+        session.meta.custom_tools = Some(custom_tools_config_from_settings(&settings.custom_tools));
         self.store
             .checkpoint(&mut session)
             .await

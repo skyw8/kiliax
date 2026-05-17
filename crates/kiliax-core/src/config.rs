@@ -123,6 +123,24 @@ impl Default for SkillsConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomToolsConfig {
+    #[serde(default = "default_true")]
+    pub default_enable: bool,
+
+    #[serde(default)]
+    pub overrides: BTreeMap<String, bool>,
+}
+
+impl Default for CustomToolsConfig {
+    fn default() -> Self {
+        Self {
+            default_enable: default_true(),
+            overrides: Default::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct McpConfig {
     #[serde(default)]
@@ -373,6 +391,9 @@ pub struct Config {
     #[serde(default)]
     pub skills: SkillsConfig,
 
+    #[serde(default)]
+    pub custom_tools: CustomToolsConfig,
+
     /// Default agent runtime options applied to all agents.
     #[serde(default)]
     pub runtime: AgentRuntimeConfig,
@@ -519,6 +540,9 @@ struct ConfigFile {
 
     #[serde(default)]
     pub skills: SkillsConfig,
+
+    #[serde(default)]
+    pub custom_tools: CustomToolsConfig,
 
     #[serde(default)]
     pub tools: ToolsConfig,
@@ -670,6 +694,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         otel,
         mut web_search,
         skills,
+        custom_tools,
         tools,
         runtime,
         agents,
@@ -702,6 +727,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         otel,
         web_search,
         skills,
+        custom_tools,
         runtime,
         agents,
         mcp,

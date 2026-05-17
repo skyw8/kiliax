@@ -22,12 +22,18 @@ export interface SkillsSettings {
   overrides: SkillEnableSetting[];
 }
 
+export interface CustomToolsSettings {
+  default_enable: boolean;
+  overrides: CustomToolEnableSetting[];
+}
+
 export interface SessionSettings {
   agent: string;
   model_id: string;
   workspace_root: string;
   extra_workspace_roots: string[];
   skills: SkillsSettings;
+  custom_tools: CustomToolsSettings;
   mcp: McpServers;
 }
 
@@ -36,6 +42,7 @@ export interface SessionSaveDefaultsRequest {
   agent?: boolean;
   mcp: boolean;
   skills?: boolean;
+  custom_tools?: boolean;
 }
 
 export interface SessionStatus {
@@ -204,9 +211,19 @@ export interface SkillEnableSetting {
   enable: boolean;
 }
 
+export interface CustomToolEnableSetting {
+  id: string;
+  enable: boolean;
+}
+
 export interface ConfigSkillsResponse {
   default_enable: boolean;
   skills: SkillEnableSetting[];
+}
+
+export interface ConfigCustomToolsResponse {
+  default_enable: boolean;
+  custom_tools: CustomToolEnableSetting[];
 }
 
 export interface SkillSummary {
@@ -221,6 +238,24 @@ export interface SkillListResponse {
 }
 
 export interface SkillLoadError {
+  id: string;
+  path: string;
+  error: string;
+}
+
+export interface CustomToolSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+  parallel: boolean;
+}
+
+export interface CustomToolListResponse {
+  items: CustomToolSummary[];
+  errors: CustomToolLoadError[];
+}
+
+export interface CustomToolLoadError {
   id: string;
   path: string;
   error: string;

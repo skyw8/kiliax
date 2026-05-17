@@ -47,6 +47,7 @@ pub struct ToolEngine {
     extra_workspace_roots: Arc<RwLock<Arc<Vec<PathBuf>>>>,
     shell_sessions: Arc<builtin::ShellSessions>,
     file_tracker: Arc<builtin::FileAccessTracker>,
+    custom_tools: crate::tools::custom::CustomToolRuntime,
     config: Arc<RwLock<Arc<crate::config::Config>>>,
     goal_backend: Arc<RwLock<Option<Arc<dyn builtin::GoalBackend>>>>,
     mcp: crate::tools::mcp::McpHub,
@@ -61,6 +62,7 @@ impl ToolEngine {
             extra_workspace_roots: Arc::new(RwLock::new(Arc::new(Vec::new()))),
             shell_sessions: Arc::new(builtin::ShellSessions::new()),
             file_tracker: Arc::new(builtin::FileAccessTracker::new()),
+            custom_tools: crate::tools::custom::CustomToolRuntime::default(),
             config: Arc::new(RwLock::new(Arc::new(config))),
             goal_backend: Arc::new(RwLock::new(None)),
             mcp: crate::tools::mcp::McpHub::new(),
@@ -125,7 +127,9 @@ impl ToolEngine {
 
         self.sync_mcp_servers_background(cfg.as_ref()).await;
 
-        self.mcp.tool_definitions().await
+        let mut out = crate::tools::custom::tool_definitions(&cfg.custom_tools);
+        out.extend(self.mcp.tool_definitions().await);
+        out
     }
 
     pub async fn mcp_status(&self) -> Vec<McpServerStatus> {
@@ -194,7 +198,14 @@ impl ToolEngine {
         let started = Instant::now();
 
         let is_mcp = crate::tools::mcp::McpHub::is_mcp_tool_name(call.name.as_str());
-        let kind = if is_mcp { "mcp" } else { "builtin" };
+        let is_custom = crate::tools::custom::is_custom_tool_name(call.name.as_str());
+        let kind = if is_mcp {
+            "mcp"
+        } else if is_custom {
+            "custom"
+        } else {
+            "builtin"
+        };
         let (mcp_server, mcp_tool) = if is_mcp {
             crate::tools::mcp::McpHub::parse_exposed_tool_name(call.name.as_str())
                 .map(|(s, t)| (s.to_string(), t.to_string()))
@@ -299,6 +310,13 @@ impl ToolEngine {
                     self.mark_mcp_server_disconnected(server_name, err).await;
                 }
                 return res;
+            }
+
+            if is_custom {
+                return self
+                    .custom_tools
+                    .execute(&self.workspace_root, &cfg.custom_tools, call)
+                    .await;
             }
 
             let extra = self.extra_workspace_roots();
@@ -764,6 +782,9 @@ impl ToolEngine {
 fn tool_category(tool_name: &str, kind: &str) -> &'static str {
     if kind == "mcp" {
         return "mcp";
+    }
+    if kind == "custom" {
+        return "custom";
     }
 
     match tool_name {

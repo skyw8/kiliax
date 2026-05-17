@@ -105,6 +105,11 @@ fn resolve_session_settings(
 
     let skills = meta.skills.as_ref().unwrap_or(&config.skills);
     let skills = skills_settings_from_config(skills);
+    let custom_tools = meta
+        .custom_tools
+        .as_ref()
+        .unwrap_or(&config.custom_tools);
+    let custom_tools = custom_tools_settings_from_config(custom_tools);
 
     let by_id: HashMap<&str, bool> = meta
         .mcp_servers
@@ -125,6 +130,7 @@ fn resolve_session_settings(
         agent,
         model_id,
         skills,
+        custom_tools,
         mcp: domain::McpServers { servers },
         workspace_root,
         extra_workspace_roots: extras,
@@ -178,6 +184,10 @@ fn default_settings(
         Some(skills) => skills_settings_from_config(skills),
         None => skills_settings_from_config(&config.skills),
     };
+    let custom_tools = match meta.and_then(|m| m.custom_tools.as_ref()) {
+        Some(custom_tools) => custom_tools_settings_from_config(custom_tools),
+        None => custom_tools_settings_from_config(&config.custom_tools),
+    };
 
     let servers = config
         .mcp
@@ -193,6 +203,7 @@ fn default_settings(
         agent,
         model_id,
         skills,
+        custom_tools,
         mcp: domain::McpServers { servers },
         workspace_root,
         extra_workspace_roots,
@@ -232,6 +243,39 @@ fn skills_config_from_settings(
     }
 }
 
+fn custom_tools_settings_from_config(
+    custom_tools: &kiliax_core::config::CustomToolsConfig,
+) -> domain::CustomToolsSettings {
+    domain::CustomToolsSettings {
+        default_enable: custom_tools.default_enable,
+        overrides: custom_tools
+            .overrides
+            .iter()
+            .map(|(id, enable)| domain::CustomToolEnableSetting {
+                id: id.clone(),
+                enable: *enable,
+            })
+            .collect(),
+    }
+}
+
+fn custom_tools_config_from_settings(
+    custom_tools: &domain::CustomToolsSettings,
+) -> kiliax_core::config::CustomToolsConfig {
+    let mut overrides: BTreeMap<String, bool> = BTreeMap::new();
+    for s in &custom_tools.overrides {
+        let id = s.id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        overrides.insert(id.to_string(), s.enable);
+    }
+    kiliax_core::config::CustomToolsConfig {
+        default_enable: custom_tools.default_enable,
+        overrides,
+    }
+}
+
 fn apply_settings_patch(
     settings: &mut domain::SessionSettings,
     patch: &domain::SessionSettingsPatch,
@@ -266,6 +310,14 @@ fn apply_settings_patch(
             merge_skill_overrides(&mut settings.skills.overrides, overrides)?;
         }
     }
+    if let Some(custom_tools) = patch.custom_tools.as_ref() {
+        if let Some(v) = custom_tools.default_enable {
+            settings.custom_tools.default_enable = v;
+        }
+        if let Some(overrides) = custom_tools.overrides.as_ref() {
+            merge_custom_tool_overrides(&mut settings.custom_tools.overrides, overrides)?;
+        }
+    }
     if let Some(patch_servers) = patch.mcp.as_ref().and_then(|m| m.servers.as_ref()) {
         merge_mcp_settings(
             &mut settings.mcp.servers,
@@ -281,6 +333,32 @@ fn apply_settings_patch(
             .filter(|p| !p.as_os_str().is_empty())
             .collect();
     }
+    Ok(())
+}
+
+fn merge_custom_tool_overrides(
+    existing: &mut Vec<domain::CustomToolEnableSetting>,
+    patch: &[domain::CustomToolEnableSetting],
+) -> Result<(), ApiError> {
+    let mut map: HashMap<String, bool> =
+        existing.iter().map(|s| (s.id.clone(), s.enable)).collect();
+
+    for p in patch {
+        let id = p.id.trim();
+        if id.is_empty() {
+            return Err(ApiError::invalid_argument("custom tool id must not be empty"));
+        }
+        map.insert(id.to_string(), p.enable);
+    }
+
+    let mut entries: Vec<(String, bool)> = map.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    existing.clear();
+    existing.extend(
+        entries
+            .into_iter()
+            .map(|(id, enable)| domain::CustomToolEnableSetting { id, enable }),
+    );
     Ok(())
 }
 

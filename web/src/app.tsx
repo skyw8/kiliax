@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, Flag, FolderOpen, FolderPlus, GitFork, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, Flag, FolderOpen, FolderPlus, GitFork, Hammer, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
@@ -24,6 +24,7 @@ import { EditMessageDialog } from "./components/edit-message-dialog";
 import { FolderPickerDialog } from "./components/folder-picker";
 import { SettingsDialog } from "./components/settings-dialog";
 import { SessionActionSheet, SessionContextMenu } from "./components/session-actions";
+import { CustomToolsDialog } from "./components/custom-tools-dialog";
 import { SkillsDialog } from "./components/skills-dialog";
 import { McpDialog } from "./components/mcp-dialog";
 import { WorkspaceActionSheet, WorkspaceContextMenu } from "./components/workspace-actions";
@@ -189,6 +190,7 @@ export default function App() {
   const [goalDraft, setGoalDraft] = useState("");
 
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [customToolsOpen, setCustomToolsOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelDefaultsSaving, setModelDefaultsSaving] = useState(false);
@@ -1146,6 +1148,11 @@ export default function App() {
     setSkillsOpen(true);
   }
 
+  function openCustomTools() {
+    if (isNarrowViewport) setSidebarOpen(false);
+    setCustomToolsOpen(true);
+  }
+
   async function refreshAfterConfigChange() {
     await refreshCapabilities();
     await refreshSessions();
@@ -1181,7 +1188,7 @@ export default function App() {
   }
 
   async function saveSelectedSessionDefaults(
-    req: { model: boolean; agent?: boolean; mcp: boolean; skills?: boolean },
+    req: { model: boolean; agent?: boolean; mcp: boolean; skills?: boolean; custom_tools?: boolean },
     message: string,
   ): Promise<boolean> {
     if (!selectedId) return false;
@@ -1575,6 +1582,10 @@ export default function App() {
         <Button variant="ghost" className="w-full justify-start gap-2" onClick={openSkills}>
           <Sparkles className="h-4 w-4 text-amber-600" />
           Skills
+        </Button>
+        <Button variant="ghost" className="w-full justify-start gap-2" onClick={openCustomTools}>
+          <Hammer className="h-4 w-4 text-blue-600" />
+          Custom Tools
         </Button>
         <Button variant="ghost" className="w-full justify-start gap-2" onClick={openMcp}>
           <Plug className="h-4 w-4 text-emerald-600" />
@@ -2305,6 +2316,17 @@ export default function App() {
       <SkillsDialog
         open={skillsOpen}
         onOpenChange={setSkillsOpen}
+        selectedSessionId={selectedId}
+        session={session}
+        sessionSummary={selectedSummary}
+        patchSession={patchSession}
+        saveSelectedSessionDefaults={saveSelectedSessionDefaults}
+        onApiError={handleApiError}
+      />
+
+      <CustomToolsDialog
+        open={customToolsOpen}
+        onOpenChange={setCustomToolsOpen}
         selectedSessionId={selectedId}
         session={session}
         sessionSummary={selectedSummary}
