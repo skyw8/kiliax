@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use kiliax_core::config::Config as KiliaxConfig;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Event {
@@ -19,6 +20,8 @@ pub struct Event {
 pub struct SessionStatus {
     pub run_state: SessionRunState,
     pub active_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_run_started_at: Option<String>,
     pub step: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_tool: Option<String>,
@@ -32,6 +35,29 @@ pub enum SessionRunState {
     Idle,
     Running,
     Tooling,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct StreamToolCallSnapshot {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct StreamSnapshot {
+    pub run_id: String,
+    pub last_event_id: u64,
+    pub thinking: String,
+    pub assistant: String,
+    pub assistant_started: bool,
+    pub tool_calls: Vec<StreamToolCallSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_started_at: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
@@ -125,6 +151,8 @@ pub struct Session {
     #[serde(flatten)]
     pub summary: SessionSummary,
     pub mcp_status: Vec<McpServerStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<StreamSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

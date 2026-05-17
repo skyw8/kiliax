@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,8 @@ pub struct Event {
 pub struct SessionStatus {
     pub run_state: SessionRunState,
     pub active_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_run_started_at: Option<String>,
     pub step: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_tool: Option<String>,
@@ -31,6 +34,29 @@ pub enum SessionRunState {
     Idle,
     Running,
     Tooling,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamToolCallSnapshot {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamSnapshot {
+    pub run_id: String,
+    pub last_event_id: u64,
+    pub thinking: String,
+    pub assistant: String,
+    pub assistant_started: bool,
+    pub tool_calls: Vec<StreamToolCallSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_started_at: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -232,6 +258,8 @@ pub struct SetGoalRequest {
 pub struct SessionSnapshot {
     pub summary: SessionSummary,
     pub mcp_status: Vec<McpServerStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<StreamSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

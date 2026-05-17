@@ -48,6 +48,7 @@ export interface SessionSaveDefaultsRequest {
 export interface SessionStatus {
   run_state: SessionRunState;
   active_run_id: string | null;
+  active_run_started_at?: string | null;
   step: number;
   active_tool?: string | null;
   queue_len: number;
@@ -83,8 +84,27 @@ export interface McpServerStatus {
   tools?: string[] | null;
 }
 
+export interface StreamToolCallSnapshot {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+export interface StreamSnapshot {
+  run_id: string;
+  last_event_id: number;
+  thinking: string;
+  assistant: string;
+  assistant_started: boolean;
+  tool_calls: StreamToolCallSnapshot[];
+  thinking_started_at?: string | null;
+  assistant_started_at?: string | null;
+  tool_started_at?: Record<string, string>;
+}
+
 export interface Session extends SessionSummary {
   mcp_status: McpServerStatus[];
+  stream?: StreamSnapshot | null;
 }
 
 export interface SessionListResponse {

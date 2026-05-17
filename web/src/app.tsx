@@ -15,7 +15,9 @@ import type {
   MessageAttachment,
   RunAttachment,
   Session,
+  SessionGoal,
   SessionSummary,
+  StreamSnapshot,
 } from "./lib/types";
 import { AlertStack } from "./components/alert-stack";
 import { DeleteSessionDialog } from "./components/delete-session-dialog";
@@ -135,6 +137,14 @@ function readFileAsBase64(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+function serverTimeToMonotonicMs(value?: string | null): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return null;
+  const elapsed = Math.max(0, Date.now() - parsed);
+  return monotonicNowMs() - elapsed;
 }
 
 export default function App() {
@@ -506,28 +516,52 @@ export default function App() {
 
       const msgs = await api.getMessages(sessionId, 200);
       if (selectedIdRef.current !== sessionId) return;
+      const liveStream: StreamSnapshot | null = s.stream ?? null;
+      const thinkingStartedAt = serverTimeToMonotonicMs(liveStream?.thinking_started_at);
+      const assistantStartedAt = serverTimeToMonotonicMs(liveStream?.assistant_started_at);
+      const toolStarts: Record<string, { name: string; startedAt: number }> = {};
+      for (const call of liveStream?.tool_calls ?? []) {
+        const startedAt = serverTimeToMonotonicMs(liveStream?.tool_started_at?.[call.id]);
+        if (startedAt != null) {
+          toolStarts[call.id] = { name: call.name, startedAt };
+        }
+      }
+
       setMessages(msgs.items);
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
       setStream({
-        thinking: "",
-        assistant: "",
-        assistantStarted: false,
-        toolCalls: [],
+        thinking: liveStream?.thinking ?? "",
+        assistant: liveStream?.assistant ?? "",
+        assistantStarted: liveStream?.assistant_started ?? false,
+        toolCalls: liveStream?.tool_calls ?? [],
       });
       setToolDurationsMs({});
       setAssistantDurationsMs({});
       setThinkingDurationsMs({});
-      toolStartsRef.current = {};
-      thinkingStartedAtRef.current = null;
-      assistantStartedAtRef.current = null;
-      nextThinkingDurationMsRef.current = null;
+      toolStartsRef.current = toolStarts;
+      thinkingStartedAtRef.current = thinkingStartedAt;
+      assistantStartedAtRef.current = assistantStartedAt;
+      nextThinkingDurationMsRef.current =
+        thinkingStartedAt != null && assistantStartedAt != null
+          ? Math.max(0, assistantStartedAt - thinkingStartedAt)
+          : null;
 
-      lastEventIdRef.current = s.status.last_event_id ?? 0;
+      lastEventIdRef.current = liveStream?.last_event_id ?? s.status.last_event_id ?? 0;
       wsEvents.resetReconnectAttempt();
       wsEvents.connect(sessionId, lastEventIdRef.current);
     } catch (err) {
       handleApiError(err);
     }
+  }
+
+  function applySessionGoalUpdate(sessionId: string, goal: SessionGoal | null) {
+    setSession((prev) => {
+      if (!prev || prev.id !== sessionId) return prev;
+      return { ...prev, goal };
+    });
+    setSessions((prev) =>
+      prev.map((item) => (item.id === sessionId ? { ...item, goal } : item)),
+    );
   }
 
   async function handleEvent(ev: any) {
@@ -664,6 +698,14 @@ export default function App() {
         await fetchSession(selectedId);
       }
       await refreshSessionsIfStale(0);
+      return;
+    }
+
+    if (type === "session_goal_changed") {
+      const sid = String(ev?.session_id ?? "").trim();
+      if (sid) {
+        applySessionGoalUpdate(sid, (ev?.data?.goal ?? null) as SessionGoal | null);
+      }
       return;
     }
 
@@ -1108,7 +1150,8 @@ export default function App() {
   }
 
   function showSessionGoalInfo(sessionId: string) {
-    const goal = sessions.find((s) => s.id === sessionId)?.goal;
+    const goal =
+      session?.id === sessionId ? session.goal : sessions.find((s) => s.id === sessionId)?.goal;
     if (!goal) {
       window.alert("No goal set.");
       return;
@@ -1117,7 +1160,7 @@ export default function App() {
       [
         `Status: ${goal.status}`,
         `Objective: ${goal.objective}`,
-        `Time used: ${goal.time_used_seconds}s`,
+        `Time used: ${sessionId === selectedId ? displayedGoalTimeSeconds : goal.time_used_seconds}s`,
         `Tokens used: ${goal.tokens_used}`,
         `Created: ${goal.created_at}`,
         `Updated: ${goal.updated_at}`,
@@ -1502,6 +1545,19 @@ export default function App() {
 
   const agentOptions = capabilities?.agents ?? [];
   const modelOptions = capabilities?.models ?? [];
+  const selectedGoal = session?.goal ?? selectedSummary?.goal ?? null;
+  const selectedStatus = session?.status ?? selectedSummary?.status ?? null;
+  const activeGoalRunStartedAt =
+    selectedGoal && selectedGoal.status === "active"
+      ? serverTimeToMonotonicMs(selectedStatus?.active_run_started_at)
+      : null;
+  const displayedGoalTimeSeconds =
+    selectedGoal != null
+      ? selectedGoal.time_used_seconds +
+        (activeGoalRunStartedAt != null
+          ? Math.floor(Math.max(0, clockNowMs - activeGoalRunStartedAt) / 1000)
+          : 0)
+      : 0;
   const streamHasThinking = stream.thinking.length > 0;
   const streamHasAssistant = stream.assistant.length > 0;
   const streamToolCallCount = stream.toolCalls.length;
@@ -1517,12 +1573,20 @@ export default function App() {
         (sessionHasWork ||
           streamHasThinking ||
           streamHasAssistant ||
-          streamToolCallCount > 0),
+          streamToolCallCount > 0 ||
+          activeGoalRunStartedAt != null),
     );
     if (!active) return;
     const t = window.setInterval(() => setClockNowMs(monotonicNowMs()), 250);
     return () => window.clearInterval(t);
-  }, [selectedId, sessionHasWork, streamHasThinking, streamHasAssistant, streamToolCallCount]);
+  }, [
+    selectedId,
+    sessionHasWork,
+    streamHasThinking,
+    streamHasAssistant,
+    streamToolCallCount,
+    activeGoalRunStartedAt,
+  ]);
 
   if (authError) {
     return (
@@ -1967,7 +2031,7 @@ export default function App() {
                         variant="outline"
                         size="sm"
                         className="h-8 px-3"
-                        disabled={!selectedSummary?.goal}
+                        disabled={!selectedGoal}
                         onClick={() => selectedId && clearSessionGoal(selectedId)}
                       >
                         Clear
@@ -1981,11 +2045,11 @@ export default function App() {
                         Info
                       </Button>
                     </div>
-                    {selectedSummary?.goal ? (
+                    {selectedGoal ? (
                       <div className="space-y-1 text-xs text-zinc-600">
-                        <div>Status: {selectedSummary.goal.status}</div>
-                        <div>Time: {selectedSummary.goal.time_used_seconds}s</div>
-                        <div>Tokens: {selectedSummary.goal.tokens_used}</div>
+                        <div>Status: {selectedGoal.status}</div>
+                        <div>Time: {displayedGoalTimeSeconds}s</div>
+                        <div>Tokens: {selectedGoal.tokens_used}</div>
                       </div>
                     ) : (
                       <div className="text-xs text-zinc-500">No active goal</div>

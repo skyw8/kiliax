@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -62,6 +63,7 @@ pub struct LiveSession {
     events_ring: Mutex<VecDeque<domain::Event>>,
     events_ring_size: AtomicUsize,
     next_event_id: AtomicU64,
+    stream_snapshot: Mutex<Option<domain::StreamSnapshot>>,
 }
 
 #[derive(Debug, Clone)]
@@ -301,6 +303,7 @@ impl LiveSession {
             status: Mutex::new(domain::SessionStatus {
                 run_state: domain::SessionRunState::Idle,
                 active_run_id: None,
+                active_run_started_at: None,
                 step: 0,
                 active_tool: None,
                 queue_len: 0,
@@ -314,6 +317,7 @@ impl LiveSession {
             events_ring: Mutex::new(VecDeque::new()),
             events_ring_size: AtomicUsize::new(events_ring_size),
             next_event_id: AtomicU64::new(last_event_id),
+            stream_snapshot: Mutex::new(None),
         });
 
         {
@@ -453,6 +457,7 @@ impl LiveSession {
         Ok(domain::SessionSnapshot {
             summary: self.summary().await?,
             mcp_status: map_mcp_status(tools.mcp_status().await),
+            stream: self.stream_snapshot.lock().await.clone(),
         })
     }
 
@@ -597,6 +602,37 @@ impl LiveSession {
             run_id: None,
             event_type: "session_goal_changed".to_string(),
             data: serde_json::json!({ "goal": null }),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn add_goal_usage_and_emit(
+        &self,
+        time_used_seconds: u64,
+        tokens_used: u64,
+    ) -> Result<(), ApiError> {
+        if time_used_seconds == 0 && tokens_used == 0 {
+            return Ok(());
+        }
+        let goal = {
+            let mut session = self.session.lock().await;
+            if session.meta.goal.is_none() {
+                return Ok(());
+            }
+            self.store
+                .add_goal_usage(&mut session, time_used_seconds, tokens_used)
+                .await
+                .map_err(map_session_err)?;
+            session.meta.goal.clone()
+        };
+        self.emit_event(domain::Event {
+            event_id: self.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: self.session_id.to_string(),
+            run_id: None,
+            event_type: "session_goal_changed".to_string(),
+            data: serde_json::json!({ "goal": goal }),
         })
         .await?;
         Ok(())
@@ -1058,17 +1094,20 @@ impl LiveSession {
 
             let (cancel_tx, mut cancel_rx) = watch::channel(false);
             *self.active_cancel.lock().await = Some(cancel_tx);
+            let run_started_at = now_rfc3339();
 
             {
                 let mut st = self.status.lock().await;
                 st.run_state = domain::SessionRunState::Running;
                 st.active_run_id = Some(run.id.clone());
+                st.active_run_started_at = Some(run_started_at.clone());
                 st.step = 0;
                 st.active_tool = None;
             }
+            *self.stream_snapshot.lock().await = None;
 
             run.state = domain::RunState::Running;
-            run.started_at = Some(now_rfc3339());
+            run.started_at = Some(run_started_at);
             write_run_file(&self.runs_dir, &run).await?;
 
             let (user_content, persist_user) = match &run.input {
@@ -1273,7 +1312,6 @@ impl LiveSession {
             let runtime = AgentRuntime::new(llm, tools_for_run.clone());
 
             let mut messages = { self.session.lock().await.messages.clone() };
-            let persisted_message_count_before_run = messages.len();
             let goal_time_started = std::time::Instant::now();
             if effective.agent != base_settings.agent
                 || effective.model_id != base_settings.model_id
@@ -1337,27 +1375,9 @@ impl LiveSession {
                 }
             }
 
-            {
-                let mut session = self.session.lock().await;
-                if session.meta.goal.is_some() {
-                    let tokens_used = session
-                        .messages
-                        .iter()
-                        .skip(persisted_message_count_before_run)
-                        .filter_map(|msg| match msg {
-                            CoreMessage::Assistant { usage, .. } => {
-                                usage.map(|u| u.total_tokens as u64)
-                            }
-                            _ => None,
-                        })
-                        .sum::<u64>();
-                    let elapsed = goal_time_started.elapsed().as_secs();
-                    let _ = self
-                        .store
-                        .add_goal_usage(&mut session, elapsed, tokens_used)
-                        .await;
-                }
-            }
+            let _ = self
+                .add_goal_usage_and_emit(goal_time_started.elapsed().as_secs(), 0)
+                .await;
 
             let (step, active_tool) = {
                 let st = self.status.lock().await;
@@ -1380,6 +1400,7 @@ impl LiveSession {
                 let mut st = self.status.lock().await;
                 st.run_state = domain::SessionRunState::Idle;
                 st.active_run_id = None;
+                st.active_run_started_at = None;
                 st.step = 0;
                 st.active_tool = None;
             }
@@ -1452,6 +1473,7 @@ impl LiveSession {
                     .active_goal()
                     .await
                     .is_some_and(|g| g.status == SessionGoalStatus::Active);
+            *self.stream_snapshot.lock().await = None;
 
             match run.state {
                 domain::RunState::Done => {
@@ -1624,9 +1646,12 @@ impl LiveSession {
         match ev {
             AgentEvent::StepStart { step } => {
                 self.status.lock().await.step = step as u32;
+                let event_id = self.alloc_event_id();
+                let ts = now_rfc3339();
+                self.ensure_stream_snapshot(run, event_id).await;
                 self.emit_event(domain::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
+                    event_id,
+                    ts,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
                     event_type: "step_start".to_string(),
@@ -1635,9 +1660,12 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::StepEnd { step } => {
+                let event_id = self.alloc_event_id();
+                let ts = now_rfc3339();
+                self.bump_stream_snapshot(run, event_id).await;
                 self.emit_event(domain::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
+                    event_id,
+                    ts,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
                     event_type: "step_end".to_string(),
@@ -1646,9 +1674,13 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantThinkingDelta { delta } => {
+                let event_id = self.alloc_event_id();
+                let ts = now_rfc3339();
+                self.apply_thinking_delta(run, event_id, ts.clone(), &delta)
+                    .await;
                 self.emit_ephemeral_event(domain::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
+                    event_id,
+                    ts,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
                     event_type: "assistant_thinking_delta".to_string(),
@@ -1657,9 +1689,13 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantDelta { delta } => {
+                let event_id = self.alloc_event_id();
+                let ts = now_rfc3339();
+                self.apply_assistant_delta(run, event_id, ts.clone(), &delta)
+                    .await;
                 self.emit_ephemeral_event(domain::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
+                    event_id,
+                    ts,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
                     event_type: "assistant_delta".to_string(),
@@ -1668,6 +1704,12 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantMessage { message } => {
+                let tokens_used = match &message {
+                    CoreMessage::Assistant {
+                        usage: Some(usage), ..
+                    } => usage.completion_tokens as u64,
+                    _ => 0,
+                };
                 let seq = self.record_message(message.clone()).await?;
                 let created_at = now_rfc3339();
                 let msg =
@@ -1689,6 +1731,8 @@ impl LiveSession {
                     data: serde_json::json!({ "message": msg }),
                 })
                 .await?;
+                *self.stream_snapshot.lock().await = None;
+                let _ = self.add_goal_usage_and_emit(0, tokens_used).await;
             }
             AgentEvent::ToolCall { call } => {
                 {
@@ -1696,9 +1740,20 @@ impl LiveSession {
                     st.run_state = domain::SessionRunState::Tooling;
                     st.active_tool = Some(call.name.clone());
                 }
+                let event_id = self.alloc_event_id();
+                let ts = now_rfc3339();
+                self.apply_tool_call(
+                    run,
+                    event_id,
+                    ts.clone(),
+                    &call.id,
+                    &call.name,
+                    &call.arguments,
+                )
+                .await;
                 self.emit_event(domain::Event {
-                    event_id: self.alloc_event_id(),
-                    ts: now_rfc3339(),
+                    event_id,
+                    ts,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
                     event_type: "tool_call".to_string(),
@@ -1722,8 +1777,10 @@ impl LiveSession {
                             tool_call_id: "".to_string(),
                             content: "".to_string(),
                         });
+                let event_id = self.alloc_event_id();
+                self.bump_stream_snapshot(run, event_id).await;
                 self.emit_event(domain::Event {
-                    event_id: self.alloc_event_id(),
+                    event_id,
                     ts: created_at,
                     session_id: self.session_id.to_string(),
                     run_id: Some(run.id.clone()),
@@ -1775,6 +1832,96 @@ impl LiveSession {
         }
         let _ = self.events_tx.send(event);
         Ok(())
+    }
+
+    async fn ensure_stream_snapshot(&self, run: &domain::Run, last_event_id: u64) {
+        let mut snapshot = self.stream_snapshot.lock().await;
+        match snapshot.as_mut() {
+            Some(existing) if existing.run_id == run.id => {
+                existing.last_event_id = existing.last_event_id.max(last_event_id);
+            }
+            _ => {
+                *snapshot = Some(domain::StreamSnapshot {
+                    run_id: run.id.clone(),
+                    last_event_id,
+                    thinking: String::new(),
+                    assistant: String::new(),
+                    assistant_started: false,
+                    tool_calls: Vec::new(),
+                    thinking_started_at: None,
+                    assistant_started_at: None,
+                    tool_started_at: BTreeMap::new(),
+                });
+            }
+        }
+    }
+
+    async fn bump_stream_snapshot(&self, run: &domain::Run, last_event_id: u64) {
+        let mut snapshot = self.stream_snapshot.lock().await;
+        if let Some(snapshot) = snapshot.as_mut().filter(|s| s.run_id == run.id) {
+            snapshot.last_event_id = snapshot.last_event_id.max(last_event_id);
+        }
+    }
+
+    async fn apply_thinking_delta(
+        &self,
+        run: &domain::Run,
+        event_id: u64,
+        ts: String,
+        delta: &str,
+    ) {
+        self.ensure_stream_snapshot(run, event_id).await;
+        let mut snapshot = self.stream_snapshot.lock().await;
+        if let Some(snapshot) = snapshot.as_mut().filter(|s| s.run_id == run.id) {
+            snapshot.last_event_id = snapshot.last_event_id.max(event_id);
+            if !snapshot.assistant_started {
+                if snapshot.thinking_started_at.is_none() {
+                    snapshot.thinking_started_at = Some(ts);
+                }
+                snapshot.thinking.push_str(delta);
+            }
+        }
+    }
+
+    async fn apply_assistant_delta(
+        &self,
+        run: &domain::Run,
+        event_id: u64,
+        ts: String,
+        delta: &str,
+    ) {
+        self.ensure_stream_snapshot(run, event_id).await;
+        let mut snapshot = self.stream_snapshot.lock().await;
+        if let Some(snapshot) = snapshot.as_mut().filter(|s| s.run_id == run.id) {
+            snapshot.last_event_id = snapshot.last_event_id.max(event_id);
+            snapshot.assistant_started = true;
+            if snapshot.assistant_started_at.is_none() {
+                snapshot.assistant_started_at = Some(ts);
+            }
+            snapshot.assistant.push_str(delta);
+        }
+    }
+
+    async fn apply_tool_call(
+        &self,
+        run: &domain::Run,
+        event_id: u64,
+        ts: String,
+        id: &str,
+        name: &str,
+        arguments: &str,
+    ) {
+        self.ensure_stream_snapshot(run, event_id).await;
+        let mut snapshot = self.stream_snapshot.lock().await;
+        if let Some(snapshot) = snapshot.as_mut().filter(|s| s.run_id == run.id) {
+            snapshot.last_event_id = snapshot.last_event_id.max(event_id);
+            snapshot.tool_calls.push(domain::StreamToolCallSnapshot {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+            });
+            snapshot.tool_started_at.entry(id.to_string()).or_insert(ts);
+        }
     }
 }
 
@@ -1831,7 +1978,7 @@ fn apply_run_overrides(
 mod tests {
     use super::*;
     use kiliax_core::config::{ProviderApi, ProviderConfig};
-    use kiliax_core::protocol::{Message as CoreMessage, UserMessageContent};
+    use kiliax_core::protocol::{Message as CoreMessage, TokenUsage, ToolCall, UserMessageContent};
     use tempfile::TempDir;
 
     fn test_config() -> Config {
@@ -1932,5 +2079,199 @@ mod tests {
         assert_eq!(backlog.len(), 2);
         assert_eq!(backlog[0].event_type, "assistant_delta");
         assert_eq!(backlog[1].event_type, "assistant_message");
+    }
+
+    #[tokio::test]
+    async fn live_session_stream_snapshot_restores_partial_output_and_clears_on_final_message() {
+        let dir = TempDir::new().expect("tempdir");
+        let workspace_root = dir.path().to_path_buf();
+        let server = ServerState::new_for_tests(
+            workspace_root.clone(),
+            workspace_root.join("kiliax.yaml"),
+            test_config(),
+            None,
+        )
+        .await
+        .expect("server");
+
+        let session = server
+            .store
+            .create(
+                "general",
+                Some("test/test-model".to_string()),
+                None,
+                Some(workspace_root.display().to_string()),
+                Vec::new(),
+                vec![CoreMessage::User {
+                    content: UserMessageContent::Text("hello".to_string()),
+                    hidden: false,
+                }],
+            )
+            .await
+            .expect("session");
+        let settings = default_settings(server.config_snapshot().as_ref(), Some(&session.meta))
+            .expect("settings");
+        let tools = ToolEngine::new(
+            &workspace_root,
+            config_with_mcp_overrides(server.config_snapshot().as_ref(), &settings.mcp.servers)
+                .expect("tool config"),
+        );
+        let live = LiveSession::from_state(&server, session, settings, tools, false)
+            .await
+            .expect("live session");
+        let run = domain::Run {
+            id: "run-1".to_string(),
+            session_id: live.id().to_string(),
+            state: domain::RunState::Running,
+            created_at: now_rfc3339(),
+            started_at: Some(now_rfc3339()),
+            finished_at: None,
+            finish_reason: None,
+            error: None,
+            input: domain::RunInput::Text {
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            },
+            overrides: None,
+        };
+
+        live.handle_agent_event(
+            &run,
+            AgentEvent::AssistantThinkingDelta {
+                delta: "thinking".to_string(),
+            },
+        )
+        .await
+        .expect("thinking delta");
+        live.handle_agent_event(
+            &run,
+            AgentEvent::AssistantDelta {
+                delta: "Hello".to_string(),
+            },
+        )
+        .await
+        .expect("assistant delta");
+        live.handle_agent_event(
+            &run,
+            AgentEvent::ToolCall {
+                call: ToolCall {
+                    id: "call-1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: "{\"filePath\":\"AGENTS.md\"}".to_string(),
+                },
+            },
+        )
+        .await
+        .expect("tool call");
+
+        let snapshot = live.snapshot().await.expect("snapshot").stream.unwrap();
+        assert_eq!(snapshot.run_id, "run-1");
+        assert_eq!(snapshot.thinking, "thinking");
+        assert_eq!(snapshot.assistant, "Hello");
+        assert!(snapshot.assistant_started);
+        assert_eq!(snapshot.tool_calls.len(), 1);
+        assert_eq!(snapshot.tool_calls[0].name, "read_file");
+        assert!(snapshot.thinking_started_at.is_some());
+        assert!(snapshot.assistant_started_at.is_some());
+        assert!(snapshot.tool_started_at.contains_key("call-1"));
+
+        live.handle_agent_event(
+            &run,
+            AgentEvent::AssistantMessage {
+                message: CoreMessage::Assistant {
+                    content: Some("Hello".to_string()),
+                    reasoning_content: Some("thinking".to_string()),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                },
+            },
+        )
+        .await
+        .expect("assistant message");
+
+        assert!(live.snapshot().await.expect("snapshot").stream.is_none());
+    }
+
+    #[tokio::test]
+    async fn goal_tokens_count_only_assistant_output_tokens() {
+        let dir = TempDir::new().expect("tempdir");
+        let workspace_root = dir.path().to_path_buf();
+        let server = ServerState::new_for_tests(
+            workspace_root.clone(),
+            workspace_root.join("kiliax.yaml"),
+            test_config(),
+            None,
+        )
+        .await
+        .expect("server");
+
+        let mut session = server
+            .store
+            .create(
+                "general",
+                Some("test/test-model".to_string()),
+                None,
+                Some(workspace_root.display().to_string()),
+                Vec::new(),
+                vec![CoreMessage::User {
+                    content: UserMessageContent::Text("hello".to_string()),
+                    hidden: false,
+                }],
+            )
+            .await
+            .expect("session");
+        server
+            .store
+            .set_goal(&mut session, "ship output token accounting")
+            .await
+            .expect("goal");
+        let settings = default_settings(server.config_snapshot().as_ref(), Some(&session.meta))
+            .expect("settings");
+        let tools = ToolEngine::new(
+            &workspace_root,
+            config_with_mcp_overrides(server.config_snapshot().as_ref(), &settings.mcp.servers)
+                .expect("tool config"),
+        );
+        let live = LiveSession::from_state(&server, session, settings, tools, false)
+            .await
+            .expect("live session");
+        let run = domain::Run {
+            id: "run-usage".to_string(),
+            session_id: live.id().to_string(),
+            state: domain::RunState::Running,
+            created_at: now_rfc3339(),
+            started_at: Some(now_rfc3339()),
+            finished_at: None,
+            finish_reason: None,
+            error: None,
+            input: domain::RunInput::Text {
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            },
+            overrides: None,
+        };
+
+        live.handle_agent_event(
+            &run,
+            AgentEvent::AssistantMessage {
+                message: CoreMessage::Assistant {
+                    content: Some("Hello".to_string()),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                    usage: Some(TokenUsage {
+                        prompt_tokens: 100,
+                        completion_tokens: 7,
+                        total_tokens: 107,
+                        cached_tokens: None,
+                    }),
+                    provider_metadata: None,
+                },
+            },
+        )
+        .await
+        .expect("assistant message");
+
+        assert_eq!(live.goal().await.unwrap().tokens_used, 7);
     }
 }

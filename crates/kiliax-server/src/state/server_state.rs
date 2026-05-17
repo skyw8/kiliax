@@ -1186,6 +1186,7 @@ impl ServerState {
                     status: domain::SessionStatus {
                         run_state: domain::SessionRunState::Idle,
                         active_run_id: None,
+                        active_run_started_at: None,
                         step: 0,
                         active_tool: None,
                         queue_len: 0,
@@ -1249,6 +1250,7 @@ impl ServerState {
                 status: domain::SessionStatus {
                     run_state: domain::SessionRunState::Idle,
                     active_run_id: None,
+                    active_run_started_at: None,
                     step: 0,
                     active_tool: None,
                     queue_len: 0,
@@ -1258,6 +1260,7 @@ impl ServerState {
                 goal: state.meta.goal.clone(),
             },
             mcp_status: mcp_status_from_settings(&settings, config.as_ref()),
+            stream: None,
         })
     }
 

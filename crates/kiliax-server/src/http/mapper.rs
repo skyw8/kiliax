@@ -16,6 +16,7 @@ impl From<domain::SessionStatus> for api::SessionStatus {
         Self {
             run_state: value.run_state.into(),
             active_run_id: value.active_run_id,
+            active_run_started_at: value.active_run_started_at,
             step: value.step,
             active_tool: value.active_tool,
             queue_len: value.queue_len,
@@ -262,6 +263,33 @@ impl From<domain::SessionSnapshot> for api::Session {
         Self {
             summary: value.summary.into(),
             mcp_status: value.mcp_status.into_iter().map(Into::into).collect(),
+            stream: value.stream.map(Into::into),
+        }
+    }
+}
+
+impl From<domain::StreamToolCallSnapshot> for api::StreamToolCallSnapshot {
+    fn from(value: domain::StreamToolCallSnapshot) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            arguments: value.arguments,
+        }
+    }
+}
+
+impl From<domain::StreamSnapshot> for api::StreamSnapshot {
+    fn from(value: domain::StreamSnapshot) -> Self {
+        Self {
+            run_id: value.run_id,
+            last_event_id: value.last_event_id,
+            thinking: value.thinking,
+            assistant: value.assistant,
+            assistant_started: value.assistant_started,
+            tool_calls: value.tool_calls.into_iter().map(Into::into).collect(),
+            thinking_started_at: value.thinking_started_at,
+            assistant_started_at: value.assistant_started_at,
+            tool_started_at: value.tool_started_at,
         }
     }
 }
