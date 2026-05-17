@@ -27,6 +27,7 @@ opentelemetry = { version = "0.31", features = ["metrics", "trace"] }
 sha2 = "0.10"
 tracing-opentelemetry = "0.32"
 uuid = { version = "1", features = ["v7"] }
+portable-pty = "0.9"
 
 [dev-dependencies]
 tempfile.workspace = true

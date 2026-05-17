@@ -44,8 +44,8 @@ minimal
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
   - `grep_files`: search files for a regex pattern (ripgrep semantics; respects `.gitignore`/`.ignore` by default)
   - `view_image`: attach a local image from the filesystem (png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif)
-  - `shell_command`: run a command string in the workspace through the user's default shell, inheriting the full process environment and using login/profile semantics by default; returns a `session_id` for long-running processes
-  - `write_stdin`: write to stdin of a running shell session, or poll its output
+  - `shell_command`: run a command string in the workspace through the user's default or requested shell, inheriting the full process environment and using login/profile semantics by default; supports timeout, long-running `session_id` polling, bounded/truncated output, Unix PTY via `tty=true`, and Codex/opencode argument aliases (`command`/`workdir`/`timeout`/`description`)
+  - `write_stdin`: write to stdin of a running shell session, or poll its output; reports timeout/truncation/status metadata consistently with `shell_command`
   - `write_file`: write/overwrite a UTF-8 text file using `filePath` and `content`, creating parent directories and preserving UTF-8 BOM
   - `edit_file`: perform opencode-style text edits using `filePath`, `oldString`, `newString`, and `replaceAll`, preserving BOM/line endings and allowing empty `oldString` for whole-file create/overwrite
   - `apply_patch`: apply a stripped-down file-oriented diff envelope (`*** Begin Patch` / `*** End Patch`) for multi-file edits
