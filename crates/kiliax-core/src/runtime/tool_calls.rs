@@ -31,8 +31,14 @@ pub(super) fn group_tool_calls(tool_calls: &[ToolCall]) -> Vec<ToolCallGroup<'_>
     out
 }
 
+fn is_empty_assistant(content: &Option<String>, tool_calls: &[ToolCall]) -> bool {
+    tool_calls.is_empty() && content.as_deref().is_none_or(|c| c.trim().is_empty())
+}
+
 pub(crate) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
     if messages.iter().all(|m| {
+        !matches!(m, Message::Assistant { content, tool_calls, .. } if is_empty_assistant(content, tool_calls))
+            &&
         !matches!(m, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty())
             && !matches!(m, Message::Tool { .. })
     }) {
@@ -96,12 +102,21 @@ pub(crate) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
 
                 out.extend(segment_other_msgs);
             }
+            Message::Assistant {
+                content,
+                tool_calls,
+                ..
+            } if is_empty_assistant(&content, &tool_calls) => {}
             Message::Tool { .. } => {}
             other => out.push(other),
         }
     }
 
     *messages = out;
+}
+
+pub(super) fn assistant_message_is_empty(message: &Message) -> bool {
+    matches!(message, Message::Assistant { content, tool_calls, .. } if is_empty_assistant(content, tool_calls))
 }
 
 pub(super) fn normalize_tool_call_ids(step: usize, tool_calls: &mut [ToolCall]) {

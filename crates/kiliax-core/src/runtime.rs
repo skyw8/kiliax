@@ -14,7 +14,8 @@ const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 1_000_000;
 
 use streaming::{drive_stream_step, normalize_stream_step_tool_calls};
 use tool_calls::{
-    group_tool_calls, normalize_tool_call_ids, sanitize_tool_call_history, ToolCallGroup,
+    assistant_message_is_empty, group_tool_calls, normalize_tool_call_ids,
+    sanitize_tool_call_history, ToolCallGroup,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +39,9 @@ pub enum AgentRuntimeError {
         max_completion_tokens: u32,
         step: usize,
     },
+
+    #[error("empty assistant message from model at step {step}")]
+    EmptyAssistantMessage { step: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +183,9 @@ impl AgentRuntime {
                 }
                 _ => Vec::new(),
             };
+            if assistant_message_is_empty(&assistant) {
+                return Err(AgentRuntimeError::EmptyAssistantMessage { step: step + 1 });
+            }
             messages.push(assistant);
 
             if tool_calls.is_empty() {
@@ -428,6 +435,20 @@ impl AgentRuntime {
                                     return LoopControl::Return;
                                 }
                                 normalize_stream_step_tool_calls(step, &mut step_out);
+                                if assistant_message_is_empty(&step_out.assistant) {
+                                    telemetry::metrics::record_run_finished(
+                                        &profile.name,
+                                        "empty_assistant_message",
+                                        step_no as u64,
+                                        started.elapsed(),
+                                    );
+                                    let _ = tx
+                                        .send(Err(AgentRuntimeError::EmptyAssistantMessage {
+                                            step: step_no,
+                                        }))
+                                        .await;
+                                    return LoopControl::Return;
+                                }
                                 messages.push(step_out.assistant.clone());
                                 if telemetry::capture_enabled() {
                                     if let Ok(json) = serde_json::to_string(&step_out.assistant) {
@@ -973,6 +994,43 @@ mod tests {
             Some(Message::Tool { tool_call_id, .. }) if tool_call_id == "b"
         ));
         assert!(matches!(messages.get(3), Some(Message::User { .. })));
+    }
+
+    #[test]
+    fn sanitize_tool_call_history_drops_empty_assistant_messages() {
+        let mut messages = vec![
+            Message::User {
+                content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
+            },
+            Message::Assistant {
+                content: None,
+                reasoning_content: Some("thinking only".to_string()),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            },
+            Message::Assistant {
+                content: Some("done".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            },
+        ];
+
+        sanitize_tool_call_history(&mut messages);
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(messages.get(0), Some(Message::User { .. })));
+        assert!(matches!(
+            messages.get(1),
+            Some(Message::Assistant {
+                content: Some(content),
+                tool_calls,
+                ..
+            }) if content == "done" && tool_calls.is_empty()
+        ));
     }
 
     #[test]
