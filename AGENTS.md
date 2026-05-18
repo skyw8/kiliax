@@ -90,7 +90,7 @@ minimal
 ### web (React UI)
 
 - Main UI (responsive layout + WS streaming with live snapshot restore/session actions/goal controls with live time/token updates + workspace folders list + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
-- Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips: `web/src/components/message-row.tsx`
+- Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`

@@ -78,6 +78,8 @@ type WorkspaceFolderItem = {
 const LIST_PAGE_SIZE = 6;
 const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,application/pdf";
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MESSAGE_COLUMN_WIDTH = "w-full max-w-[92%] sm:max-w-[78%]";
+const WIDE_MESSAGE_COLUMN_WIDTH = "w-full max-w-[92%]";
 
 function isSupportedAttachmentType(mediaType: string): boolean {
   return (
@@ -2075,7 +2077,7 @@ export default function App() {
 
                 {stream.thinking ? (
                   <div className="flex justify-start">
-                    <details className="relative w-full max-w-[92%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2 sm:max-w-[78%]">
+                    <details className={`relative ${MESSAGE_COLUMN_WIDTH} min-w-0 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2`}>
                       <button
                         type="button"
                         className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
@@ -2085,7 +2087,7 @@ export default function App() {
                       >
                         <Copy className="h-3.5 w-3.5" />
                       </button>
-                      <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-600">
+                      <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-600">
                         thinking
                         {liveThinkingElapsedMs != null ? (
                           <span className="ml-2 text-zinc-500">
@@ -2101,43 +2103,45 @@ export default function App() {
                 ) : null}
 
                 {stream.toolCalls.length ? (
-                  <div className="space-y-2">
-                    {stream.toolCalls.map((c) => (
-                      <details
-                        key={`toolcall:${c.id}:${c.name}`}
-                        className="relative rounded-xl border border-zinc-200 bg-white px-4 py-2"
-                      >
-                        <button
-                          type="button"
-                          className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
-                          aria-label="Copy tool call"
-                          title="Copy tool call"
-                          onClick={() => copyToClipboard(c.arguments)}
+                  <div className="flex justify-start">
+                    <div className={`${MESSAGE_COLUMN_WIDTH} min-w-0 space-y-2`}>
+                      {stream.toolCalls.map((c) => (
+                        <details
+                          key={`toolcall:${c.id}:${c.name}`}
+                          className="relative w-full min-w-0 rounded-xl border border-zinc-200 bg-white px-4 py-2"
                         >
-                          <Copy className="h-3.5 w-3.5" />
-                        </button>
-                        <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-700">
-                          tool_call: <span className="font-mono">{c.name}</span>
-                          {toolDurationsMs[c.id] != null ? (
-                            <span className="ml-2 text-zinc-500">
-                              ({fmtDurationCompact(toolDurationsMs[c.id]!)})
-                            </span>
-                          ) : toolStartsRef.current[c.id]?.startedAt != null ? (
-                            <span className="ml-2 text-zinc-500">
-                              ({fmtDurationCompact(clockNowMs - toolStartsRef.current[c.id]!.startedAt)})
-                            </span>
-                          ) : null}
-                        </summary>
-                        <CodeBlock className="mt-2" code={c.arguments} lang="json" copyButton={false} />
-                      </details>
-                    ))}
+                          <button
+                            type="button"
+                            className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                            aria-label="Copy tool call"
+                            title="Copy tool call"
+                            onClick={() => copyToClipboard(c.arguments)}
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                          <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-700">
+                            tool_call: <span className="font-mono">{c.name}</span>
+                            {toolDurationsMs[c.id] != null ? (
+                              <span className="ml-2 text-zinc-500">
+                                ({fmtDurationCompact(toolDurationsMs[c.id]!)})
+                              </span>
+                            ) : toolStartsRef.current[c.id]?.startedAt != null ? (
+                              <span className="ml-2 text-zinc-500">
+                                ({fmtDurationCompact(clockNowMs - toolStartsRef.current[c.id]!.startedAt)})
+                              </span>
+                            ) : null}
+                          </summary>
+                          <CodeBlock className="mt-2" code={c.arguments} lang="json" copyButton={false} />
+                        </details>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
 
                 {stream.assistant ? (
                   <div className="flex justify-start">
                     <div
-                      className={`${hasMermaidFence(stream.assistant) ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]"} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}
+                      className={`${hasMermaidFence(stream.assistant) ? WIDE_MESSAGE_COLUMN_WIDTH : MESSAGE_COLUMN_WIDTH} min-w-0 rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}
                     >
                       <Markdown text={stream.assistant} deferMermaid />
                       <div className="mt-2 border-t border-zinc-200 pt-1">

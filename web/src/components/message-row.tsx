@@ -24,6 +24,8 @@ import { Markdown, type MermaidErrorInfo } from "./markdown";
 
 const USER_COLLAPSE_CHAR_LIMIT = 700;
 const USER_COLLAPSE_LINE_LIMIT = 10;
+const MESSAGE_COLUMN_WIDTH = "w-full max-w-[92%] sm:max-w-[78%]";
+const WIDE_MESSAGE_COLUMN_WIDTH = "w-full max-w-[92%]";
 
 function shouldCollapseUserMessage(content: string): boolean {
   if (content.length > USER_COLLAPSE_CHAR_LIMIT) return true;
@@ -97,11 +99,11 @@ function renderToolCalls(
 ) {
   if (!toolCalls?.length) return null;
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-2 w-full min-w-0 space-y-1">
       {toolCalls.map((c) => (
         <details
           key={c.id}
-          className="relative rounded-md border border-zinc-200 bg-white px-3 py-2"
+          className="relative w-full min-w-0 rounded-md border border-zinc-200 bg-white px-3 py-2"
         >
           <button
             type="button"
@@ -112,7 +114,7 @@ function renderToolCalls(
           >
             <Copy className="h-3.5 w-3.5" />
           </button>
-          <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-700">
+          <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-700">
             tool_call: <span className="font-mono">{c.name}</span>
             {toolDurationsMs[c.id] != null ? (
               <span className="ml-2 text-zinc-500">
@@ -157,7 +159,7 @@ export function MessageRow({
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     const queued = msg.delivery_state === "queued";
     const attachments = msg.attachments ?? [];
-    const messageWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
+    const messageWidth = wide ? WIDE_MESSAGE_COLUMN_WIDTH : MESSAGE_COLUMN_WIDTH;
     const bubbleTone = queued
       ? "bg-zinc-300 text-zinc-800"
       : "bg-zinc-900 text-zinc-50";
@@ -232,19 +234,19 @@ export function MessageRow({
 
   if (msg.role === "assistant") {
     const wide = hasMermaidFence(msg.content);
-    const bubbleWidth = wide ? "w-full max-w-[92%]" : "max-w-[92%] sm:max-w-[78%]";
+    const bubbleWidth = wide ? WIDE_MESSAGE_COLUMN_WIDTH : MESSAGE_COLUMN_WIDTH;
     const usageText = fmtTokenUsage(msg.usage);
     const canRegenerate = Boolean(historyMutable && onRegenerateAssistant);
     return (
       <div className="flex justify-start">
-        <div className={`${bubbleWidth} rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}>
+        <div className={`${bubbleWidth} min-w-0 rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}>
           {msg.content ? (
             <Markdown text={msg.content} messageId={msg.id} onMermaidError={onMermaidError} />
           ) : (
             <div className="text-zinc-500">…</div>
           )}
           {msg.reasoning_content ? (
-            <details className="relative mt-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+            <details className="relative mt-2 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
               <button
                 type="button"
                 className="absolute right-1 top-1 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
@@ -254,7 +256,7 @@ export function MessageRow({
               >
                 <Copy className="h-3.5 w-3.5" />
               </button>
-              <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-600">
+              <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-600">
                 thinking
                 {thinkingDurationsMs[msg.id] != null ? (
                   <span className="ml-2 text-zinc-500">
@@ -333,7 +335,7 @@ export function MessageRow({
 
   return (
     <div className="flex justify-start">
-      <details className="relative w-full max-w-[92%] rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2 sm:max-w-[78%]">
+      <details className={`relative ${MESSAGE_COLUMN_WIDTH} min-w-0 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2`}>
         <button
           type="button"
           className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
@@ -343,7 +345,7 @@ export function MessageRow({
         >
           <Copy className="h-3.5 w-3.5" />
         </button>
-        <summary className="cursor-pointer select-none pr-10 text-xs text-zinc-700">
+        <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-700">
           tool_result: <span className="font-mono">{msg.tool_call_id}</span>
           {toolDurationsMs[msg.tool_call_id] != null ? (
             <span className="ml-2 text-zinc-500">
