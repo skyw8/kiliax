@@ -80,15 +80,36 @@ impl LlmProvider for OpenAiResponsesProvider {
             request.messages = req.messages.len() as u64,
             request.tools = req.tools.len() as u64,
         );
+        crate::telemetry::record_generation_start(&span, &self.route.provider, &self.route.model);
+
+        let body = match to_responses_request(
+            &self.route.model,
+            req,
+            false,
+            self.prompt_cache_key.as_deref(),
+        )
+        .instrument(span.clone())
+        .await
+        {
+            Ok(body) => body,
+            Err(err) => {
+                crate::telemetry::metrics::record_llm_call(
+                    &self.route.provider,
+                    &self.route.model,
+                    false,
+                    "error",
+                    started.elapsed(),
+                    None,
+                    None,
+                    None,
+                );
+                crate::telemetry::record_generation_error(&span, false, &err);
+                return Err(err);
+            }
+        };
+        crate::telemetry::record_generation_input(&span, false, &body);
 
         let response: Result<ChatResponse, LlmError> = async {
-            let body = to_responses_request(
-                &self.route.model,
-                req,
-                false,
-                self.prompt_cache_key.as_deref(),
-            )
-            .await?;
             let resp = self
                 .http
                 .post(self.cfg.url("/responses"))
@@ -107,17 +128,30 @@ impl LlmProvider for OpenAiResponsesProvider {
                 .map_err(|e| LlmError::OpenAI(OpenAIError::JSONDeserialize(e)))?;
             chat_response_from_openai_responses(parsed, &self.route.model)
         }
-        .instrument(span)
+        .instrument(span.clone())
         .await;
 
+        let latency = started.elapsed();
         let outcome = if response.is_ok() { "ok" } else { "error" };
         let usage = response.as_ref().ok().and_then(|r| r.usage);
+        if let Ok(ok) = &response {
+            crate::telemetry::record_generation_success(
+                &span,
+                &self.route.provider,
+                &self.route.model,
+                false,
+                latency,
+                ok,
+            );
+        } else if let Err(err) = &response {
+            crate::telemetry::record_generation_error(&span, false, err);
+        }
         crate::telemetry::metrics::record_llm_call(
             &self.route.provider,
             &self.route.model,
             false,
             outcome,
-            started.elapsed(),
+            latency,
             usage.map(|u| u.prompt_tokens as u64),
             usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
             usage.map(|u| u.completion_tokens as u64),
@@ -128,6 +162,7 @@ impl LlmProvider for OpenAiResponsesProvider {
 
     async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream, LlmError> {
         let started = std::time::Instant::now();
+        let started_wall_time = std::time::SystemTime::now();
         let span = tracing::info_span!(
             "kiliax.llm.chat_stream",
             llm.provider = %self.route.provider,
@@ -137,33 +172,76 @@ impl LlmProvider for OpenAiResponsesProvider {
             request.messages = req.messages.len() as u64,
             request.tools = req.tools.len() as u64,
         );
+        crate::telemetry::record_generation_start(&span, &self.route.provider, &self.route.model);
 
-        let body = to_responses_request(
+        let body = match to_responses_request(
             &self.route.model,
             req,
             true,
             self.prompt_cache_key.as_deref(),
         )
         .instrument(span.clone())
-        .await?;
-        let event_source = self
+        .await
+        {
+            Ok(body) => body,
+            Err(err) => {
+                crate::telemetry::metrics::record_llm_call(
+                    &self.route.provider,
+                    &self.route.model,
+                    true,
+                    "error",
+                    started.elapsed(),
+                    None,
+                    None,
+                    None,
+                );
+                crate::telemetry::record_generation_error(&span, true, &err);
+                return Err(err);
+            }
+        };
+        crate::telemetry::record_generation_input(&span, true, &body);
+        let event_source = match self
             .http
             .post(self.cfg.url("/responses"))
             .query(&self.cfg.query())
             .headers(self.headers())
             .json(&body)
             .eventsource()
-            .map_err(|err| LlmError::OpenAI(OpenAIError::StreamError(err.to_string())))?;
+        {
+            Ok(event_source) => event_source,
+            Err(err) => {
+                let err = LlmError::OpenAI(OpenAIError::StreamError(err.to_string()));
+                crate::telemetry::metrics::record_llm_call(
+                    &self.route.provider,
+                    &self.route.model,
+                    true,
+                    "error",
+                    started.elapsed(),
+                    None,
+                    None,
+                    None,
+                );
+                crate::telemetry::record_generation_error(&span, true, &err);
+                return Err(err);
+            }
+        };
 
         let provider = self.route.provider.clone();
         let model = self.route.model.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<ChatStreamChunk, LlmError>>();
+        let capture_output = crate::telemetry::capture_full();
+        let max_output_bytes = crate::telemetry::capture_max_bytes();
 
         tokio::spawn(
             async move {
                 let mut event_source = event_source;
                 let mut state = ResponsesStreamState::new(model.clone());
                 let mut outcome = "ok";
+                let mut output_capture = capture_output
+                    .then(|| crate::telemetry::StreamOutputCapture::new(max_output_bytes));
+                let mut ttft: Option<std::time::Duration> = None;
+                let mut completion_start_time: Option<String> = None;
+                let mut stream_error: Option<String> = None;
 
                 while let Some(event) = event_source.next().await {
                     match event {
@@ -179,12 +257,24 @@ impl LlmProvider for OpenAiResponsesProvider {
                             match handle_stream_event(&mut state, &message.event, data) {
                                 Ok(StreamEventAction::None) => {}
                                 Ok(StreamEventAction::Chunk(chunk)) => {
+                                    if ttft.is_none() && super::chunk_has_output_delta(&chunk) {
+                                        let seen = started.elapsed();
+                                        ttft = Some(seen);
+                                        if let Some(wall) = started_wall_time.checked_add(seen) {
+                                            completion_start_time =
+                                                super::format_system_time_rfc3339(wall);
+                                        }
+                                    }
+                                    if let Some(output_capture) = output_capture.as_mut() {
+                                        output_capture.observe_chunk(&chunk);
+                                    }
                                     if tx.send(Ok(chunk)).is_err() {
                                         outcome = "cancelled";
                                         break;
                                     }
                                 }
                                 Err(err) => {
+                                    stream_error = Some(err.to_string());
                                     let _ = tx.send(Err(err));
                                     outcome = "error";
                                     break;
@@ -194,6 +284,7 @@ impl LlmProvider for OpenAiResponsesProvider {
                         Err(reqwest_eventsource::Error::StreamEnded) => break,
                         Err(err) => {
                             let mapped = map_eventsource_error(err).await;
+                            stream_error = Some(mapped.to_string());
                             let _ = tx.send(Err(LlmError::OpenAI(mapped)));
                             outcome = "error";
                             break;
@@ -202,12 +293,26 @@ impl LlmProvider for OpenAiResponsesProvider {
                 }
                 event_source.close();
 
+                let latency = started.elapsed();
+                let current_span = tracing::Span::current();
+                crate::telemetry::record_stream_generation_finish(
+                    &current_span,
+                    &provider,
+                    &state.model,
+                    outcome,
+                    latency,
+                    ttft,
+                    completion_start_time,
+                    state.usage,
+                    output_capture.take(),
+                    stream_error.as_deref(),
+                );
                 crate::telemetry::metrics::record_llm_call(
                     &provider,
                     &state.model,
                     true,
                     outcome,
-                    started.elapsed(),
+                    latency,
                     state.usage.map(|u| u.prompt_tokens as u64),
                     state.usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
                     state.usage.map(|u| u.completion_tokens as u64),

@@ -61,8 +61,8 @@ minimal
 - Provider-neutral LLM facade, provider API routing, shared LLM error classification, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks + image/PDF user content parts) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
 - OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + thinking-provider `reasoning_content` compatibility + Langfuse completion timing): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
-- OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing): `crates/kiliax-llm/src/openai_responses.rs`
-- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + thinking block preservation/replay + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls): `crates/kiliax-llm/src/anthropic.rs`
+- OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/openai_responses.rs`
+- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + thinking block preservation/replay + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/anthropic.rs`
 
 ### crates/kiliax-cli (TUI)
 
