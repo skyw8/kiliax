@@ -2004,7 +2004,10 @@ export default function App() {
           <div
             ref={chatScrollRef}
             onScroll={updateIsAtBottom}
-            className="flex-1 overflow-auto bg-zinc-50 pb-4 pr-3 sm:pr-4"
+            className={[
+              "flex-1 overflow-auto bg-zinc-50 pb-4",
+              selectedId ? "pr-3 sm:pr-4" : "",
+            ].join(" ")}
           >
             {selectedId ? (
               <div className="grid w-full gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
