@@ -80,6 +80,12 @@ pub(super) async fn to_openai_message(
             tool_calls,
             ..
         } => {
+            if tool_calls.is_empty() && content.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                return Err(LlmError::InvalidRequest(
+                    "assistant message requires content or tool_calls for OpenAI chat completions"
+                        .to_string(),
+                ));
+            }
             let tool_calls = if tool_calls.is_empty() {
                 None
             } else {

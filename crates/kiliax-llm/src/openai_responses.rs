@@ -259,6 +259,7 @@ async fn to_responses_request(
                 provider_metadata,
                 ..
             } => {
+                let input_len_before_assistant = input.len();
                 if let Some(metadata) = provider_metadata {
                     let output = metadata.openai_responses_output().unwrap_or_default();
                     if !output.is_empty() {
@@ -281,6 +282,12 @@ async fn to_responses_request(
                         "name": to_wire_tool_name(&call.name),
                         "arguments": call.arguments,
                     }));
+                }
+                if input.len() == input_len_before_assistant {
+                    return Err(LlmError::InvalidRequest(
+                        "assistant message requires content, tool_calls, or Responses output metadata"
+                            .to_string(),
+                    ));
                 }
             }
             Message::Tool {
@@ -1144,6 +1151,28 @@ mod tests {
             .unwrap();
 
         assert_eq!(body["prompt_cache_key"], json!("session-key"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rejects_empty_assistant_history() {
+        let req = ChatRequest::new(vec![
+            user("hi"),
+            Message::Assistant {
+                content: None,
+                reasoning_content: Some("thinking only".to_string()),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            },
+        ]);
+
+        let err = to_responses_request("gpt-test", req, false, None)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, LlmError::InvalidRequest(message) if message.contains("requires content"))
+        );
     }
 
     #[test]

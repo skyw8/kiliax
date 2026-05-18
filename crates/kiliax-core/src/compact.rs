@@ -1,6 +1,6 @@
+use crate::history::sanitize_history_for_next_request;
 use crate::llm::{LlmClient, LlmError};
 use crate::protocol::{ChatRequest, Message, ToolCall, UserContentPart, UserMessageContent};
-use crate::runtime::tool_calls::sanitize_tool_call_history;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -277,7 +277,7 @@ pub async fn run_compaction(llm: &LlmClient, messages: &[Message]) -> Result<Str
 
 fn prepare_messages_for_compaction(messages: &[Message]) -> Vec<Message> {
     let mut out = messages.to_vec();
-    sanitize_tool_call_history(&mut out);
+    let _ = sanitize_history_for_next_request(&mut out);
     truncate_tool_outputs_for_compaction(&mut out);
     out
 }

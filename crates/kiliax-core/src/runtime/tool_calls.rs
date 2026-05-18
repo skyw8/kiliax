@@ -1,4 +1,4 @@
-use crate::protocol::{Message, ToolCall};
+use crate::protocol::ToolCall;
 use crate::tools::{tool_parallelism, ToolParallelism};
 
 #[derive(Debug, Clone, Copy)]
@@ -29,94 +29,6 @@ pub(super) fn group_tool_calls(tool_calls: &[ToolCall]) -> Vec<ToolCallGroup<'_>
     }
 
     out
-}
-
-fn is_empty_assistant(content: &Option<String>, tool_calls: &[ToolCall]) -> bool {
-    tool_calls.is_empty() && content.as_deref().is_none_or(|c| c.trim().is_empty())
-}
-
-pub(crate) fn sanitize_tool_call_history(messages: &mut Vec<Message>) {
-    if messages.iter().all(|m| {
-        !matches!(m, Message::Assistant { content, tool_calls, .. } if is_empty_assistant(content, tool_calls))
-            &&
-        !matches!(m, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty())
-            && !matches!(m, Message::Tool { .. })
-    }) {
-        return;
-    }
-
-    let mut queue: std::collections::VecDeque<Message> = std::mem::take(messages).into();
-    let mut out: Vec<Message> = Vec::with_capacity(queue.len());
-
-    while let Some(msg) = queue.pop_front() {
-        match msg {
-            Message::Assistant {
-                content,
-                reasoning_content,
-                tool_calls,
-                usage,
-                provider_metadata,
-            } if !tool_calls.is_empty() => {
-                let expected_ids: Vec<String> = tool_calls.iter().map(|c| c.id.clone()).collect();
-                out.push(Message::Assistant {
-                    content,
-                    reasoning_content,
-                    tool_calls,
-                    usage,
-                    provider_metadata,
-                });
-
-                let mut segment_tool_msgs: Vec<Message> = Vec::new();
-                let mut segment_other_msgs: Vec<Message> = Vec::new();
-                while !matches!(queue.front(), Some(Message::Assistant { .. }) | None) {
-                    let next = queue.pop_front().expect("front checked");
-                    match next {
-                        Message::Tool { .. } => segment_tool_msgs.push(next),
-                        other => segment_other_msgs.push(other),
-                    }
-                }
-
-                let mut remaining: Vec<Option<Message>> =
-                    segment_tool_msgs.into_iter().map(Some).collect();
-                for expected_id in expected_ids {
-                    let mut picked: Option<Message> = None;
-                    for slot in remaining.iter_mut() {
-                        let Some(Message::Tool { tool_call_id, .. }) = slot.as_ref() else {
-                            continue;
-                        };
-                        if tool_call_id == &expected_id {
-                            picked = slot.take();
-                            break;
-                        }
-                    }
-
-                    if let Some(msg) = picked {
-                        out.push(msg);
-                    } else {
-                        out.push(Message::Tool {
-                            tool_call_id: expected_id,
-                            content: "error: missing tool response message (repaired)".to_string(),
-                        });
-                    }
-                }
-
-                out.extend(segment_other_msgs);
-            }
-            Message::Assistant {
-                content,
-                tool_calls,
-                ..
-            } if is_empty_assistant(&content, &tool_calls) => {}
-            Message::Tool { .. } => {}
-            other => out.push(other),
-        }
-    }
-
-    *messages = out;
-}
-
-pub(super) fn assistant_message_is_empty(message: &Message) -> bool {
-    matches!(message, Message::Assistant { content, tool_calls, .. } if is_empty_assistant(content, tool_calls))
 }
 
 pub(super) fn normalize_tool_call_ids(step: usize, tool_calls: &mut [ToolCall]) {

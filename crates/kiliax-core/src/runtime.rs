@@ -2,6 +2,7 @@ use tracing::Instrument;
 
 use crate::agents::{AgentKind, AgentProfile};
 
+use crate::history::{assistant_message_is_empty, sanitize_history_for_next_request};
 use crate::llm::{LlmClient, LlmError};
 use crate::protocol::{ChatRequest, FinishReason, Message, ToolCall, ToolChoice, ToolDefinition};
 use crate::telemetry;
@@ -13,10 +14,7 @@ pub(crate) mod tool_calls;
 const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 1_000_000;
 
 use streaming::{drive_stream_step, normalize_stream_step_tool_calls};
-use tool_calls::{
-    assistant_message_is_empty, group_tool_calls, normalize_tool_call_ids,
-    sanitize_tool_call_history, ToolCallGroup,
-};
+use tool_calls::{group_tool_calls, normalize_tool_call_ids, ToolCallGroup};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentRuntimeError {
@@ -156,7 +154,15 @@ impl AgentRuntime {
         let perms = std::sync::Arc::new(profile.permissions.clone());
 
         for step in 0..options.max_steps {
-            sanitize_tool_call_history(&mut messages);
+            let sanitize_report = sanitize_history_for_next_request(&mut messages);
+            if sanitize_report.changed() {
+                tracing::warn!(
+                    event = "history.sanitized",
+                    dropped_empty_assistant = sanitize_report.dropped_empty_assistant,
+                    dropped_orphan_tool = sanitize_report.dropped_orphan_tool,
+                    inserted_missing_tool_result = sanitize_report.inserted_missing_tool_result,
+                );
+            }
             let tool_defs = tool_definitions_for(profile, &self.tools, &model_id).await;
             let mut req = ChatRequest::new(messages.clone());
             req.tools = tool_defs;
@@ -382,7 +388,15 @@ impl AgentRuntime {
                     );
 
                     let control: LoopControl = async {
-                        sanitize_tool_call_history(&mut messages);
+                        let sanitize_report = sanitize_history_for_next_request(&mut messages);
+                        if sanitize_report.changed() {
+                            tracing::warn!(
+                                event = "history.sanitized",
+                                dropped_empty_assistant = sanitize_report.dropped_empty_assistant,
+                                dropped_orphan_tool = sanitize_report.dropped_orphan_tool,
+                                inserted_missing_tool_result = sanitize_report.inserted_missing_tool_result,
+                            );
+                        }
                         if tx
                             .send(Ok(AgentEvent::StepStart { step: step_no }))
                             .await
@@ -847,6 +861,7 @@ pub enum AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::sanitize_history_for_next_request as sanitize_tool_call_history;
     use crate::protocol::UserMessageContent;
     use crate::protocol::{ChatStreamChunk, ProviderMessageMetadata, ToolCallDelta};
 

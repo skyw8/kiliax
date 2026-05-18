@@ -954,6 +954,9 @@ fn runtime_error_code(err: &AgentRuntimeError) -> &'static str {
         AgentRuntimeError::MaxSteps { .. } => "max_steps_exceeded",
         AgentRuntimeError::MaxCompletionTokens { .. } => "max_completion_tokens_exceeded",
         AgentRuntimeError::EmptyAssistantMessage { .. } => "empty_assistant_message",
+        AgentRuntimeError::Llm(kiliax_core::llm::LlmError::InvalidRequest(_)) => {
+            "invalid_message_history"
+        }
         AgentRuntimeError::Llm(_) => "llm_error",
         AgentRuntimeError::Tool(_) => "tool_error",
         AgentRuntimeError::Cancelled => "cancelled",
@@ -973,6 +976,9 @@ fn runtime_error_hint(code: &str, agent: &str) -> Option<String> {
         ),
         "empty_assistant_message" => Some(
             "The provider returned no assistant content or tool calls; retry or check the model/provider compatibility.".to_string(),
+        ),
+        "invalid_message_history" => Some(
+            "The session history contains a message that cannot be sent to the selected provider; compact or inspect recent messages with the trace_id.".to_string(),
         ),
         "tool_error" => Some(
             "Tool execution failed: check workspace/permissions/tool args, and use `trace_id` to locate server logs.".to_string(),

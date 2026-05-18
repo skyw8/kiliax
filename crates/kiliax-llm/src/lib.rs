@@ -969,6 +969,51 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn assistant_message_without_content_or_tool_calls_is_rejected() {
+        let msg = Message::Assistant {
+            content: None,
+            reasoning_content: Some("thinking only".to_string()),
+            tool_calls: Vec::new(),
+            usage: None,
+            provider_metadata: None,
+        };
+
+        let err = to_openai_message(&msg).await.unwrap_err();
+
+        assert!(
+            matches!(err, LlmError::InvalidRequest(message) if message.contains("requires content or tool_calls"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn openai_chat_body_rejects_empty_assistant_history() {
+        let req = ChatRequest::new(vec![Message::Assistant {
+            content: Some("   ".to_string()),
+            reasoning_content: None,
+            tool_calls: Vec::new(),
+            usage: None,
+            provider_metadata: None,
+        }]);
+
+        let err = build_openai_chat_body(
+            "gpt-test",
+            &req.messages,
+            req.tools,
+            &req.tool_choice,
+            req.parallel_tool_calls,
+            req.temperature,
+            req.max_completion_tokens,
+            false,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, LlmError::InvalidRequest(message) if message.contains("requires content or tool_calls"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn image_only_user_message_includes_non_empty_text_part() {
         let content = UserMessageContent::Parts(vec![UserContentPart::Image {
             path: "data:image/png;base64,AA==".to_string(),
