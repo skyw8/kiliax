@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 use tokio::time::Instant;
-use tracing::Instrument;
+use tracing::{Instrument, Span};
 
 use crate::protocol::{Message, ToolCall, ToolDefinition};
 use crate::telemetry;
@@ -342,49 +342,8 @@ impl ToolEngine {
         telemetry::spans::set_attribute(&span, "tool.outcome", outcome);
 
         match &res {
-            Ok(output) => {
-                if telemetry::capture_enabled() {
-                    let captured = telemetry::capture_text(output);
-                    tracing::info!(
-                        target: "kiliax_core::telemetry",
-                        parent: &span,
-                        event = "tool.output",
-                        tool = %call.name,
-                        kind = %kind,
-                        call_id = %call.id,
-                        output_len = captured.len as u64,
-                        output_truncated = captured.truncated,
-                        output_sha256 = %captured.sha256.as_deref().unwrap_or(""),
-                        output = %captured.as_str(),
-                    );
-                }
-                if telemetry::capture_full() {
-                    let captured = telemetry::capture_text(output);
-                    telemetry::spans::set_attribute(
-                        &span,
-                        "langfuse.observation.output",
-                        captured.as_str().to_string(),
-                    );
-                }
-            }
-            Err(err) => {
-                telemetry::spans::set_attribute(&span, "tool.error_type", tool_error_type(err));
-                telemetry::spans::set_attribute(&span, "langfuse.observation.level", "ERROR");
-                telemetry::spans::set_attribute(
-                    &span,
-                    "langfuse.observation.status_message",
-                    err.to_string(),
-                );
-                tracing::warn!(
-                    target: "kiliax_core::telemetry",
-                    parent: &span,
-                    event = "tool.error",
-                    tool = %call.name,
-                    kind = %kind,
-                    call_id = %call.id,
-                    error = %err,
-                );
-            }
+            Ok(output) => record_tool_output(&span, &call.name, kind, &call.id, output),
+            Err(err) => record_tool_error(&span, &call.name, kind, &call.id, err),
         }
 
         res
@@ -472,48 +431,9 @@ impl ToolEngine {
 
             match &res {
                 Ok((output, _image_message)) => {
-                    if telemetry::capture_enabled() {
-                        let captured = telemetry::capture_text(output);
-                        tracing::info!(
-                            target: "kiliax_core::telemetry",
-                            parent: &span,
-                            event = "tool.output",
-                            tool = %call.name,
-                            kind = %kind,
-                            call_id = %call.id,
-                            output_len = captured.len as u64,
-                            output_truncated = captured.truncated,
-                            output_sha256 = %captured.sha256.as_deref().unwrap_or(""),
-                            output = %captured.as_str(),
-                        );
-                    }
-                    if telemetry::capture_full() {
-                        let captured = telemetry::capture_text(output);
-                        telemetry::spans::set_attribute(
-                            &span,
-                            "langfuse.observation.output",
-                            captured.as_str().to_string(),
-                        );
-                    }
+                    record_tool_output(&span, &call.name, kind, &call.id, output)
                 }
-                Err(err) => {
-                    telemetry::spans::set_attribute(&span, "tool.error_type", tool_error_type(err));
-                    telemetry::spans::set_attribute(&span, "langfuse.observation.level", "ERROR");
-                    telemetry::spans::set_attribute(
-                        &span,
-                        "langfuse.observation.status_message",
-                        err.to_string(),
-                    );
-                    tracing::warn!(
-                        target: "kiliax_core::telemetry",
-                        parent: &span,
-                        event = "tool.error",
-                        tool = %call.name,
-                        kind = %kind,
-                        call_id = %call.id,
-                        error = %err,
-                    );
-                }
+                Err(err) => record_tool_error(&span, &call.name, kind, &call.id, err),
             }
 
             let (tool_content, image_message) = res?;
@@ -798,6 +718,49 @@ fn tool_category(tool_name: &str, kind: &str) -> &'static str {
         builtin::TOOL_GET_GOAL | builtin::TOOL_UPDATE_GOAL => "goal",
         _ => "other",
     }
+}
+
+fn record_tool_output(span: &Span, tool: &str, kind: &str, call_id: &str, output: &str) {
+    if telemetry::capture_enabled() {
+        let captured = telemetry::capture_text(output);
+        tracing::info!(
+            target: "kiliax_core::telemetry",
+            parent: span,
+            event = "tool.output",
+            tool = %tool,
+            kind = %kind,
+            call_id = %call_id,
+            output_len = captured.len as u64,
+            output_truncated = captured.truncated,
+            output_sha256 = %captured.sha256.as_deref().unwrap_or(""),
+            output = %captured.as_str(),
+        );
+    }
+    if telemetry::capture_full() {
+        let captured = telemetry::capture_text(output);
+        telemetry::spans::set_attribute(
+            span,
+            "langfuse.observation.output",
+            captured.as_str().to_string(),
+        );
+    }
+}
+
+fn record_tool_error(span: &Span, tool: &str, kind: &str, call_id: &str, err: &ToolError) {
+    let output = err.to_string();
+    record_tool_output(span, tool, kind, call_id, &output);
+    telemetry::spans::set_attribute(span, "tool.error_type", tool_error_type(err));
+    telemetry::spans::set_attribute(span, "langfuse.observation.level", "ERROR");
+    telemetry::spans::set_attribute(span, "langfuse.observation.status_message", output);
+    tracing::warn!(
+        target: "kiliax_core::telemetry",
+        parent: span,
+        event = "tool.error",
+        tool = %tool,
+        kind = %kind,
+        call_id = %call_id,
+        error = %err,
+    );
 }
 
 fn tool_error_type(err: &ToolError) -> &'static str {
