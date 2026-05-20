@@ -78,10 +78,23 @@ impl Default for AgentRuntimeOptions {
 impl AgentRuntimeOptions {
     /// Build runtime options from `kiliax.yaml`.
     ///
+    /// Uses `default_model` for model-specific options.
+    pub fn from_config(profile: &AgentProfile, config: &crate::config::Config) -> Self {
+        let model_id = config.default_model.as_deref();
+        Self::from_config_for_model(profile, config, model_id)
+    }
+
+    /// Build runtime options from `kiliax.yaml` for a concrete model.
+    ///
     /// Precedence:
     /// 1) `runtime.*` (global defaults)
     /// 2) `agents.<kind>.*` (per-agent overrides)
-    pub fn from_config(profile: &AgentProfile, config: &crate::config::Config) -> Self {
+    /// 3) `providers.<provider>.models[].auto_compact_token_limit` (per-model override)
+    pub fn from_config_for_model(
+        profile: &AgentProfile,
+        config: &crate::config::Config,
+        model_id: Option<&str>,
+    ) -> Self {
         let mut options = Self::default();
 
         if let Some(max_steps) = config.runtime.max_steps {
@@ -109,6 +122,11 @@ impl AgentRuntimeOptions {
         }
         if let Some(auto_compact_token_limit) =
             agent_cfg.and_then(|cfg| cfg.auto_compact_token_limit)
+        {
+            options.auto_compact_token_limit = Some(auto_compact_token_limit);
+        }
+        if let Some(auto_compact_token_limit) =
+            model_id.and_then(|model_id| config.model_auto_compact_token_limit(model_id))
         {
             options.auto_compact_token_limit = Some(auto_compact_token_limit);
         }
@@ -1079,6 +1097,58 @@ agents:
         let options = AgentRuntimeOptions::from_config(&profile, &config);
 
         assert_eq!(options.max_completion_tokens, Some(456));
+    }
+
+    #[test]
+    fn runtime_options_read_auto_compact_limit_for_model_with_fallback() {
+        let config = crate::config::load_from_str(
+            r#"
+providers:
+  test:
+    base_url: http://localhost
+    models:
+      - small
+      - id: large
+        auto_compact_token_limit: 2000
+runtime:
+  auto_compact_token_limit: 1000
+"#,
+        )
+        .unwrap();
+        let profile = crate::agents::AgentProfile::general();
+
+        let small =
+            AgentRuntimeOptions::from_config_for_model(&profile, &config, Some("test/small"));
+        let large =
+            AgentRuntimeOptions::from_config_for_model(&profile, &config, Some("test/large"));
+
+        assert_eq!(small.auto_compact_token_limit, Some(1000));
+        assert_eq!(large.auto_compact_token_limit, Some(2000));
+    }
+
+    #[test]
+    fn runtime_options_model_auto_compact_limit_overrides_agent_limit() {
+        let config = crate::config::load_from_str(
+            r#"
+providers:
+  test:
+    base_url: http://localhost
+    models:
+      - id: m
+        auto_compact_token_limit: 4000
+runtime:
+  auto_compact_token_limit: 1000
+agents:
+  general:
+    auto_compact_token_limit: 3000
+"#,
+        )
+        .unwrap();
+        let profile = crate::agents::AgentProfile::general();
+
+        let options = AgentRuntimeOptions::from_config_for_model(&profile, &config, Some("test/m"));
+
+        assert_eq!(options.auto_compact_token_limit, Some(4000));
     }
 
     #[tokio::test(flavor = "current_thread")]

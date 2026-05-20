@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
-use kiliax_core::config::{Config, ProviderApi, ProviderConfig};
+use kiliax_core::config::{Config, ModelConfig, ProviderApi, ProviderConfig};
 use kiliax_core::session::{FileSessionStore, SessionId};
 use kiliax_core::tools::ToolEngine;
 use tokio::sync::{broadcast, Mutex, Notify};
@@ -356,7 +356,7 @@ impl ServerState {
                     api: p.api.as_config_str().to_string(),
                     base_url: p.base_url.clone(),
                     api_key_set: p.api_key.is_some(),
-                    models: p.models.clone(),
+                    models: p.models.iter().map(|m| m.id.clone()).collect(),
                 })
                 .collect(),
         })
@@ -429,6 +429,12 @@ impl ServerState {
                 }
 
                 if let Some(models) = upsert.models {
+                    let old_models: HashMap<String, ModelConfig> = existing
+                        .models
+                        .iter()
+                        .cloned()
+                        .map(|m| (m.id.clone(), m))
+                        .collect();
                     let mut seen: HashSet<String> = HashSet::new();
                     let mut out = Vec::new();
                     for m in models {
@@ -439,7 +445,12 @@ impl ServerState {
                             ));
                         }
                         if seen.insert(trimmed.to_string()) {
-                            out.push(trimmed.to_string());
+                            out.push(
+                                old_models
+                                    .get(trimmed)
+                                    .cloned()
+                                    .unwrap_or_else(|| ModelConfig::new(trimmed)),
+                            );
                         }
                     }
                     existing.models = out;
@@ -490,7 +501,7 @@ impl ServerState {
                                 ));
                             }
                             if seen.insert(trimmed.to_string()) {
-                                out.push(trimmed.to_string());
+                                out.push(ModelConfig::new(trimmed));
                             }
                         }
                         out

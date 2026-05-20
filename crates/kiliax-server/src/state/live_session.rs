@@ -1245,7 +1245,11 @@ impl LiveSession {
                     "agent not supported",
                 )
             })?;
-            let options = AgentRuntimeOptions::from_config(&profile, config.as_ref());
+            let options = AgentRuntimeOptions::from_config_for_model(
+                &profile,
+                config.as_ref(),
+                Some(effective.model_id.as_str()),
+            );
             let max_steps = options.max_steps;
 
             let llm =
@@ -1977,7 +1981,7 @@ fn apply_run_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kiliax_core::config::{ProviderApi, ProviderConfig};
+    use kiliax_core::config::{ModelConfig, ProviderApi, ProviderConfig};
     use kiliax_core::protocol::{Message as CoreMessage, TokenUsage, ToolCall, UserMessageContent};
     use tempfile::TempDir;
 
@@ -1992,7 +1996,7 @@ mod tests {
                 api: ProviderApi::OpenAiChatCompletions,
                 base_url: "http://127.0.0.1:1".to_string(),
                 api_key: None,
-                models: vec!["test-model".to_string()],
+                models: vec![ModelConfig::new("test-model")],
             },
         );
         cfg

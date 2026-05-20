@@ -49,7 +49,7 @@ impl ModelPicker {
             let provider_prefix = format!("{name}/");
             let mut models = Vec::new();
             for raw in &provider.models {
-                let trimmed = raw.trim();
+                let trimmed = raw.id.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
@@ -389,7 +389,7 @@ mod tests {
     fn model_picker_qualifies_models_with_slashes() {
         use std::collections::BTreeMap;
 
-        use kiliax_core::config::{ProviderApi, ProviderConfig};
+        use kiliax_core::config::{ModelConfig, ProviderApi, ProviderConfig};
 
         let mut providers = BTreeMap::new();
         providers.insert(
@@ -398,7 +398,7 @@ mod tests {
                 api: ProviderApi::OpenAiChatCompletions,
                 base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
                 api_key: None,
-                models: vec!["openai/gpt-4o-mini".to_string()],
+                models: vec![ModelConfig::new("openai/gpt-4o-mini")],
             },
         );
 

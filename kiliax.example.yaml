@@ -65,8 +65,14 @@ otel:
 runtime:
   # Maximum number of ReAct steps in a single run.
   max_steps: 8
-  # Optional: auto-compact conversation history when context grows large.
+  # Optional: fallback auto-compact threshold when a model has no explicit limit.
   # auto_compact_token_limit: 120000
+  # Model-specific auto-compact thresholds are configured on provider models:
+  # providers:
+  #   openai:
+  #     models:
+  #       - id: gpt-4.1-mini
+  #         auto_compact_token_limit: 120000
 
 # Per-agent overrides (optional, applied after `runtime`).
 agents:

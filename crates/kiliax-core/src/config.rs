@@ -424,7 +424,77 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
 
     #[serde(default)]
-    pub models: Vec<String>,
+    pub models: Vec<ModelConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum ModelConfigDef {
+    Id(String),
+    Full(ModelConfigFull),
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ModelConfigFull {
+    #[serde(alias = "name", alias = "model")]
+    id: String,
+
+    #[serde(
+        default,
+        alias = "autoCompactTokenLimit",
+        alias = "auto_compact_token_limit",
+        alias = "auto-compact-token-limit"
+    )]
+    auto_compact_token_limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(from = "ModelConfigDef")]
+pub struct ModelConfig {
+    pub id: String,
+    pub auto_compact_token_limit: Option<usize>,
+}
+
+impl ModelConfig {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            auto_compact_token_limit: None,
+        }
+    }
+}
+
+impl From<ModelConfigDef> for ModelConfig {
+    fn from(value: ModelConfigDef) -> Self {
+        match value {
+            ModelConfigDef::Id(id) => Self::new(id),
+            ModelConfigDef::Full(model) => Self {
+                id: model.id,
+                auto_compact_token_limit: model.auto_compact_token_limit,
+            },
+        }
+    }
+}
+
+impl Serialize for ModelConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.auto_compact_token_limit.is_none() {
+            return serializer.serialize_str(&self.id);
+        }
+
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("id", &self.id)?;
+        if let Some(limit) = self.auto_compact_token_limit {
+            map.serialize_entry("auto_compact_token_limit", &limit)?;
+        }
+        map.end()
+    }
 }
 
 impl Config {
@@ -468,7 +538,7 @@ impl Config {
                         if provider
                             .models
                             .iter()
-                            .any(|m| m == model_id || m == &qualified)
+                            .any(|m| m.id == model_id || m.id == qualified)
                         {
                             matches.push(name.as_str());
                         }
@@ -500,7 +570,7 @@ impl Config {
             let ok = provider
                 .models
                 .iter()
-                .any(|m| m == model_name || m == &qualified);
+                .any(|m| m.id == model_name || m.id == qualified);
             if !ok {
                 return Err(ConfigError::Invalid(format!(
                     "model {qualified:?} not found in provider {provider_name:?} models"
@@ -515,6 +585,17 @@ impl Config {
             base_url: provider.base_url.clone(),
             api_key: provider.api_key.clone(),
         })
+    }
+
+    pub fn model_auto_compact_token_limit(&self, model_id: &str) -> Option<usize> {
+        let route = self.resolve_model(model_id).ok()?;
+        let provider = self.providers.get(&route.provider)?;
+        let qualified = route.model_id();
+        provider
+            .models
+            .iter()
+            .find(|m| m.id == route.model || m.id == qualified)
+            .and_then(|m| m.auto_compact_token_limit)
     }
 }
 
@@ -756,7 +837,7 @@ fn first_provider_model_id(providers: &BTreeMap<String, ProviderConfig>) -> Opti
         provider
             .models
             .iter()
-            .map(|model| model.trim())
+            .map(|model| model.id.trim())
             .find(|model| !model.is_empty())
             .map(|model| format!("{provider_name}/{model}"))
     })
@@ -787,9 +868,15 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
             }
         }
         for m in &p.models {
-            if m.trim().is_empty() {
+            if m.id.trim().is_empty() {
                 return Err(ConfigError::Invalid(format!(
                     "provider {name} models must not contain empty strings"
+                )));
+            }
+            if m.auto_compact_token_limit.is_some_and(|v| v == 0) {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {name} model {:?} auto_compact_token_limit must be greater than 0",
+                    m.id
                 )));
             }
         }
@@ -1085,6 +1172,18 @@ mod tests {
     }
 
     #[test]
+    fn provider_model_auto_compact_limit_must_be_positive() {
+        let err = load_from_str(
+            "providers:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - id: m\n        auto_compact_token_limit: 0\n",
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("auto_compact_token_limit must be greater than 0"));
+    }
+
+    #[test]
     fn load_from_str_normalized_reports_whether_config_changed() {
         let loaded = load_from_str_normalized(
             "default_model: p/m\nproviders:\n  p:\n    base_url: https://example.com/v1\n    models:\n      - m\n",
@@ -1148,7 +1247,7 @@ mod tests {
                 api: ProviderApi::OpenAiChatCompletions,
                 base_url: "https://api.moonshot.cn/v1".to_string(),
                 api_key: Some("sk-test".to_string()),
-                models: vec!["kimi-k2-turbo-preview".to_string()],
+                models: vec![ModelConfig::new("kimi-k2-turbo-preview")],
             },
         );
 
@@ -1237,7 +1336,7 @@ mod tests {
                 api: ProviderApi::OpenAiChatCompletions,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: None,
-                models: vec!["p/m".to_string()],
+                models: vec![ModelConfig::new("p/m")],
             },
         );
 
@@ -1265,7 +1364,7 @@ mod tests {
                 api: ProviderApi::OpenAiChatCompletions,
                 base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
                 api_key: None,
-                models: vec!["openai/gpt-4o-mini".to_string()],
+                models: vec![ModelConfig::new("openai/gpt-4o-mini")],
             },
         );
         providers.insert(
@@ -1274,7 +1373,7 @@ mod tests {
                 api: ProviderApi::OpenAiChatCompletions,
                 base_url: "https://open.bigmodel.cn/api/paas/v4/".to_string(),
                 api_key: None,
-                models: vec!["glm-5".to_string()],
+                models: vec![ModelConfig::new("glm-5")],
             },
         );
 

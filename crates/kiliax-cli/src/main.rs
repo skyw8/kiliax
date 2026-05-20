@@ -431,7 +431,11 @@ async fn main() -> Result<()> {
         })))
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    let options = AgentRuntimeOptions::from_config(&profile, &loaded.config);
+    let options = AgentRuntimeOptions::from_config_for_model(
+        &profile,
+        &loaded.config,
+        Some(runtime.llm().route().model_id().as_str()),
+    );
 
     let (guard, mut terminal) = terminal::init()?;
     let composer_style = style::composer_background_style();

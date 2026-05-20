@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
-use kiliax_core::config::{Config, ProviderApi, ProviderConfig};
+use kiliax_core::config::{Config, ModelConfig, ProviderApi, ProviderConfig};
 use kiliax_core::protocol::{Message, TokenUsage, UserMessageContent};
 use kiliax_core::session::FileSessionStore;
 use kiliax_core::session::SessionId;
@@ -23,7 +23,10 @@ fn test_config() -> Config {
             api: ProviderApi::OpenAiChatCompletions,
             base_url: "http://127.0.0.1:1".to_string(),
             api_key: None,
-            models: vec!["test-model".to_string(), "new-model".to_string()],
+            models: vec![
+                ModelConfig::new("test-model"),
+                ModelConfig::new("new-model"),
+            ],
         },
     );
     cfg

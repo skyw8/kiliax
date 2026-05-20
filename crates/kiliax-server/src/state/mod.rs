@@ -513,10 +513,10 @@ fn list_models(config: &Config) -> Vec<String> {
             continue;
         }
         for m in &p.models {
-            let qualified = if m.contains('/') {
-                m.to_string()
+            let qualified = if m.id.contains('/') {
+                m.id.to_string()
             } else {
-                format!("{provider}/{m}")
+                format!("{provider}/{}", m.id)
             };
             if seen.insert(qualified.clone()) {
                 out.push(qualified);

@@ -1083,7 +1083,11 @@ impl App {
         }
 
         self.profile = next;
-        self.options = AgentRuntimeOptions::from_config(&self.profile, &self.config);
+        self.options = AgentRuntimeOptions::from_config_for_model(
+            &self.profile,
+            &self.config,
+            Some(self.model_id.as_str()),
+        );
         self.session.meta.agent = self.profile.name.to_string();
         self.session.meta.updated_at_ms = now_ms();
 
@@ -1196,7 +1200,11 @@ impl App {
                 .map_err(|e| anyhow::anyhow!(e))?;
             self.runtime = AgentRuntime::new(llm, tools);
             self.model_id = self.runtime.llm().route().model_id();
-            self.options = AgentRuntimeOptions::from_config(&self.profile, &self.config);
+            self.options = AgentRuntimeOptions::from_config_for_model(
+                &self.profile,
+                &self.config,
+                Some(self.model_id.as_str()),
+            );
 
             self.session.meta.model_id = Some(self.model_id.clone());
             self.session.meta.updated_at_ms = now_ms();
@@ -1674,7 +1682,7 @@ mod tests {
     use super::*;
     use crate::app::render::summarize_shell_command;
     use kiliax_core::config::ResolvedModel;
-    use kiliax_core::config::{Config, ProviderConfig};
+    use kiliax_core::config::{Config, ModelConfig, ProviderConfig};
     use kiliax_core::llm::LlmClient;
     use kiliax_core::tools::ToolEngine;
     use ratatui::style::Modifier;
@@ -1852,7 +1860,7 @@ mod tests {
                 api: kiliax_core::config::ProviderApi::OpenAiChatCompletions,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: None,
-                models: vec!["m".to_string()],
+                models: vec![ModelConfig::new("m")],
             },
         );
         let config = Config {
