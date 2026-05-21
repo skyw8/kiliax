@@ -272,7 +272,6 @@ async fn build_openai_chat_body(
     tool_choice: &ToolChoice,
     parallel_tool_calls: Option<bool>,
     temperature: Option<f32>,
-    max_completion_tokens: Option<u32>,
     stream: bool,
 ) -> Result<Value, LlmError> {
     let mut messages = Vec::with_capacity(internal_messages.len());
@@ -310,12 +309,6 @@ async fn build_openai_chat_body(
     if let Some(temperature) = temperature {
         obj.insert("temperature".to_string(), json!(temperature));
     }
-    if let Some(max_completion_tokens) = max_completion_tokens {
-        obj.insert(
-            "max_completion_tokens".to_string(),
-            json!(max_completion_tokens),
-        );
-    }
 
     Ok(body)
 }
@@ -333,7 +326,7 @@ impl LlmProvider for OpenAICompatibleProvider {
             tool_choice,
             parallel_tool_calls,
             temperature,
-            max_completion_tokens,
+            max_completion_tokens: _,
         } = req;
 
         let started = std::time::Instant::now();
@@ -387,7 +380,6 @@ impl LlmProvider for OpenAICompatibleProvider {
                 &tool_choice,
                 parallel_tool_calls,
                 temperature,
-                max_completion_tokens,
                 false,
             )
             .await?;
@@ -539,7 +531,7 @@ impl LlmProvider for OpenAICompatibleProvider {
             tool_choice,
             parallel_tool_calls,
             temperature,
-            max_completion_tokens,
+            max_completion_tokens: _,
         } = req;
 
         let started = std::time::Instant::now();
@@ -599,7 +591,6 @@ impl LlmProvider for OpenAICompatibleProvider {
                 &tool_choice,
                 parallel_tool_calls,
                 temperature,
-                max_completion_tokens,
                 true,
             )
             .await?;
@@ -1002,7 +993,6 @@ mod tests {
             &req.tool_choice,
             req.parallel_tool_calls,
             req.temperature,
-            req.max_completion_tokens,
             false,
         )
         .await
@@ -1053,7 +1043,6 @@ mod tests {
             &req.tool_choice,
             req.parallel_tool_calls,
             req.temperature,
-            req.max_completion_tokens,
             false,
         )
         .await
@@ -1068,6 +1057,29 @@ mod tests {
             body["messages"][0]["content"][1]["file"]["file_data"],
             json!("JVBERi0=")
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn openai_chat_body_omits_max_completion_tokens() {
+        let mut req = ChatRequest::new(vec![Message::User {
+            content: UserMessageContent::Text("ping".to_string()),
+            hidden: false,
+        }]);
+        req.max_completion_tokens = Some(1_000_000);
+
+        let body = build_openai_chat_body(
+            "gpt-test",
+            &req.messages,
+            req.tools,
+            &req.tool_choice,
+            req.parallel_tool_calls,
+            req.temperature,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(body.get("max_completion_tokens").is_none());
     }
 
     #[test]
