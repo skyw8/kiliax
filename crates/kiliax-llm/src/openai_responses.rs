@@ -339,7 +339,6 @@ async fn to_responses_request(
         tool_choice,
         parallel_tool_calls,
         temperature,
-        max_completion_tokens,
     } = req;
 
     let mut instructions = Vec::new();
@@ -447,12 +446,6 @@ async fn to_responses_request(
     }
     if let Some(temperature) = temperature {
         obj.insert("temperature".to_string(), json!(temperature));
-    }
-    if let Some(max_completion_tokens) = max_completion_tokens {
-        obj.insert(
-            "max_output_tokens".to_string(),
-            json!(max_completion_tokens),
-        );
     }
     inject_prompt_cache_fields(&mut body, prompt_cache_key);
 
@@ -1174,7 +1167,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn maps_messages_tools_and_limits_to_responses_request() {
+    async fn maps_messages_and_tools_to_responses_request() {
         let req = ChatRequest {
             messages: vec![
                 Message::System {
@@ -1196,7 +1189,6 @@ mod tests {
             },
             parallel_tool_calls: Some(false),
             temperature: Some(0.2),
-            max_completion_tokens: Some(64),
         };
 
         let body = to_responses_request("gpt-test", req, false, None)
@@ -1213,7 +1205,7 @@ mod tests {
             json!({"type":"function","name":"read"})
         );
         assert_eq!(body["parallel_tool_calls"], json!(false));
-        assert_eq!(body["max_output_tokens"], json!(64));
+        assert!(body.get("max_output_tokens").is_none());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1286,6 +1278,7 @@ mod tests {
             provider: "qwen_dashscope_responses".to_string(),
             api: crate::ProviderApi::OpenAiResponses,
             model: "qwen3.5-plus".to_string(),
+            max_output_tokens: None,
             base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
             api_key: None,
         };
@@ -1293,6 +1286,7 @@ mod tests {
             provider: "openai".to_string(),
             api: crate::ProviderApi::OpenAiResponses,
             model: "gpt-5".to_string(),
+            max_output_tokens: None,
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
         };
@@ -1326,7 +1320,6 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
-            max_completion_tokens: None,
         };
 
         let body = to_responses_request("qwen3.5-plus", req, false, None)

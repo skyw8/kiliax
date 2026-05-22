@@ -292,9 +292,6 @@ pub struct ChatRequest {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_completion_tokens: Option<u32>,
 }
 
 impl ChatRequest {
@@ -305,7 +302,6 @@ impl ChatRequest {
             tool_choice: Default::default(),
             parallel_tool_calls: None,
             temperature: None,
-            max_completion_tokens: None,
         }
     }
 }

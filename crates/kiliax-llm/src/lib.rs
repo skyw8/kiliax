@@ -104,6 +104,7 @@ pub struct ProviderRoute {
     pub provider: String,
     pub api: ProviderApi,
     pub model: String,
+    pub max_output_tokens: Option<u32>,
     pub base_url: String,
     pub api_key: Option<String>,
 }
@@ -326,7 +327,6 @@ impl LlmProvider for OpenAICompatibleProvider {
             tool_choice,
             parallel_tool_calls,
             temperature,
-            max_completion_tokens: _,
         } = req;
 
         let started = std::time::Instant::now();
@@ -531,7 +531,6 @@ impl LlmProvider for OpenAICompatibleProvider {
             tool_choice,
             parallel_tool_calls,
             temperature,
-            max_completion_tokens: _,
         } = req;
 
         let started = std::time::Instant::now();
@@ -1059,29 +1058,6 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn openai_chat_body_omits_max_completion_tokens() {
-        let mut req = ChatRequest::new(vec![Message::User {
-            content: UserMessageContent::Text("ping".to_string()),
-            hidden: false,
-        }]);
-        req.max_completion_tokens = Some(1_000_000);
-
-        let body = build_openai_chat_body(
-            "gpt-test",
-            &req.messages,
-            req.tools,
-            &req.tool_choice,
-            req.parallel_tool_calls,
-            req.temperature,
-            false,
-        )
-        .await
-        .unwrap();
-
-        assert!(body.get("max_completion_tokens").is_none());
-    }
-
     #[test]
     fn chat_stream_maps_reasoning_content_to_thinking_delta() {
         let raw = serde_json::json!({
@@ -1202,6 +1178,7 @@ mod tests {
             provider: "proxy".to_string(),
             api: ProviderApi::OpenAiChatCompletions,
             model: "some-thinking-model".to_string(),
+            max_output_tokens: None,
             base_url: "http://127.0.0.1:8000/v1".to_string(),
             api_key: None,
         };
@@ -1214,6 +1191,7 @@ mod tests {
             provider: "openai".to_string(),
             api: ProviderApi::OpenAiChatCompletions,
             model: "gpt-4.1-mini".to_string(),
+            max_output_tokens: None,
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
         };
@@ -1226,6 +1204,7 @@ mod tests {
             provider: "proxy".to_string(),
             api: ProviderApi::OpenAiResponses,
             model: "some-model".to_string(),
+            max_output_tokens: None,
             base_url: "http://127.0.0.1:8000/v1".to_string(),
             api_key: None,
         };

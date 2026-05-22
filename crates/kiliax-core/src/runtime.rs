@@ -11,8 +11,6 @@ use crate::tools::{policy, ToolEngine, ToolError};
 mod streaming;
 pub(crate) mod tool_calls;
 
-const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 1_000_000;
-
 use streaming::{drive_stream_step, normalize_stream_step_tool_calls};
 use tool_calls::{group_tool_calls, normalize_tool_call_ids, ToolCallGroup};
 
@@ -29,14 +27,6 @@ pub enum AgentRuntimeError {
 
     #[error("max steps exceeded: {max_steps}")]
     MaxSteps { max_steps: usize },
-
-    #[error(
-        "LLM output exceeded max completion tokens limit ({max_completion_tokens}) at step {step}"
-    )]
-    MaxCompletionTokens {
-        max_completion_tokens: u32,
-        step: usize,
-    },
 
     #[error("empty assistant message from model at step {step}")]
     EmptyAssistantMessage { step: usize },
@@ -57,7 +47,6 @@ pub struct AgentRuntimeOptions {
     pub parallel_tool_calls: Option<bool>,
     pub tool_error_mode: ToolErrorMode,
     pub temperature: Option<f32>,
-    pub max_completion_tokens: Option<u32>,
     pub auto_compact_token_limit: Option<usize>,
 }
 
@@ -69,7 +58,6 @@ impl Default for AgentRuntimeOptions {
             parallel_tool_calls: None,
             tool_error_mode: ToolErrorMode::ToolMessage,
             temperature: None,
-            max_completion_tokens: Some(DEFAULT_MAX_COMPLETION_TOKENS),
             auto_compact_token_limit: None,
         }
     }
@@ -100,9 +88,6 @@ impl AgentRuntimeOptions {
         if let Some(max_steps) = config.runtime.max_steps {
             options.max_steps = max_steps;
         }
-        if let Some(max_completion_tokens) = config.runtime.max_completion_tokens {
-            options.max_completion_tokens = Some(max_completion_tokens);
-        }
         options.auto_compact_token_limit = config.runtime.auto_compact_token_limit;
 
         let custom_cfg;
@@ -116,9 +101,6 @@ impl AgentRuntimeOptions {
         };
         if let Some(max_steps) = agent_cfg.and_then(|cfg| cfg.max_steps) {
             options.max_steps = max_steps;
-        }
-        if let Some(max_completion_tokens) = agent_cfg.and_then(|cfg| cfg.max_completion_tokens) {
-            options.max_completion_tokens = Some(max_completion_tokens);
         }
         if let Some(auto_compact_token_limit) =
             agent_cfg.and_then(|cfg| cfg.auto_compact_token_limit)
@@ -187,19 +169,10 @@ impl AgentRuntime {
             req.tool_choice = options.tool_choice.clone();
             req.parallel_tool_calls = options.parallel_tool_calls;
             req.temperature = options.temperature;
-            req.max_completion_tokens = options.max_completion_tokens;
 
             let resp = self.llm.chat(req).await?;
 
             let mut assistant = resp.message;
-            if resp.finish_reason == Some(FinishReason::Length) {
-                return Err(AgentRuntimeError::MaxCompletionTokens {
-                    max_completion_tokens: options
-                        .max_completion_tokens
-                        .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS),
-                    step: step + 1,
-                });
-            }
             let tool_calls = match &mut assistant {
                 Message::Assistant { tool_calls, .. } => {
                     normalize_tool_call_ids(step, tool_calls);
@@ -428,7 +401,6 @@ impl AgentRuntime {
                         req.tool_choice = options.tool_choice.clone();
                         req.parallel_tool_calls = options.parallel_tool_calls;
                         req.temperature = options.temperature;
-                        req.max_completion_tokens = options.max_completion_tokens;
 
                         let stream = match llm.chat_stream(req).await {
                             Ok(s) => s,
@@ -447,23 +419,6 @@ impl AgentRuntime {
                         match drive_stream_step(step, stream, &tx).await {
                             Ok(mut step_out) => {
                                 if tx.is_closed() {
-                                    return LoopControl::Return;
-                                }
-                                if step_out.finish_reason == Some(FinishReason::Length) {
-                                    telemetry::metrics::record_run_finished(
-                                        &profile.name,
-                                        "max_completion_tokens",
-                                        step_no as u64,
-                                        started.elapsed(),
-                                    );
-                                    let _ = tx
-                                        .send(Err(AgentRuntimeError::MaxCompletionTokens {
-                                            max_completion_tokens: options
-                                                .max_completion_tokens
-                                                .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS),
-                                            step: step_no,
-                                        }))
-                                        .await;
                                     return LoopControl::Return;
                                 }
                                 normalize_stream_step_tool_calls(step, &mut step_out);
@@ -1064,39 +1019,6 @@ mod tests {
                 ..
             }) if content == "done" && tool_calls.is_empty()
         ));
-    }
-
-    #[test]
-    fn runtime_options_default_to_large_completion_budget() {
-        let options = AgentRuntimeOptions::default();
-
-        assert_eq!(
-            options.max_completion_tokens,
-            Some(DEFAULT_MAX_COMPLETION_TOKENS)
-        );
-    }
-
-    #[test]
-    fn runtime_options_read_max_completion_tokens_from_config() {
-        let config = crate::config::load_from_str(
-            r#"
-providers:
-  test:
-    base_url: http://localhost
-    models: [m]
-runtime:
-  max_completion_tokens: 123
-agents:
-  general:
-    max_completion_tokens: 456
-"#,
-        )
-        .unwrap();
-        let profile = crate::agents::AgentProfile::general();
-
-        let options = AgentRuntimeOptions::from_config(&profile, &config);
-
-        assert_eq!(options.max_completion_tokens, Some(456));
     }
 
     #[test]

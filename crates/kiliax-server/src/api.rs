@@ -467,11 +467,8 @@ pub struct ConfigProviderUpsert {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConfigRuntimeResponse {
     pub runtime_max_steps: Option<usize>,
-    pub runtime_max_completion_tokens: Option<u32>,
     pub agents_plan_max_steps: Option<usize>,
-    pub agents_plan_max_completion_tokens: Option<u32>,
     pub agents_general_max_steps: Option<usize>,
-    pub agents_general_max_completion_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -481,19 +478,10 @@ pub struct ConfigRuntimePatchRequest {
     pub runtime_max_steps: Option<Option<usize>>,
 
     #[serde(default)]
-    pub runtime_max_completion_tokens: Option<Option<u32>>,
-
-    #[serde(default)]
     pub agents_plan_max_steps: Option<Option<usize>>,
 
     #[serde(default)]
-    pub agents_plan_max_completion_tokens: Option<Option<u32>>,
-
-    #[serde(default)]
     pub agents_general_max_steps: Option<Option<usize>>,
-
-    #[serde(default)]
-    pub agents_general_max_completion_tokens: Option<Option<u32>>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

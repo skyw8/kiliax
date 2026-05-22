@@ -54,7 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         hidden: false,
     }]);
     req.temperature = Some(0.2);
-    req.max_completion_tokens = Some(512);
 
     let mut stream = llm.chat_stream(req).await?;
     let mut stdout = io::stdout();

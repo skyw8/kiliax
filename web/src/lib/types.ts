@@ -210,20 +210,14 @@ export interface ConfigProvidersPatchRequest {
 
 export interface ConfigRuntimeResponse {
   runtime_max_steps: number | null;
-  runtime_max_completion_tokens: number | null;
   agents_plan_max_steps: number | null;
-  agents_plan_max_completion_tokens: number | null;
   agents_general_max_steps: number | null;
-  agents_general_max_completion_tokens: number | null;
 }
 
 export interface ConfigRuntimePatchRequest {
   runtime_max_steps?: number | null;
-  runtime_max_completion_tokens?: number | null;
   agents_plan_max_steps?: number | null;
-  agents_plan_max_completion_tokens?: number | null;
   agents_general_max_steps?: number | null;
-  agents_general_max_completion_tokens?: number | null;
 }
 
 export interface SkillEnableSetting {

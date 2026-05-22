@@ -20,7 +20,6 @@ use super::tool_names::{
 use super::{ChatStream, LlmError, LlmProvider, ProviderRoute};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const DEFAULT_MAX_TOKENS: u32 = 1_000_000;
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -82,23 +81,26 @@ impl LlmProvider for AnthropicProvider {
         );
         crate::telemetry::record_generation_start(&span, &self.route.provider, &self.route.model);
 
-        let body = match to_anthropic_request(&self.route.model, req, false).await {
-            Ok(body) => body,
-            Err(err) => {
-                crate::telemetry::metrics::record_llm_call(
-                    &self.route.provider,
-                    &self.route.model,
-                    false,
-                    "error",
-                    started.elapsed(),
-                    None,
-                    None,
-                    None,
-                );
-                crate::telemetry::record_generation_error(&span, false, &err);
-                return Err(err);
-            }
-        };
+        let body =
+            match to_anthropic_request(&self.route.model, self.route.max_output_tokens, req, false)
+                .await
+            {
+                Ok(body) => body,
+                Err(err) => {
+                    crate::telemetry::metrics::record_llm_call(
+                        &self.route.provider,
+                        &self.route.model,
+                        false,
+                        "error",
+                        started.elapsed(),
+                        None,
+                        None,
+                        None,
+                    );
+                    crate::telemetry::record_generation_error(&span, false, &err);
+                    return Err(err);
+                }
+            };
         crate::telemetry::record_generation_input(&span, false, &body);
         let endpoint = self.endpoint();
         let response: Result<ChatResponse, LlmError> = async {
@@ -163,23 +165,26 @@ impl LlmProvider for AnthropicProvider {
         );
         crate::telemetry::record_generation_start(&span, &self.route.provider, &self.route.model);
 
-        let body = match to_anthropic_request(&self.route.model, req, true).await {
-            Ok(body) => body,
-            Err(err) => {
-                crate::telemetry::metrics::record_llm_call(
-                    &self.route.provider,
-                    &self.route.model,
-                    true,
-                    "error",
-                    started.elapsed(),
-                    None,
-                    None,
-                    None,
-                );
-                crate::telemetry::record_generation_error(&span, true, &err);
-                return Err(err);
-            }
-        };
+        let body =
+            match to_anthropic_request(&self.route.model, self.route.max_output_tokens, req, true)
+                .await
+            {
+                Ok(body) => body,
+                Err(err) => {
+                    crate::telemetry::metrics::record_llm_call(
+                        &self.route.provider,
+                        &self.route.model,
+                        true,
+                        "error",
+                        started.elapsed(),
+                        None,
+                        None,
+                        None,
+                    );
+                    crate::telemetry::record_generation_error(&span, true, &err);
+                    return Err(err);
+                }
+            };
         crate::telemetry::record_generation_input(&span, true, &body);
         let endpoint = self.endpoint();
         let headers = self.headers()?;
@@ -322,6 +327,53 @@ struct AnthropicMessagesRequest {
     stream: bool,
 }
 
+fn model_family(model: &str, family: &str) -> bool {
+    model == family
+        || model
+            .strip_prefix(family)
+            .is_some_and(|suffix| suffix.starts_with('-'))
+}
+
+fn max_tokens_for_model(
+    model: &str,
+    configured_max_output_tokens: Option<u32>,
+) -> Result<u32, LlmError> {
+    if let Some(max_output_tokens) = configured_max_output_tokens {
+        return Ok(max_output_tokens);
+    }
+
+    let model = model.trim();
+    if model_family(model, "claude-opus-4-7") || model_family(model, "claude-opus-4-6") {
+        return Ok(128_000);
+    }
+    if model_family(model, "claude-opus-4-5")
+        || model_family(model, "claude-sonnet-4-6")
+        || model_family(model, "claude-sonnet-4-5")
+        || model_family(model, "claude-sonnet-4-20250514")
+        || model_family(model, "claude-haiku-4-5")
+    {
+        return Ok(64_000);
+    }
+    if model_family(model, "claude-opus-4-1") || model_family(model, "claude-opus-4-20250514") {
+        return Ok(32_000);
+    }
+    if model_family(model, "claude-3-7-sonnet") {
+        return Ok(64_000);
+    }
+    if model_family(model, "claude-3-5-sonnet") || model_family(model, "claude-3-5-haiku") {
+        return Ok(8_192);
+    }
+    if model_family(model, "claude-3-opus")
+        || model_family(model, "claude-3-sonnet")
+        || model_family(model, "claude-3-haiku")
+    {
+        return Ok(4_096);
+    }
+    Err(LlmError::InvalidRequest(format!(
+        "Anthropic-compatible model `{model}` requires `max_output_tokens` in its provider model config"
+    )))
+}
+
 #[derive(Debug, Serialize)]
 struct AnthropicRequestMessage {
     role: AnthropicRole,
@@ -409,6 +461,7 @@ fn is_false(value: &bool) -> bool {
 
 async fn to_anthropic_request(
     model: &str,
+    max_output_tokens: Option<u32>,
     req: ChatRequest,
     stream: bool,
 ) -> Result<AnthropicMessagesRequest, LlmError> {
@@ -418,7 +471,6 @@ async fn to_anthropic_request(
         tool_choice,
         parallel_tool_calls,
         temperature,
-        max_completion_tokens,
     } = req;
 
     let mut system_parts = Vec::new();
@@ -519,7 +571,7 @@ async fn to_anthropic_request(
 
     Ok(AnthropicMessagesRequest {
         model: model.to_string(),
-        max_tokens: max_completion_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        max_tokens: max_tokens_for_model(model, max_output_tokens)?,
         messages: out_messages,
         system: (!system_parts.is_empty()).then(|| system_parts.join("\n\n")),
         tools,
@@ -1214,14 +1266,41 @@ mod tests {
     use crate::LlmClient;
     use crate::ProviderApi;
 
+    const TEST_MODEL: &str = "claude-sonnet-4-6";
+
     fn route() -> ProviderRoute {
         ProviderRoute {
             provider: "anthropic".to_string(),
             api: ProviderApi::AnthropicMessages,
             model: "claude-3-5-sonnet-latest".to_string(),
+            max_output_tokens: None,
             base_url: "https://api.anthropic.com/v1".to_string(),
             api_key: Some("key".to_string()),
         }
+    }
+
+    #[test]
+    fn uses_known_anthropic_model_max_tokens() {
+        assert_eq!(
+            max_tokens_for_model("claude-opus-4-7", None).unwrap(),
+            128_000
+        );
+        assert_eq!(
+            max_tokens_for_model("claude-sonnet-4-6", None).unwrap(),
+            64_000
+        );
+        assert_eq!(
+            max_tokens_for_model("claude-haiku-4-5-20251001", None).unwrap(),
+            64_000
+        );
+        assert_eq!(
+            max_tokens_for_model("claude-3-5-sonnet-latest", None).unwrap(),
+            8_192
+        );
+        assert_eq!(
+            max_tokens_for_model("deepseek-v4-pro", Some(384_000)).unwrap(),
+            384_000
+        );
     }
 
     struct TestHttpServer {
@@ -1320,7 +1399,8 @@ mod tests {
         LlmClient::new(ProviderRoute {
             provider: "anthropic".to_string(),
             api: ProviderApi::AnthropicMessages,
-            model: "claude-test".to_string(),
+            model: TEST_MODEL.to_string(),
+            max_output_tokens: None,
             base_url,
             api_key: Some("test-key".to_string()),
         })
@@ -1355,10 +1435,11 @@ mod tests {
             },
             parallel_tool_calls: Some(true),
             temperature: Some(0.2),
-            max_completion_tokens: Some(128),
         };
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
         assert_eq!(json["system"], serde_json::json!("sys\n\ndev"));
         assert_eq!(json["messages"][0]["role"], serde_json::json!("user"));
@@ -1374,20 +1455,23 @@ mod tests {
             json["tool_choice"],
             serde_json::json!({"type": "tool", "name": "read"})
         );
-        assert_eq!(json["max_tokens"], serde_json::json!(128));
+        assert_eq!(json["max_tokens"], serde_json::json!(64_000));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn defaults_max_tokens_to_large_budget() {
+    async fn rejects_anthropic_model_without_known_max_tokens() {
         let req = ChatRequest::new(vec![Message::User {
             content: UserMessageContent::Text("hi".to_string()),
             hidden: false,
         }]);
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
-        let json = serde_json::to_value(body).unwrap();
+        let err = to_anthropic_request("claude-test", None, req, false)
+            .await
+            .unwrap_err();
 
-        assert_eq!(json["max_tokens"], serde_json::json!(1_000_000));
+        assert!(
+            matches!(err, LlmError::InvalidRequest(message) if message.contains("max_output_tokens"))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1406,7 +1490,9 @@ mod tests {
             hidden: false,
         }]);
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
 
         assert_eq!(
@@ -1443,10 +1529,11 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: Some(false),
             temperature: None,
-            max_completion_tokens: None,
         };
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
         assert_eq!(
             json["tool_choice"],
@@ -1485,10 +1572,11 @@ mod tests {
             },
             parallel_tool_calls: None,
             temperature: None,
-            max_completion_tokens: None,
         };
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
         assert_eq!(
             json["tools"][0]["name"],
@@ -1532,10 +1620,11 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
-            max_completion_tokens: None,
         };
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
         assert_eq!(json["messages"][1]["role"], serde_json::json!("assistant"));
         assert_eq!(
@@ -1583,10 +1672,11 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
-            max_completion_tokens: None,
         };
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
 
         assert_eq!(
@@ -1631,10 +1721,11 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
-            max_completion_tokens: None,
         };
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
 
         assert_eq!(
@@ -1682,10 +1773,11 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
-            max_completion_tokens: None,
         };
 
-        let body = to_anthropic_request("claude", req, false).await.unwrap();
+        let body = to_anthropic_request(TEST_MODEL, None, req, false)
+            .await
+            .unwrap();
         let json = serde_json::to_value(body).unwrap();
         assert_eq!(json["messages"].as_array().unwrap().len(), 3);
         assert_eq!(json["messages"][2]["role"], serde_json::json!("user"));

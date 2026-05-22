@@ -49,18 +49,6 @@ pub struct AgentRuntimeConfig {
     #[serde(default, alias = "maxSteps", alias = "max-steps")]
     pub max_steps: Option<usize>,
 
-    /// Maximum number of tokens allowed in one model completion.
-    #[serde(
-        default,
-        alias = "maxCompletionTokens",
-        alias = "max_completion_tokens",
-        alias = "max-completion-tokens",
-        alias = "maxTokens",
-        alias = "max_tokens",
-        alias = "max-tokens"
-    )]
-    pub max_completion_tokens: Option<u32>,
-
     /// Approx token usage threshold triggering auto-compaction of conversation history.
     #[serde(
         default,
@@ -440,6 +428,9 @@ struct ModelConfigFull {
     #[serde(alias = "name", alias = "model")]
     id: String,
 
+    #[serde(default, alias = "maxOutputTokens", alias = "max-output-tokens")]
+    max_output_tokens: Option<u32>,
+
     #[serde(
         default,
         alias = "autoCompactTokenLimit",
@@ -453,6 +444,7 @@ struct ModelConfigFull {
 #[serde(from = "ModelConfigDef")]
 pub struct ModelConfig {
     pub id: String,
+    pub max_output_tokens: Option<u32>,
     pub auto_compact_token_limit: Option<usize>,
 }
 
@@ -460,6 +452,7 @@ impl ModelConfig {
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
+            max_output_tokens: None,
             auto_compact_token_limit: None,
         }
     }
@@ -471,6 +464,7 @@ impl From<ModelConfigDef> for ModelConfig {
             ModelConfigDef::Id(id) => Self::new(id),
             ModelConfigDef::Full(model) => Self {
                 id: model.id,
+                max_output_tokens: model.max_output_tokens,
                 auto_compact_token_limit: model.auto_compact_token_limit,
             },
         }
@@ -482,14 +476,17 @@ impl Serialize for ModelConfig {
     where
         S: serde::Serializer,
     {
-        if self.auto_compact_token_limit.is_none() {
+        if self.max_output_tokens.is_none() && self.auto_compact_token_limit.is_none() {
             return serializer.serialize_str(&self.id);
         }
 
         use serde::ser::SerializeMap;
 
-        let mut map = serializer.serialize_map(Some(2))?;
+        let mut map = serializer.serialize_map(Some(3))?;
         map.serialize_entry("id", &self.id)?;
+        if let Some(limit) = self.max_output_tokens {
+            map.serialize_entry("max_output_tokens", &limit)?;
+        }
         if let Some(limit) = self.auto_compact_token_limit {
             map.serialize_entry("auto_compact_token_limit", &limit)?;
         }
@@ -565,23 +562,27 @@ impl Config {
             ConfigError::Invalid(format!("provider {provider_name:?} not found in providers"))
         })?;
 
-        if !provider.models.is_empty() {
+        let model = if !provider.models.is_empty() {
             let qualified = format!("{provider_name}/{model_name}");
-            let ok = provider
+            let model = provider
                 .models
                 .iter()
-                .any(|m| m.id == model_name || m.id == qualified);
-            if !ok {
+                .find(|m| m.id == model_name || m.id == qualified);
+            if model.is_none() {
                 return Err(ConfigError::Invalid(format!(
                     "model {qualified:?} not found in provider {provider_name:?} models"
                 )));
             }
-        }
+            model
+        } else {
+            None
+        };
 
         Ok(ResolvedModel {
             provider: provider_name.to_string(),
             api: provider.api.clone(),
             model: model_name.to_string(),
+            max_output_tokens: model.and_then(|m| m.max_output_tokens),
             base_url: provider.base_url.clone(),
             api_key: provider.api_key.clone(),
         })
@@ -879,6 +880,21 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
                     m.id
                 )));
             }
+            if m.max_output_tokens.is_some_and(|v| v == 0) {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {name} model {:?} max_output_tokens must be greater than 0",
+                    m.id
+                )));
+            }
+            if p.api == ProviderApi::AnthropicMessages
+                && !model_id_is_claude(&m.id)
+                && m.max_output_tokens.is_none()
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {name} non-Claude Anthropic model {:?} requires max_output_tokens",
+                    m.id
+                )));
+            }
         }
     }
     if let Some(default_model) = &config.default_model {
@@ -927,6 +943,14 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
     validate_mcp_config(&config.mcp)?;
 
     Ok(())
+}
+
+fn model_id_is_claude(model_id: &str) -> bool {
+    model_id
+        .trim()
+        .rsplit('/')
+        .next()
+        .is_some_and(|model| model.starts_with("claude-"))
 }
 
 fn validate_otel_config(cfg: &OtelConfig) -> Result<(), ConfigError> {
@@ -1181,6 +1205,27 @@ mod tests {
         assert!(err
             .to_string()
             .contains("auto_compact_token_limit must be greater than 0"));
+    }
+
+    #[test]
+    fn non_claude_anthropic_model_requires_max_output_tokens() {
+        let err = load_from_str(
+            "providers:\n  p:\n    api: anthropic_messages\n    base_url: https://example.com\n    models:\n      - kimi-k2.5\n",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("requires max_output_tokens"));
+    }
+
+    #[test]
+    fn provider_model_max_output_tokens_resolves_into_route() {
+        let cfg = load_from_str(
+            "providers:\n  p:\n    api: anthropic_messages\n    base_url: https://example.com\n    models:\n      - id: deepseek-v4-pro\n        max_output_tokens: 384000\n",
+        )
+        .unwrap();
+
+        let route = cfg.resolve_model("p/deepseek-v4-pro").unwrap();
+        assert_eq!(route.max_output_tokens, Some(384_000));
     }
 
     #[test]
