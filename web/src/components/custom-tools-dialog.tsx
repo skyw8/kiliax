@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import type {
+  BuiltinToolSummary,
   CustomToolLoadError,
   CustomToolSummary,
   Session,
@@ -27,6 +28,7 @@ function readCustomToolsSettings(session: Session | null, summary: SessionSummar
 export function CustomToolsDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  builtinTools: BuiltinToolSummary[];
   selectedSessionId: string | null;
   session: Session | null;
   sessionSummary: SessionSummary | null;
@@ -40,6 +42,7 @@ export function CustomToolsDialog(props: {
   const {
     open,
     onOpenChange,
+    builtinTools,
     selectedSessionId,
     session,
     sessionSummary,
@@ -103,140 +106,187 @@ export function CustomToolsDialog(props: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Custom Tools</DialogTitle>
+          <DialogTitle>Tools</DialogTitle>
           <DialogDescription>
-            {session ? "Current session custom tools" : "Select a session to edit custom tools"}
+            Builtin tools are available to agents. Custom tools can be changed per session.
           </DialogDescription>
         </DialogHeader>
 
         {showInitialLoading ? (
           <div className="py-10 text-center text-sm text-zinc-500">Loading...</div>
         ) : (
-          <div className="space-y-2">
-            {loadErrors.length ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                <div className="font-medium">Some custom tools failed to load</div>
-                <div className="mt-1 max-h-[180px] space-y-2 overflow-auto pr-1">
-                  {loadErrors.slice(0, 6).map((e) => (
-                    <div
-                      key={`${e.id}:${e.path}`}
-                      className="rounded-md border border-amber-200 bg-white/70 px-2 py-1"
-                    >
-                      <div className="font-mono text-xs text-amber-900">{e.id}</div>
-                      <div className="mt-0.5 break-all font-mono text-[11px] text-amber-700">
-                        {e.path}
-                      </div>
-                      <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] text-amber-900">
-                        {e.error}
-                      </div>
-                    </div>
-                  ))}
-                  {loadErrors.length > 6 ? (
-                    <div className="text-amber-700">+{loadErrors.length - 6} more...</div>
-                  ) : null}
+          <div className="space-y-4">
+            <section className="space-y-2">
+              <div className="flex items-center justify-between gap-3 px-0.5">
+                <div>
+                  <div className="text-sm font-medium text-zinc-900">Builtin</div>
+                  <div className="text-xs text-zinc-500">Read-only runtime tools</div>
                 </div>
+                <div className="text-xs text-zinc-500">{builtinTools.length} tools</div>
               </div>
-            ) : null}
-
-            <label className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2">
-              <div className="text-sm text-zinc-900">Enable by default</div>
-              <input
-                type="checkbox"
-                checked={defaultEnable}
-                disabled={saving || !session}
-                onChange={async (e) => {
-                  const next = e.target.checked;
-                  const prev = defaultEnable;
-                  setDefaultEnable(next);
-                  setSaving(true);
-                  try {
-                    const ok = await patchSession({ custom_tools: { default_enable: next } });
-                    if (!ok) setDefaultEnable(prev);
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-              />
-            </label>
-
-            <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
-              {tools.length ? (
-                <div className="divide-y divide-zinc-200">
-                  {tools.map((tool) => {
-                    const enabled = overrides[tool.id] ?? defaultEnable;
-                    return (
-                      <label
+              <div className="max-h-[240px] overflow-auto rounded-md border border-zinc-200">
+                {builtinTools.length ? (
+                  <div className="divide-y divide-zinc-200">
+                    {builtinTools.map((tool) => (
+                      <div
                         key={tool.id}
-                        className="flex items-center justify-between gap-3 bg-white px-3 py-2"
+                        className="flex items-start justify-between gap-3 bg-zinc-50 px-3 py-2"
                       >
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium text-zinc-900">
                             {tool.name}
                           </div>
-                          <div className="mt-0.5 truncate text-xs text-zinc-600">
+                          <div className="mt-0.5 line-clamp-2 text-xs text-zinc-600">
                             <span className="font-mono">{tool.id}</span>
                             {tool.description ? ` · ${tool.description}` : ""}
                           </div>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={enabled}
-                          disabled={saving || !session}
-                          onChange={async (e) => {
-                            if (!session) return;
-                            const next = e.target.checked;
-                            const prev = overrides[tool.id];
-                            setOverrides((o) => ({ ...o, [tool.id]: next }));
-                            setSaving(true);
-                            try {
-                              const ok = await patchSession({
-                                custom_tools: { overrides: [{ id: tool.id, enable: next }] },
-                              });
-                              if (!ok) {
-                                setOverrides((o) => {
-                                  const copy = { ...o };
-                                  if (prev === undefined) delete copy[tool.id];
-                                  else copy[tool.id] = prev;
-                                  return copy;
-                                });
-                              }
-                            } finally {
-                              setSaving(false);
-                            }
-                          }}
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="bg-white px-3 py-6 text-center text-sm text-zinc-500">
-                  No custom tools
-                </div>
-              )}
-            </div>
+                        <span className="shrink-0 rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-500">
+                          Builtin
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-zinc-50 px-3 py-6 text-center text-sm text-zinc-500">
+                    No builtin tools
+                  </div>
+                )}
+              </div>
+            </section>
 
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!session || defaultsSaving}
-                onClick={async () => {
-                  if (!session) return;
-                  setDefaultsSaving(true);
-                  try {
-                    await saveSelectedSessionDefaults(
-                      { model: false, mcp: false, custom_tools: true },
-                      "Saved current session custom tools as the default.",
-                    );
-                  } finally {
-                    setDefaultsSaving(false);
-                  }
-                }}
-              >
-                Save custom tool defaults
-              </Button>
-            </div>
+            <section className="space-y-2">
+              <div className="px-0.5">
+                <div className="text-sm font-medium text-zinc-900">Custom</div>
+                <div className="text-xs text-zinc-500">
+                  {session ? "Current session custom tools" : "Select a session to edit custom tools"}
+                </div>
+              </div>
+              {loadErrors.length ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <div className="font-medium">Some custom tools failed to load</div>
+                  <div className="mt-1 max-h-[180px] space-y-2 overflow-auto pr-1">
+                    {loadErrors.slice(0, 6).map((e) => (
+                      <div
+                        key={`${e.id}:${e.path}`}
+                        className="rounded-md border border-amber-200 bg-white/70 px-2 py-1"
+                      >
+                        <div className="font-mono text-xs text-amber-900">{e.id}</div>
+                        <div className="mt-0.5 break-all font-mono text-[11px] text-amber-700">
+                          {e.path}
+                        </div>
+                        <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] text-amber-900">
+                          {e.error}
+                        </div>
+                      </div>
+                    ))}
+                    {loadErrors.length > 6 ? (
+                      <div className="text-amber-700">+{loadErrors.length - 6} more...</div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              <label className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2">
+                <div className="text-sm text-zinc-900">Enable by default</div>
+                <input
+                  type="checkbox"
+                  checked={defaultEnable}
+                  disabled={saving || !session}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    const prev = defaultEnable;
+                    setDefaultEnable(next);
+                    setSaving(true);
+                    try {
+                      const ok = await patchSession({ custom_tools: { default_enable: next } });
+                      if (!ok) setDefaultEnable(prev);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                />
+              </label>
+
+              <div className="max-h-[360px] overflow-auto rounded-md border border-zinc-200">
+                {tools.length ? (
+                  <div className="divide-y divide-zinc-200">
+                    {tools.map((tool) => {
+                      const enabled = overrides[tool.id] ?? defaultEnable;
+                      return (
+                        <label
+                          key={tool.id}
+                          className="flex items-center justify-between gap-3 bg-white px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-zinc-900">
+                              {tool.name}
+                            </div>
+                            <div className="mt-0.5 truncate text-xs text-zinc-600">
+                              <span className="font-mono">{tool.id}</span>
+                              {tool.description ? ` · ${tool.description}` : ""}
+                            </div>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            disabled={saving || !session}
+                            onChange={async (e) => {
+                              if (!session) return;
+                              const next = e.target.checked;
+                              const prev = overrides[tool.id];
+                              setOverrides((o) => ({ ...o, [tool.id]: next }));
+                              setSaving(true);
+                              try {
+                                const ok = await patchSession({
+                                  custom_tools: { overrides: [{ id: tool.id, enable: next }] },
+                                });
+                                if (!ok) {
+                                  setOverrides((o) => {
+                                    const copy = { ...o };
+                                    if (prev === undefined) delete copy[tool.id];
+                                    else copy[tool.id] = prev;
+                                    return copy;
+                                  });
+                                }
+                              } finally {
+                                setSaving(false);
+                              }
+                            }}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="bg-white px-3 py-6 text-center text-sm text-zinc-500">
+                    No custom tools
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!session || defaultsSaving}
+                  onClick={async () => {
+                    if (!session) return;
+                    setDefaultsSaving(true);
+                    try {
+                      await saveSelectedSessionDefaults(
+                        { model: false, mcp: false, custom_tools: true },
+                        "Saved current session custom tools as the default.",
+                      );
+                    } finally {
+                      setDefaultsSaving(false);
+                    }
+                  }}
+                >
+                  Save custom tool defaults
+                </Button>
+              </div>
+            </section>
           </div>
         )}
       </DialogContent>

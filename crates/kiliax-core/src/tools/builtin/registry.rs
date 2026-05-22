@@ -28,6 +28,22 @@ pub enum BuiltinToolId {
 }
 
 impl BuiltinToolId {
+    pub const ALL: [Self; 13] = [
+        Self::ReadFile,
+        Self::ListDir,
+        Self::GrepFiles,
+        Self::ViewImage,
+        Self::WebSearch,
+        Self::ShellCommand,
+        Self::WriteStdin,
+        Self::WriteFile,
+        Self::EditFile,
+        Self::ApplyPatch,
+        Self::UpdatePlan,
+        Self::GetGoal,
+        Self::UpdateGoal,
+    ];
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::ReadFile => TOOL_READ_FILE,

@@ -1524,6 +1524,17 @@ impl ServerState {
         Ok(api::Capabilities {
             agents: AgentProfile::list_names(),
             models: list_models(config.as_ref()),
+            builtin_tools: kiliax_core::tools::builtin::BuiltinToolId::ALL
+                .into_iter()
+                .map(|id| {
+                    let definition = id.definition();
+                    api::BuiltinToolSummary {
+                        id: id.name().to_string(),
+                        name: definition.name,
+                        description: definition.description,
+                    }
+                })
+                .collect(),
             mcp_servers: map_mcp_status(self.tools_for_caps.mcp_status().await)
                 .into_iter()
                 .map(mcp_status_to_api)

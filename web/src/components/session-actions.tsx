@@ -39,7 +39,7 @@ export function SessionActionSheet(props: {
           className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
           onClick={onSetGoal}
         >
-          <Flag className="h-5 w-5 text-violet-600" />
+          <Flag className="h-5 w-5 text-emerald-600" />
           Set Goal
         </button>
         <button
@@ -47,7 +47,7 @@ export function SessionActionSheet(props: {
           className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
           onClick={onGoalInfo}
         >
-          <Info className="h-5 w-5 text-violet-600" />
+          <Info className="h-5 w-5 text-blue-600" />
           Goal Info
         </button>
         <button
@@ -55,7 +55,7 @@ export function SessionActionSheet(props: {
           className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-3 text-left text-base text-zinc-900 active:opacity-80"
           onClick={onClearGoal}
         >
-          <XCircle className="h-5 w-5 text-violet-600" />
+          <XCircle className="h-5 w-5 text-zinc-500" />
           Clear Goal
         </button>
         <button
@@ -116,21 +116,21 @@ export function SessionContextMenu(props: {
         className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
         onClick={onSetGoal}
       >
-        <Flag className="h-4 w-4 text-violet-600" />
+        <Flag className="h-4 w-4 text-emerald-600" />
         Set Goal
       </button>
       <button
         className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
         onClick={onGoalInfo}
       >
-        <Info className="h-4 w-4 text-violet-600" />
+        <Info className="h-4 w-4 text-blue-600" />
         Goal Info
       </button>
       <button
         className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100"
         onClick={onClearGoal}
       >
-        <XCircle className="h-4 w-4 text-violet-600" />
+        <XCircle className="h-4 w-4 text-zinc-500" />
         Clear Goal
       </button>
       <button

@@ -1647,7 +1647,7 @@ export default function App() {
       <div className={cn("space-y-1 p-3", sidebarPaneTopPadding)}>
         <Button variant="ghost" className="w-full justify-start gap-2" onClick={onNewSession}>
           <Plus className="h-4 w-4 text-violet-600" />
-          New Session
+          New
         </Button>
         <Button variant="ghost" className="w-full justify-start gap-2" onClick={openSkills}>
           <Sparkles className="h-4 w-4 text-amber-600" />
@@ -1655,7 +1655,7 @@ export default function App() {
         </Button>
         <Button variant="ghost" className="w-full justify-start gap-2" onClick={openCustomTools}>
           <Hammer className="h-4 w-4 text-blue-600" />
-          Custom Tools
+          Tools
         </Button>
         <Button variant="ghost" className="w-full justify-start gap-2" onClick={openMcp}>
           <Plug className="h-4 w-4 text-emerald-600" />
@@ -2018,19 +2018,19 @@ export default function App() {
                 <aside className="self-start lg:sticky lg:top-0">
                   <div className="space-y-3 bg-white/60 px-3 py-3">
                     <div className="flex items-center gap-2 text-sm font-medium text-zinc-900">
-                      <Flag className="h-4 w-4 text-violet-600" />
+                      <Flag className="h-4 w-4 text-emerald-600" />
                       Goal
                     </div>
                     <textarea
                       value={goalDraft}
                       onChange={(e) => setGoalDraft(e.target.value)}
                       placeholder="Set a persistent goal..."
-                      className="min-h-[112px] w-full resize-y rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                      className="min-h-[112px] w-full resize-y rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                     />
                     <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
-                        className="h-8 bg-violet-600 px-3 text-white hover:bg-violet-700"
+                        className="h-8 bg-blue-600 px-3 text-white hover:bg-blue-700"
                         disabled={!selectedId || !goalDraft.trim()}
                         onClick={() => selectedId && setSessionGoal(selectedId, goalDraft)}
                       >
@@ -2402,6 +2402,7 @@ export default function App() {
       <CustomToolsDialog
         open={customToolsOpen}
         onOpenChange={setCustomToolsOpen}
+        builtinTools={capabilities?.builtin_tools ?? []}
         selectedSessionId={selectedId}
         session={session}
         sessionSummary={selectedSummary}

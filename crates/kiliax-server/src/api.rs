@@ -389,7 +389,16 @@ pub struct RunError {
 pub struct Capabilities {
     pub agents: Vec<String>,
     pub models: Vec<String>,
+    pub builtin_tools: Vec<BuiltinToolSummary>,
     pub mcp_servers: Vec<McpServerStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BuiltinToolSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

@@ -168,7 +168,14 @@ export interface MessageListResponse {
 export interface Capabilities {
   agents: string[];
   models: string[];
+  builtin_tools: BuiltinToolSummary[];
   mcp_servers: McpServerStatus[];
+}
+
+export interface BuiltinToolSummary {
+  id: string;
+  name: string;
+  description?: string | null;
 }
 
 export interface ConfigResponse {

@@ -40,7 +40,7 @@ minimal
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + frozen project prompt metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
-- Tools (builtin patch application/MCP dispatch/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
+- Tools (builtin registry/patch application/MCP dispatch/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
   - `read_file`: read a line-numbered UTF-8 text file from the workspace (or allowed skills roots) using `filePath`, `offset`, and `limit`
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
@@ -80,7 +80,7 @@ minimal
 - State (config/session lifecycle/run queue/goal continuation loop/goal usage events with output-token accounting/durable-vs-ephemeral events + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input): `crates/kiliax-server/src/state/domain.rs`
 - Infra (path validation/tmp workspace helpers/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
-- REST/OpenAPI schemas (includes message `usage`, live stream snapshots, server-side folder listing, session default writes, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
+- REST/OpenAPI schemas (includes capabilities builtin tool summaries, message `usage`, live stream snapshots, server-side folder listing, session default writes, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 
 ### crates/kiliax-otel (OpenTelemetry)
@@ -89,7 +89,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + centered composer dock/attached workspace launchers + WS streaming with live snapshot restore/active tool-call reconciliation/session actions/goal controls with live time/token updates + workspace folders list + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
+- Main UI (responsive layout + centered composer dock/attached workspace launchers + WS streaming with live snapshot restore/active tool-call reconciliation/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
