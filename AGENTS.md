@@ -77,7 +77,7 @@ minimal
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
-- State (config/session lifecycle/run queue/goal continuation loop/goal usage events with output-token accounting/durable-vs-ephemeral events + live stream snapshots/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- State (config/session lifecycle/run queue/goal continuation loop/goal usage events with output-token accounting/durable-vs-ephemeral events + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input): `crates/kiliax-server/src/state/domain.rs`
 - Infra (path validation/tmp workspace helpers/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes message `usage`, live stream snapshots, server-side folder listing, session default writes, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
@@ -89,7 +89,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + WS streaming with live snapshot restore/session actions/goal controls with live time/token updates + workspace folders list + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
+- Main UI (responsive layout + WS streaming with live snapshot restore/active tool-call reconciliation/session actions/goal controls with live time/token updates + workspace folders list + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`

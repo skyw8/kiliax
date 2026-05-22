@@ -1782,7 +1782,7 @@ impl LiveSession {
                             content: "".to_string(),
                         });
                 let event_id = self.alloc_event_id();
-                self.bump_stream_snapshot(run, event_id).await;
+                self.finish_tool_call(run, event_id, &msg).await;
                 self.emit_event(domain::Event {
                     event_id,
                     ts: created_at,
@@ -1864,6 +1864,22 @@ impl LiveSession {
         let mut snapshot = self.stream_snapshot.lock().await;
         if let Some(snapshot) = snapshot.as_mut().filter(|s| s.run_id == run.id) {
             snapshot.last_event_id = snapshot.last_event_id.max(last_event_id);
+        }
+    }
+
+    async fn finish_tool_call(
+        &self,
+        run: &domain::Run,
+        last_event_id: u64,
+        message: &domain::Message,
+    ) {
+        let mut snapshot = self.stream_snapshot.lock().await;
+        if let Some(snapshot) = snapshot.as_mut().filter(|s| s.run_id == run.id) {
+            snapshot.last_event_id = snapshot.last_event_id.max(last_event_id);
+            if let domain::Message::Tool { tool_call_id, .. } = message {
+                snapshot.tool_calls.retain(|call| call.id != *tool_call_id);
+                snapshot.tool_started_at.remove(tool_call_id);
+            }
         }
     }
 
@@ -2178,6 +2194,22 @@ mod tests {
         assert!(snapshot.thinking_started_at.is_some());
         assert!(snapshot.assistant_started_at.is_some());
         assert!(snapshot.tool_started_at.contains_key("call-1"));
+
+        live.handle_agent_event(
+            &run,
+            AgentEvent::ToolResult {
+                message: CoreMessage::Tool {
+                    tool_call_id: "call-1".to_string(),
+                    content: "done".to_string(),
+                },
+            },
+        )
+        .await
+        .expect("tool result");
+
+        let snapshot = live.snapshot().await.expect("snapshot").stream.unwrap();
+        assert!(snapshot.tool_calls.is_empty());
+        assert!(!snapshot.tool_started_at.contains_key("call-1"));
 
         live.handle_agent_event(
             &run,

@@ -658,6 +658,10 @@ export default function App() {
           return { ...prev, [toolCallId]: elapsed };
         });
       }
+      setStream((s) => ({
+        ...s,
+        toolCalls: toolCallId ? s.toolCalls.filter((call) => call.id !== toolCallId) : s.toolCalls,
+      }));
       setMessages((m) => [...m, msg as Message]);
       void refreshSessionsIfStale();
       return;
