@@ -134,39 +134,31 @@ impl PromptBuilder {
     }
 
     pub fn build(self) -> Vec<Message> {
-        let mut out = Vec::new();
+        let mut preamble = Vec::new();
 
         if self.include_model_prompt {
             if let Some(prompt) = model_prompt_for(self.model_id.as_deref()) {
-                // Use system role for maximum OpenAI-compatible coverage.
-                out.push(Message::System {
-                    content: prompt.to_string(),
-                });
+                preamble.push(prompt.to_string());
             }
         }
 
         if let Some(prompt) = self.agent_prompt {
-            // Use system role for maximum OpenAI-compatible coverage.
-            out.push(Message::System { content: prompt });
+            preamble.push(prompt);
         }
 
         if self.include_tools_prompt {
-            out.push(Message::System {
-                content: render_tools_prompt(&self.tool_definitions),
-            });
+            preamble.push(render_tools_prompt(&self.tool_definitions));
         }
 
         if let Some(skills) = render_skills_section(&self.skills) {
-            out.push(Message::System { content: skills });
+            preamble.push(skills);
         }
 
         if self.include_environment_prompt {
-            out.push(Message::System {
-                content: render_environment_prompt(
-                    self.workspace_root.as_deref(),
-                    self.model_id.as_deref(),
-                ),
-            });
+            preamble.push(render_environment_prompt(
+                self.workspace_root.as_deref(),
+                self.model_id.as_deref(),
+            ));
         }
 
         if self.include_project_prompt {
@@ -174,10 +166,17 @@ impl PromptBuilder {
                 .project_prompt
                 .unwrap_or_else(|| capture_project_prompt(self.workspace_root.as_deref()));
             if let Some(project) = project.filter(|p| !p.trim().is_empty()) {
-                out.push(Message::System { content: project });
+                preamble.push(project);
             }
         }
 
+        let mut out = Vec::new();
+        if !preamble.is_empty() {
+            // Qwen-family templates can reject any system message after messages[0].
+            out.push(Message::System {
+                content: preamble.join("\n\n"),
+            });
+        }
         out.extend(self.messages);
         out
     }
@@ -400,14 +399,12 @@ mod tests {
             .push_user("hi")
             .build();
 
-        assert_eq!(msgs.len(), 4);
-        assert!(matches!(&msgs[0], Message::System { content } if content.contains("Codex CLI")));
-        assert!(matches!(&msgs[1], Message::System { content } if content == "agent"));
+        assert_eq!(msgs.len(), 2);
         assert!(
-            matches!(&msgs[2], Message::System { content } if content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG))
+            matches!(&msgs[0], Message::System { content } if content.contains("Codex CLI") && content.contains("agent") && content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG))
         );
         assert!(
-            matches!(&msgs[3], Message::User { content: UserMessageContent::Text(content), .. } if content == "hi")
+            matches!(&msgs[1], Message::User { content: UserMessageContent::Text(content), .. } if content == "hi")
         );
     }
 
@@ -552,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn regression_project_prompt_is_last_system_message_before_conversation() {
+    fn regression_project_prompt_is_last_preamble_section_before_conversation() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "project rules").unwrap();
 
@@ -578,52 +575,32 @@ mod tests {
             .push_user("hi")
             .build();
 
-        let env_idx = msgs
-            .iter()
-            .position(
-                |m| matches!(m, Message::System { content } if content.contains(ENV_OPEN_TAG)),
-            )
-            .unwrap();
-        let last_system_idx = msgs
-            .iter()
-            .rposition(|m| matches!(m, Message::System { .. }))
-            .unwrap();
+        let Message::System { content } = &msgs[0] else {
+            panic!("expected leading preamble system message");
+        };
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| matches!(m, Message::System { .. }))
+                .count(),
+            1
+        );
 
-        let tools_idx = msgs
-            .iter()
-            .position(
-                |m| matches!(m, Message::System { content } if content.contains("# Tool Use")),
-            )
-            .unwrap();
+        let tools_idx = content.find("# Tool Use").unwrap();
+        let skills_idx = content.find(SKILLS_INSTRUCTIONS_OPEN_TAG).unwrap();
+        let env_idx = content.find(ENV_OPEN_TAG).unwrap();
+        let project_idx = content.find("# Project Instructions").unwrap();
+
         assert!(tools_idx < env_idx);
-
-        let skills_idx = msgs
-            .iter()
-            .position(|m| {
-                matches!(m, Message::System { content } if content.contains(SKILLS_INSTRUCTIONS_OPEN_TAG))
-            })
-            .unwrap();
         assert!(skills_idx < env_idx);
-
-        let project_idx = msgs
-            .iter()
-            .position(|m| {
-                matches!(m, Message::System { content } if content.contains("# Project Instructions"))
-            })
-            .unwrap();
         assert!(env_idx < project_idx);
-        assert_eq!(project_idx, last_system_idx);
         assert!(matches!(
-            msgs.get(project_idx + 1),
+            msgs.get(1),
             Some(Message::User {
                 content: UserMessageContent::Text(text),
                 ..
             }) if text == "hi"
         ));
 
-        let Message::System { content } = &msgs[env_idx] else {
-            panic!("expected environment prompt to be a system message");
-        };
         assert!(!content.contains("EXTRA_DIRS:"));
     }
 }
