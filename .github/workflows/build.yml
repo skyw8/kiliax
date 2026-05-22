@@ -20,7 +20,7 @@ jobs:
 
       - name: Check release tag
         if: startsWith(github.ref, 'refs/tags/v')
-        run: scripts/check-release-tag.sh "${GITHUB_REF_NAME}"
+        run: scripts/release.sh --check-tag "${GITHUB_REF_NAME}"
 
   build:
     name: build (${{ matrix.target }})
