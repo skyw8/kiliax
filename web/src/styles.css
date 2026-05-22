@@ -11,3 +11,43 @@ body {
   height: 100%;
 }
 
+.composer-dock {
+  container-type: inline-size;
+}
+
+.composer-layout {
+  display: grid;
+  grid-template-columns:
+    minmax(8.75rem, 1fr)
+    minmax(min(16rem, 100%), 56rem)
+    minmax(8.75rem, 1fr);
+  align-items: end;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.composer-input {
+  grid-column: 2;
+}
+
+.composer-tools {
+  grid-column: 3;
+  justify-self: start;
+}
+
+@container (max-width: 42rem) {
+  .composer-layout {
+    grid-template-columns: minmax(0, min(100%, 56rem));
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .composer-input,
+  .composer-tools {
+    grid-column: 1;
+  }
+
+  .composer-tools {
+    justify-self: end;
+  }
+}
