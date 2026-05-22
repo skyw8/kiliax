@@ -21,9 +21,9 @@ const MCP_SEP: &str = "__";
 const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Stdio transport that drains server stderr to avoid corrupting the TUI.
+/// Stdio transport that drains server stderr away from tool output.
 ///
-/// Some MCP servers log to stderr; inheriting it can break our terminal UI.
+/// Some MCP servers log to stderr; inheriting it can leak into the parent process output.
 pub struct QuietStdioTransport {
     child_process: Arc<Mutex<Option<tokio::process::Child>>>,
     tx: tokio::sync::mpsc::Sender<JsonRpcMessage>,
@@ -104,7 +104,7 @@ impl modelcontextprotocol_client::transport::Transport for QuietStdioTransport {
             let mut reader = BufReader::new(stderr);
             let mut line = String::new();
             while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-                // Drain server stderr so it doesn't corrupt the terminal UI.
+                // Drain server stderr so it does not leak into the parent process output.
                 line.clear();
             }
         });
@@ -226,7 +226,7 @@ impl McpHub {
         let res: Result<(), ToolError> = async {
             let (transport, mut rx) = QuietStdioTransport::new(&cfg.command, cfg.args.clone());
             let client = Arc::new(
-                McpClientBuilder::new("kiliax", "0.1.0")
+                McpClientBuilder::new("kiliax", env!("CARGO_PKG_VERSION"))
                     .with_transport(transport)
                     .build()
                     .map_err(|e| ToolError::Mcp(e.to_string()))?,

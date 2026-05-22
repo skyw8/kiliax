@@ -15,7 +15,6 @@ minimal
 - rust
 - [rust-sdk](https://github.com/modelcontextprotocol/rust-sdk) MCP
 - [async-openai](https://github.com/64bit/async-openai) openai compatible API
-- [ratatui](https://github.com/ratatui/ratatui) TUI
 
 - react
 - shadcn
@@ -40,7 +39,7 @@ minimal
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + frozen project prompt metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
-- Tools (builtin registry/patch application/MCP dispatch/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
+- Tools (builtin registry/patch application/MCP dispatch + workspace-version client identity/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
   - `read_file`: read a line-numbered UTF-8 text file from the workspace (or allowed skills roots) using `filePath`, `offset`, and `limit`
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
@@ -51,7 +50,7 @@ minimal
   - `write_file`: write/overwrite a UTF-8 text file using `filePath` and `content`, creating parent directories and preserving UTF-8 BOM
   - `edit_file`: perform opencode-style text edits using `filePath`, `oldString`, `newString`, and `replaceAll`, preserving BOM/line endings and allowing empty `oldString` for whole-file create/overwrite
   - `apply_patch`: apply a stripped-down file-oriented diff envelope (`*** Begin Patch` / `*** End Patch`) for multi-file edits
-  - `update_plan`: update the UI plan (best effort, surfaced in TUI/web)
+  - `update_plan`: update the UI plan (best effort, surfaced in web)
   - `get_goal`: read the active session goal (`SessionGoal`) if present
   - `update_goal`: mark the active session goal complete (`status=complete` only)
   - `web_search`: search the web via Tavily (`web_search.api_key` / `tools.tavily.api_key` in `kiliax.yaml`, fallback `TAVILY_API_KEY`)
@@ -64,13 +63,11 @@ minimal
 - OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/openai_responses.rs`
 - Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + Claude/configured model max-token resolution + thinking block preservation/replay + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/anthropic.rs`
 
-### crates/kiliax-cli (TUI)
+### crates/kiliax-cli (CLI)
 
-- UI + event loop + slash commands + session bootstrap + local session goal CLI commands: `crates/kiliax-cli/src/main.rs`
-- Slash command definitions + popup: `crates/kiliax-cli/src/slash_command.rs`
-- App state + render pipeline + token usage display + session-local settings changes: `crates/kiliax-cli/src/app/`
-- Terminal init + backend: `crates/kiliax-cli/src/terminal.rs`
+- CLI command routing + local session goal commands: `crates/kiliax-cli/src/main.rs`
 - Server daemon control: `crates/kiliax-cli/src/daemon.rs`
+- Foreground server run argument parsing: `crates/kiliax-cli/src/server_run_args.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
@@ -116,19 +113,6 @@ minimal
 - Implementation: patch outbound JSON in `crates/kiliax-llm/src/patches.rs` (`inject_reasoning_content_for_tool_calls(...)`) and retry once when the provider returns this specific error.
 - Provider routing: enable the compatibility field by default for OpenAI Chat Completions-compatible providers, but skip official OpenAI Chat Completions because `reasoning_content` is not part of the standard OpenAI message schema (see `should_inject_reasoning_content(...)`).
 
-### TUI
-
-Subsequent modifications must remain consistent:
-- user bubble: history area rendering should match the input box style (no background + top/bottom padding)
-- thinking: displayed in gray italics; can be streamed, but **must not** interleave with body output; body output should close/ignore subsequent thinking deltas once started
-- status bar: at the bottom of the input box, showing status/agent_name/model_name
-- compact output: avoid introducing extra blank lines (especially those caused by thinking/streaming rendering)
-- follow a borderless design, simplify the UI
-
-#### color
-- prefer blue and purple highlights, followed by orange and green
-- color usage scenarios: headers in purple; selected in blue, unselected in white; disabled in gray, enabled in white
-
 ### Web
 
 - The session status badge (e.g. `step 1`) in the left sidebar must display in a single line and must not wrap to two lines
@@ -138,13 +122,7 @@ Subsequent modifications must remain consistent:
 - All features must be designed with remote server usage in mind; the web UI may be running against a remote `kiliax server` rather than localhost
 - Example: file/folder picking must use a server-side web picker (not a native file picker), because native pickers can only access the browser's local filesystem, not the remote server's filesystem
 
-
-## dev ENV
-
-[tui env](./ENV.md)  to check stty and $TERM
-
 ## ATTENTION
 
 - After modifying code, update the arch section in AGENTS.md, only describing these core code parts
-- Prioritize best practices, and take compatibility with common terminals into account (especially VSCode WSL / xterm.js)
 - **Do not maintain compatibility with old interfaces or old code—delete and refactor directly**

@@ -594,7 +594,7 @@ mod tests {
     fn local_log_file_failure_is_non_fatal() {
         let parent_as_file = unique_tmp_path("kiliax_otel_test_parent_is_file");
         std::fs::write(&parent_as_file, b"not a dir").unwrap();
-        let log_path = parent_as_file.join("tui.jsonl");
+        let log_path = parent_as_file.join("local.jsonl");
 
         let cfg = kiliax_core::config::Config::default();
         let res = init(

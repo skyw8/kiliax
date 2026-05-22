@@ -329,7 +329,7 @@ impl LiveSession {
                 .map_err(ApiError::internal_error)?;
         }
 
-        // Ensure meta reflects current defaults for compatibility with TUI resume.
+        // Ensure meta reflects current defaults when a session is resumed.
         {
             let mut session = live.session.lock().await;
             session.meta.agent = settings.agent.clone();
