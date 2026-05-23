@@ -167,9 +167,16 @@ export interface MessageListResponse {
 
 export interface Capabilities {
   agents: string[];
+  agent_errors?: AgentLoadError[];
   models: string[];
   builtin_tools: BuiltinToolSummary[];
   mcp_servers: McpServerStatus[];
+}
+
+export interface AgentLoadError {
+  id: string;
+  path: string;
+  error: string;
 }
 
 export interface BuiltinToolSummary {

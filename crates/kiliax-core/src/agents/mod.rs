@@ -4,6 +4,8 @@ mod general;
 mod master;
 mod plan;
 
+pub use custom::CustomAgentDiscoveryError;
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -100,21 +102,21 @@ impl AgentProfile {
     }
 
     pub fn list_names() -> Vec<String> {
+        Self::list_names_with_errors().0
+    }
+
+    pub fn list_names_with_errors() -> (Vec<String>, Vec<CustomAgentDiscoveryError>) {
         let mut out = vec![
             "explore".to_string(),
             "general".to_string(),
             "plan".to_string(),
             "master".to_string(),
         ];
-        out.extend(
-            custom::discover_custom_agents()
-                .items
-                .into_iter()
-                .map(|profile| profile.name),
-        );
+        let discovered = custom::discover_custom_agents();
+        out.extend(discovered.items.into_iter().map(|profile| profile.name));
         out.sort();
         out.dedup();
-        out
+        (out, discovered.errors)
     }
 
     pub fn spawnable_subagents() -> Vec<Self> {

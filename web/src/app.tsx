@@ -246,6 +246,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const { alerts, pushAlert, closeAlert, clearAlerts } = useAlerts();
   const seenMermaidAlertKeysRef = useRef<Set<string>>(new Set());
+  const seenAgentErrorKeysRef = useRef<Set<string>>(new Set());
 
   const lastEventIdRef = useRef(0);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -409,6 +410,28 @@ export default function App() {
     try {
       const caps = await api.getCapabilities();
       setCapabilities(caps);
+      const agentErrors = caps.agent_errors ?? [];
+      if (agentErrors.length) {
+        const key = agentErrors
+          .map((e) => `${e.id}\u0000${e.path}\u0000${e.error}`)
+          .sort()
+          .join("\u0001");
+        if (!seenAgentErrorKeysRef.current.has(key)) {
+          seenAgentErrorKeysRef.current.add(key);
+          pushAlert({
+            id: newAlertId("agent"),
+            level: "error",
+            title: "Agent load failed",
+            subtitle:
+              agentErrors.length === 1
+                ? agentErrors[0].id
+                : `${agentErrors.length} agents failed`,
+            message: agentErrors
+              .map((e) => `${e.id}: ${e.error}\n${e.path}`)
+              .join("\n\n"),
+          });
+        }
+      }
       setAuthError(null);
     } catch (err) {
       handleApiError(err);

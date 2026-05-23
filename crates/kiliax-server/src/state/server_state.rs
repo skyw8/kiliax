@@ -1523,8 +1523,17 @@ impl ServerState {
 
     pub async fn get_capabilities(&self) -> Result<api::Capabilities, ApiError> {
         let config = self.config_snapshot();
+        let (agents, agent_errors) = AgentProfile::list_names_with_errors();
         Ok(api::Capabilities {
-            agents: AgentProfile::list_names(),
+            agents,
+            agent_errors: agent_errors
+                .into_iter()
+                .map(|e| api::AgentLoadError {
+                    id: e.id,
+                    path: e.path.display().to_string(),
+                    error: e.error,
+                })
+                .collect(),
             models: list_models(config.as_ref()),
             builtin_tools: kiliax_core::tools::builtin::BuiltinToolId::ALL
                 .into_iter()

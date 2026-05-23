@@ -388,9 +388,18 @@ pub struct RunError {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Capabilities {
     pub agents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_errors: Vec<AgentLoadError>,
     pub models: Vec<String>,
     pub builtin_tools: Vec<BuiltinToolSummary>,
     pub mcp_servers: Vec<McpServerStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AgentLoadError {
+    pub id: String,
+    pub path: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
