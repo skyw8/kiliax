@@ -1,7 +1,7 @@
 mod custom;
 mod general;
-mod plan;
 mod master;
+mod plan;
 
 use std::collections::BTreeSet;
 

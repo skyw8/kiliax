@@ -43,7 +43,4 @@ fn permissions() -> Permissions {
     }
 }
 
-const PROMPT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/master.md"
-));
+const PROMPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/master.md"));

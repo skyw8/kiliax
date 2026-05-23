@@ -1602,8 +1602,15 @@ impl LiveSession {
         }
 
         let session = self.session.lock().await;
+        let fork_end = session
+            .messages
+            .iter()
+            .rposition(|message| matches!(message, CoreMessage::User { hidden: false, .. }))
+            .unwrap_or(session.messages.len());
         let mut filtered = session
             .messages
+            .get(..fork_end)
+            .unwrap_or(&session.messages)
             .iter()
             .filter_map(|message| match message {
                 CoreMessage::User { content, hidden } if !hidden => Some(CoreMessage::User {
@@ -3027,10 +3034,25 @@ mod tests {
                 None,
                 Some(workspace_root.display().to_string()),
                 Vec::new(),
-                vec![CoreMessage::User {
-                    content: UserMessageContent::Text("coordinate".to_string()),
-                    hidden: false,
-                }],
+                vec![
+                    CoreMessage::User {
+                        content: UserMessageContent::Text(
+                            "prior context: keep weather replies concise".to_string(),
+                        ),
+                        hidden: false,
+                    },
+                    CoreMessage::Assistant {
+                        content: Some("ack".to_string()),
+                        reasoning_content: None,
+                        tool_calls: Vec::new(),
+                        usage: None,
+                        provider_metadata: None,
+                    },
+                    CoreMessage::User {
+                        content: UserMessageContent::Text("coordinate".to_string()),
+                        hidden: false,
+                    },
+                ],
             )
             .await
             .expect("session");
@@ -3128,6 +3150,55 @@ mod tests {
             .await
             .expect("same path in another root");
         assert_eq!(second_spawned.task_name, "/root/worker");
+
+        let forked = live
+            .spawn_multi_agent(
+                server.multi_agent_control.clone(),
+                core_ma::SpawnAgentArgs {
+                    task_name: "forked".to_string(),
+                    message: "check child context".to_string(),
+                    agent_type: Some("plan".to_string()),
+                    model_id: None,
+                    fork_turns: Some("all".to_string()),
+                },
+            )
+            .await
+            .expect("forked spawn");
+        let forked_id = SessionId::parse(&forked.session_id).expect("forked session id");
+        let forked_live = server
+            .multi_agent_control
+            .live_for_session(&forked_id)
+            .await
+            .expect("forked live");
+        let queued_prompt = {
+            let queue = forked_live.queue.lock().await;
+            let Some(QueuedRun { run }) = queue.front() else {
+                panic!("forked child should have queued initial run");
+            };
+            match &run.input {
+                domain::RunInput::Text { text, .. } => text.clone(),
+                other => panic!("unexpected queued input: {other:?}"),
+            }
+        };
+        assert_eq!(queued_prompt, "check child context");
+
+        let forked_state = server.store.load(&forked_id).await.expect("forked state");
+        let forked_text = forked_state
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                CoreMessage::User {
+                    content: UserMessageContent::Text(text),
+                    ..
+                } => Some(text.as_str()),
+                CoreMessage::Assistant { content, .. } => content.as_deref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(forked_text.contains("prior context: keep weather replies concise"));
+        assert!(forked_text.contains("ack"));
+        assert!(!forked_text.contains("coordinate"));
 
         let listed = live
             .list_multi_agents(

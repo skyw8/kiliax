@@ -214,7 +214,7 @@ pub fn spawn_agent_tool_definition() -> ToolDefinition {
                 },
                 "fork_turns": {
                     "type": "string",
-                    "description": "Context fork mode: none, all, or a positive integer string. Defaults to all."
+                    "description": "Completed-history fork mode: none, all, or a positive integer string. The current user turn is excluded. Defaults to all."
                 }
             },
             "required": ["task_name", "message"],
