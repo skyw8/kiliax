@@ -9,6 +9,7 @@ pub(super) fn profile() -> AgentProfile {
         kind: AgentKind::General,
         source: AgentSource::Builtin,
         name: "master".to_string(),
+        subagent: true,
         display_name: Some("Master".to_string()),
         description: Some("Primary agent with subagent delegation tools.".to_string()),
         developer_prompt: PROMPT.to_string(),

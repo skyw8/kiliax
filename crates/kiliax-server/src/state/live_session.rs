@@ -1353,6 +1353,11 @@ impl LiveSession {
         let child_profile = AgentProfile::from_name(&agent_type).ok_or_else(|| {
             ToolError::InvalidCommand(format!("agent not supported: {agent_type}"))
         })?;
+        if !child_profile.subagent {
+            return Err(ToolError::InvalidCommand(format!(
+                "agent is not spawnable: {agent_type}"
+            )));
+        }
         let parent_profile = AgentProfile::from_name(&parent_settings.agent).ok_or_else(|| {
             ToolError::InvalidCommand(format!("agent not supported: {}", parent_settings.agent))
         })?;

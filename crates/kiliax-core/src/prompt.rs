@@ -681,6 +681,6 @@ mod tests {
         assert!(content.contains("- general:"));
         assert!(content.contains("- plan:"));
         assert!(content.contains("- explore:"));
-        assert!(!content.contains("- master:"));
+        assert!(content.contains("- master:"));
     }
 }

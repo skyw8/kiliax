@@ -9,6 +9,7 @@ pub(super) fn profile() -> AgentProfile {
         kind: AgentKind::General,
         source: AgentSource::Builtin,
         name: "general".to_string(),
+        subagent: true,
         display_name: Some("General".to_string()),
         description: Some("General-purpose agent.".to_string()),
         developer_prompt: PROMPT.to_string(),

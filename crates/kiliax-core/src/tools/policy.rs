@@ -134,6 +134,7 @@ mod tests {
             kind: AgentKind::Custom,
             source: AgentSource::Custom,
             name: "custom".to_string(),
+            subagent: false,
             display_name: None,
             description: None,
             developer_prompt: "prompt".to_string(),

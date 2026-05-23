@@ -53,6 +53,7 @@ pub struct AgentProfile {
     pub kind: AgentKind,
     pub source: AgentSource,
     pub name: String,
+    pub subagent: bool,
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub developer_prompt: String,
@@ -117,19 +118,19 @@ impl AgentProfile {
     }
 
     pub fn spawnable_subagents() -> Vec<Self> {
-        let mut out = vec![Self::general(), Self::plan(), Self::explore()];
+        let mut out = vec![
+            Self::explore(),
+            Self::general(),
+            Self::master(),
+            Self::plan(),
+        ];
         out.extend(
             custom::discover_custom_agents()
                 .items
                 .into_iter()
-                .filter(|profile| {
-                    profile.name != "master"
-                        && !profile.tools.toolsets.contains(&AgentToolset::MultiAgent)
-                }),
+                .filter(|profile| profile.subagent),
         );
-        out.retain(|profile| {
-            profile.name != "master" && !profile.tools.toolsets.contains(&AgentToolset::MultiAgent)
-        });
+        out.retain(|profile| profile.subagent);
         out
     }
 }
@@ -207,6 +208,7 @@ mod tests {
 
         assert_eq!(profile.kind, AgentKind::Plan);
         assert_eq!(profile.name, "explore");
+        assert!(profile.subagent);
         assert_eq!(profile.tools.builtin, plan.tools.builtin);
         assert_eq!(profile.permissions, plan.permissions);
         assert!(!profile.tools.toolsets.contains(&AgentToolset::Goal));
@@ -219,10 +221,24 @@ mod tests {
     }
 
     #[test]
+    fn builtin_agents_are_spawnable_subagents() {
+        let names = AgentProfile::spawnable_subagents()
+            .into_iter()
+            .map(|profile| profile.name)
+            .collect::<BTreeSet<_>>();
+
+        assert!(names.contains("explore"));
+        assert!(names.contains("general"));
+        assert!(names.contains("master"));
+        assert!(names.contains("plan"));
+    }
+
+    #[test]
     fn from_name_recognizes_master() {
         let profile = AgentProfile::from_name("master").unwrap();
         assert_eq!(profile.kind, AgentKind::General);
         assert_eq!(profile.name, "master");
+        assert!(profile.subagent);
         assert!(profile.tools.toolsets.contains(&AgentToolset::Goal));
         assert!(profile.tools.toolsets.contains(&AgentToolset::MultiAgent));
     }

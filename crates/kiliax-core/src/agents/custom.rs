@@ -31,6 +31,8 @@ pub struct CustomAgentDiscovery {
 struct CustomAgentManifest {
     name: String,
     #[serde(default)]
+    subagent: bool,
+    #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
     description: Option<String>,
@@ -179,6 +181,7 @@ fn load_custom_agent(id: &str, dir: &Path, manifest_path: &Path) -> Result<Agent
         kind: AgentKind::Custom,
         source: AgentSource::Custom,
         name: name.to_string(),
+        subagent: manifest.subagent,
         display_name: manifest
             .display_name
             .map(|s| s.trim().to_string())
@@ -283,4 +286,50 @@ fn is_valid_agent_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_agent(dir: &Path, name: &str, subagent_line: &str) -> PathBuf {
+        let agent_dir = dir.join(name);
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join(DEFAULT_PROMPT), "custom prompt").unwrap();
+        std::fs::write(
+            agent_dir.join(MANIFEST),
+            format!(
+                r#"name: {name}
+{subagent_line}tools:
+  builtin:
+    - read_file
+permissions:
+  file_read: true
+  file_write: false
+  shell:
+    mode: deny_all
+"#
+            ),
+        )
+        .unwrap();
+        agent_dir
+    }
+
+    #[test]
+    fn load_custom_agent_reads_subagent_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = write_agent(dir.path(), "scout", "subagent: true\n");
+        let profile = load_custom_agent("scout", &agent_dir, &agent_dir.join(MANIFEST)).unwrap();
+
+        assert!(profile.subagent);
+    }
+
+    #[test]
+    fn load_custom_agent_defaults_subagent_to_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = write_agent(dir.path(), "private", "");
+        let profile = load_custom_agent("private", &agent_dir, &agent_dir.join(MANIFEST)).unwrap();
+
+        assert!(!profile.subagent);
+    }
 }

@@ -7,6 +7,7 @@ pub(super) fn profile() -> AgentProfile {
         kind: AgentKind::Plan,
         source: AgentSource::Builtin,
         name: "explore".to_string(),
+        subagent: true,
         display_name: Some("Explore".to_string()),
         description: Some("Fast read-only codebase exploration. Use for finding files by patterns, searching code for keywords, or answering code structure questions; specify the desired thoroughness when calling.".to_string()),
         developer_prompt: PROMPT.to_string(),

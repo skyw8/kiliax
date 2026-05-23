@@ -7,6 +7,7 @@ pub(super) fn profile() -> AgentProfile {
         kind: AgentKind::Plan,
         source: AgentSource::Builtin,
         name: "plan".to_string(),
+        subagent: true,
         display_name: Some("Plan".to_string()),
         description: Some("Planning-only agent.".to_string()),
         developer_prompt: PROMPT.to_string(),
