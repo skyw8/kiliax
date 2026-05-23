@@ -14,6 +14,7 @@ use crate::protocol::{ToolCall, ToolDefinition};
 use crate::tools::ToolError;
 
 const CUSTOM_PREFIX: &str = "custom__";
+const CUSTOM_TOOL_DIR: &str = "tools";
 const MANIFEST: &str = "TOOL.yaml";
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_STDOUT_LINE: usize = 256 * 1024;
@@ -423,8 +424,12 @@ fn enabled(config: &CustomToolsConfig, name: &str) -> bool {
 
 fn custom_tool_roots() -> Vec<PathBuf> {
     dirs::home_dir()
-        .map(|home| vec![home.join(".kiliax").join("custom-tools")])
+        .map(|home| vec![custom_tool_root_for_home(&home)])
         .unwrap_or_default()
+}
+
+fn custom_tool_root_for_home(home: &Path) -> PathBuf {
+    home.join(".kiliax").join(CUSTOM_TOOL_DIR)
 }
 
 fn is_valid_tool_name(name: &str) -> bool {
@@ -432,4 +437,17 @@ fn is_valid_tool_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_tool_root_uses_tools_directory() {
+        assert_eq!(
+            custom_tool_root_for_home(Path::new("/home/alice")),
+            PathBuf::from("/home/alice/.kiliax/tools")
+        );
+    }
 }
