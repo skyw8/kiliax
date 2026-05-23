@@ -162,7 +162,7 @@ fn load_custom_agent(id: &str, dir: &Path, manifest_path: &Path) -> Result<Agent
     if name != id {
         return Err("agent name must match its directory name".into());
     }
-    if matches!(name, "general" | "plan") {
+    if matches!(name, "explore" | "general" | "master" | "plan") {
         return Err("custom agent cannot override a built-in agent".into());
     }
 

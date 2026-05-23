@@ -1,4 +1,5 @@
 mod custom;
+mod explore;
 mod general;
 mod master;
 mod plan;
@@ -65,6 +66,10 @@ impl AgentProfile {
         plan::profile()
     }
 
+    pub fn explore() -> Self {
+        explore::profile()
+    }
+
     pub fn general() -> Self {
         general::profile()
     }
@@ -85,6 +90,7 @@ impl AgentProfile {
         }
 
         match name {
+            "explore" => Some(Self::explore()),
             "plan" => Some(Self::plan()),
             "general" => Some(Self::general()),
             "master" => Some(Self::master()),
@@ -94,6 +100,7 @@ impl AgentProfile {
 
     pub fn list_names() -> Vec<String> {
         let mut out = vec![
+            "explore".to_string(),
             "general".to_string(),
             "plan".to_string(),
             "master".to_string(),
@@ -106,6 +113,23 @@ impl AgentProfile {
         );
         out.sort();
         out.dedup();
+        out
+    }
+
+    pub fn spawnable_subagents() -> Vec<Self> {
+        let mut out = vec![Self::general(), Self::plan(), Self::explore()];
+        out.extend(
+            custom::discover_custom_agents()
+                .items
+                .into_iter()
+                .filter(|profile| {
+                    profile.name != "master"
+                        && !profile.tools.toolsets.contains(&AgentToolset::MultiAgent)
+                }),
+        );
+        out.retain(|profile| {
+            profile.name != "master" && !profile.tools.toolsets.contains(&AgentToolset::MultiAgent)
+        });
         out
     }
 }
@@ -174,6 +198,24 @@ mod tests {
         assert_eq!(profile.kind, AgentKind::Plan);
         assert_eq!(profile.name, "plan");
         assert!(!profile.tools.toolsets.contains(&AgentToolset::Goal));
+    }
+
+    #[test]
+    fn from_name_recognizes_explore() {
+        let profile = AgentProfile::from_name("explore").unwrap();
+        let plan = AgentProfile::plan();
+
+        assert_eq!(profile.kind, AgentKind::Plan);
+        assert_eq!(profile.name, "explore");
+        assert_eq!(profile.tools.builtin, plan.tools.builtin);
+        assert_eq!(profile.permissions, plan.permissions);
+        assert!(!profile.tools.toolsets.contains(&AgentToolset::Goal));
+        assert!(!profile.tools.toolsets.contains(&AgentToolset::MultiAgent));
+    }
+
+    #[test]
+    fn list_names_includes_explore() {
+        assert!(AgentProfile::list_names().contains(&"explore".to_string()));
     }
 
     #[test]

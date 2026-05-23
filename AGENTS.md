@@ -25,7 +25,7 @@ minimal
 
 ### crates/kiliax-core (core library)
 
-- Agents + tool permissions + built-in master + goal/multi-agent toolsets: `crates/kiliax-core/src/agents/`
+- Agents + tool permissions + built-in master/explore + goal/multi-agent toolsets: `crates/kiliax-core/src/agents/`
 - Context compaction (auto + `/compact`, tool call/result normalization + tool output truncation): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
 - Config + model/agent defaults + provider-model max-output/auto-compact limits + multi-agent limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
@@ -34,7 +34,7 @@ minimal
 - LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
 - Provider-neutral message history sanitization + request-safety helpers: `crates/kiliax-core/src/history.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
-- Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
+- Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + available subagent descriptions + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization + empty assistant guard: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`

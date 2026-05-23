@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::agents::AgentProfile;
+use crate::agents::{AgentProfile, AgentToolset};
 use crate::protocol::{Message, ToolDefinition, UserMessageContent};
 use crate::tools::skills::Skill;
 use crate::tools::{tool_parallelism, ToolParallelism};
@@ -28,6 +28,7 @@ pub struct PromptBuilder {
     include_tools_prompt: bool,
     include_project_prompt: bool,
     project_prompt: Option<Option<String>>,
+    agent_profile: Option<AgentProfile>,
     tool_definitions: Vec<ToolDefinition>,
     skills: Vec<Skill>,
     messages: Vec<Message>,
@@ -44,6 +45,7 @@ impl PromptBuilder {
             include_tools_prompt: true,
             include_project_prompt: true,
             project_prompt: None,
+            agent_profile: None,
             tool_definitions: Vec::new(),
             skills: Vec::new(),
             messages: Vec::new(),
@@ -51,7 +53,9 @@ impl PromptBuilder {
     }
 
     pub fn for_agent(profile: &AgentProfile) -> Self {
-        Self::new().with_agent_prompt(profile.developer_prompt.clone())
+        Self::new()
+            .with_agent_prompt(profile.developer_prompt.clone())
+            .with_agent_profile(profile.clone())
     }
 
     pub fn with_workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
@@ -91,6 +95,11 @@ impl PromptBuilder {
 
     pub fn with_project_prompt(mut self, prompt: Option<String>) -> Self {
         self.project_prompt = Some(prompt);
+        self
+    }
+
+    pub fn with_agent_profile(mut self, profile: AgentProfile) -> Self {
+        self.agent_profile = Some(profile);
         self
     }
 
@@ -152,15 +161,21 @@ impl PromptBuilder {
             preamble.push(render_tools_prompt(&self.tool_definitions));
         }
 
+        let subagents_supported = self
+            .tool_definitions
+            .iter()
+            .any(|tool| tool.name == crate::tools::builtin::TOOL_SPAWN_AGENT);
+        if let Some(section) =
+            render_available_subagents(self.agent_profile.as_ref(), subagents_supported)
+        {
+            preamble.push(section);
+        }
+
         if let Some(skills) = render_skills_section(&self.skills) {
             preamble.push(skills);
         }
 
         if self.include_environment_prompt {
-            let subagents_supported = self
-                .tool_definitions
-                .iter()
-                .any(|tool| tool.name == crate::tools::builtin::TOOL_SPAWN_AGENT);
             preamble.push(render_environment_prompt(
                 self.workspace_root.as_deref(),
                 self.model_id.as_deref(),
@@ -358,6 +373,31 @@ fn render_tools_prompt(tools: &[ToolDefinition]) -> String {
     lines.push("- Only parallelize independent tool calls.".to_string());
 
     lines.join("\n")
+}
+
+fn render_available_subagents(
+    profile: Option<&AgentProfile>,
+    subagents_supported: bool,
+) -> Option<String> {
+    let profile = profile?;
+    if !subagents_supported || !profile.tools.toolsets.contains(&AgentToolset::MultiAgent) {
+        return None;
+    }
+
+    let mut lines = vec![
+        "## Available Subagents".to_string(),
+        "Choose `spawn_agent.agent_type` from this list when delegating.".to_string(),
+    ];
+    for subagent in AgentProfile::spawnable_subagents() {
+        let description = subagent
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("No description.");
+        lines.push(format!("- {}: {description}", subagent.name));
+    }
+    Some(lines.join("\n"))
 }
 
 fn render_skills_section(skills: &[Skill]) -> Option<String> {
@@ -620,5 +660,27 @@ mod tests {
         ));
 
         assert!(!content.contains("EXTRA_DIRS:"));
+    }
+
+    #[test]
+    fn master_prompt_lists_available_subagents_when_multi_agent_is_available() {
+        let msgs = PromptBuilder::for_agent(&AgentProfile::master())
+            .include_model_prompt(false)
+            .include_tools_prompt(false)
+            .include_environment_prompt(false)
+            .include_project_prompt(false)
+            .with_tools(vec![
+                crate::tools::builtin::multi_agents::spawn_agent_tool_definition(),
+            ])
+            .build();
+
+        let Message::System { content } = &msgs[0] else {
+            panic!("expected leading preamble system message");
+        };
+        assert!(content.contains("## Available Subagents"));
+        assert!(content.contains("- general:"));
+        assert!(content.contains("- plan:"));
+        assert!(content.contains("- explore:"));
+        assert!(!content.contains("- master:"));
     }
 }

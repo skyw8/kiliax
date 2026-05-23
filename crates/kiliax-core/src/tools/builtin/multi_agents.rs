@@ -206,7 +206,7 @@ pub fn spawn_agent_tool_definition() -> ToolDefinition {
                 },
                 "agent_type": {
                     "type": "string",
-                    "description": "Optional agent profile name. Defaults to general."
+                    "description": "Optional agent profile name. Defaults to general. Choose from the Available Subagents section in the system prompt."
                 },
                 "model_id": {
                     "type": "string",
