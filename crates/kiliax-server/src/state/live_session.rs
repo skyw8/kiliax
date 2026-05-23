@@ -7,14 +7,16 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
-use kiliax_core::agents::AgentProfile;
+use kiliax_core::agents::{AgentProfile, AgentToolset};
 use kiliax_core::compact;
 use kiliax_core::config::Config;
 use kiliax_core::protocol::{Message as CoreMessage, UserContentPart, UserMessageContent};
 use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
 use kiliax_core::session::{FileSessionStore, SessionId, SessionMcpServerSetting, SessionState};
 use kiliax_core::session::{SessionGoal, SessionGoalStatus};
-use kiliax_core::tools::ToolEngine;
+use kiliax_core::tools::builtin::multi_agents as core_ma;
+use kiliax_core::tools::{Permissions, ShellPermissions};
+use kiliax_core::tools::{ToolEngine, ToolError};
 use tokio::sync::{broadcast, watch, Mutex, Notify};
 use tokio_stream::StreamExt;
 use tracing::{Instrument, Span};
@@ -22,6 +24,7 @@ use tracing::{Instrument, Span};
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{validate_client_extra_workspace_roots, validate_client_workspace_root};
 
+use super::multi_agent::{default_root_identity, MultiAgentIdentity, MultiAgentToolBackend};
 use super::preamble::{build_preamble, replace_preamble, replace_preamble_with_ids};
 use super::{
     append_event, apply_settings_patch, config_with_mcp_overrides,
@@ -29,7 +32,7 @@ use super::{
     map_core_message_to_domain_event_message, map_mcp_status, map_session_err, merge_mcp_settings,
     new_run_id, now_rfc3339, read_last_event_id, resolve_session_settings, runtime_error_code,
     runtime_error_hint, session_events_api_path, skills_config_from_settings, ts_ms_to_rfc3339,
-    write_run_file, ServerState,
+    write_run_file, MultiAgentControl, ServerState,
 };
 
 use super::domain;
@@ -52,6 +55,7 @@ pub struct LiveSession {
 
     tools: Mutex<ToolEngine>,
     goal_backend: Mutex<Option<Arc<dyn kiliax_core::tools::builtin::GoalBackend>>>,
+    multi_agent_control: Option<std::sync::Weak<MultiAgentControl>>,
 
     status: Mutex<domain::SessionStatus>,
     queue: Mutex<VecDeque<QueuedRun>>,
@@ -64,6 +68,7 @@ pub struct LiveSession {
     events_ring_size: AtomicUsize,
     next_event_id: AtomicU64,
     stream_snapshot: Mutex<Option<domain::StreamSnapshot>>,
+    self_weak: std::sync::OnceLock<std::sync::Weak<LiveSession>>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +99,54 @@ fn user_content_trace_text(content: &UserMessageContent) -> String {
     } else {
         content.display_text()
     }
+}
+
+fn append_text_to_user_content(content: UserMessageContent, text: String) -> UserMessageContent {
+    if text.trim().is_empty() {
+        return content;
+    }
+    match content {
+        UserMessageContent::Text(existing) => {
+            if existing.trim().is_empty() {
+                UserMessageContent::Text(text)
+            } else {
+                UserMessageContent::Text(format!("{text}\n\n{existing}"))
+            }
+        }
+        UserMessageContent::Parts(mut parts) => {
+            parts.insert(0, UserContentPart::Text { text });
+            UserMessageContent::Parts(parts)
+        }
+    }
+}
+
+fn render_mailbox_messages(messages: &[core_ma::MailboxUpdate]) -> String {
+    if messages.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<inter_agent_messages>");
+    for message in messages {
+        out.push_str("\nFrom ");
+        out.push_str(&message.from);
+        out.push_str(":\n");
+        out.push_str(message.message.trim());
+        out.push('\n');
+    }
+    out.push_str("</inter_agent_messages>");
+    out
+}
+
+fn last_assistant_text(messages: &[CoreMessage]) -> Option<String> {
+    messages.iter().rev().find_map(|message| match message {
+        CoreMessage::Assistant {
+            content: Some(content),
+            ..
+        } => {
+            let content = content.trim();
+            (!content.is_empty()).then(|| content.to_string())
+        }
+        _ => None,
+    })
 }
 
 fn run_text_content(
@@ -167,6 +220,65 @@ fn is_supported_image_media_type(media_type: &str) -> bool {
     )
 }
 
+fn api_error_to_tool_error(err: ApiError) -> ToolError {
+    ToolError::InvalidCommand(err.to_string())
+}
+
+fn session_error_to_tool_error(err: kiliax_core::session::SessionError) -> ToolError {
+    ToolError::Io(std::io::Error::other(err))
+}
+
+fn permissions_allow_child(parent: &Permissions, child: &Permissions) -> bool {
+    if child.file_read && !parent.file_read {
+        return false;
+    }
+    if child.file_write && !parent.file_write {
+        return false;
+    }
+    shell_permissions_allow_child(&parent.shell, &child.shell)
+}
+
+fn shell_permissions_allow_child(parent: &ShellPermissions, child: &ShellPermissions) -> bool {
+    match (parent, child) {
+        (_, ShellPermissions::DenyAll) => true,
+        (ShellPermissions::AllowAll, _) => true,
+        (ShellPermissions::DenyAll, _) => false,
+        (
+            ShellPermissions::AllowList(parent_prefixes),
+            ShellPermissions::AllowList(child_prefixes),
+        ) => child_prefixes.iter().all(|child_prefix| {
+            parent_prefixes
+                .iter()
+                .any(|parent_prefix| parent_prefix == child_prefix)
+        }),
+        (ShellPermissions::AllowList(_), ShellPermissions::AllowAll) => false,
+    }
+}
+
+fn parse_fork_turns(raw: Option<&str>) -> Result<Option<usize>, ToolError> {
+    let raw = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("all");
+    if raw.eq_ignore_ascii_case("none") {
+        return Ok(Some(0));
+    }
+    if raw.eq_ignore_ascii_case("all") {
+        return Ok(None);
+    }
+    let n = raw.parse::<usize>().map_err(|_| {
+        ToolError::InvalidCommand(
+            "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
+        )
+    })?;
+    if n == 0 {
+        return Err(ToolError::InvalidCommand(
+            "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
+        ));
+    }
+    Ok(Some(n))
+}
+
 fn goal_continuation_prompt(goal: &SessionGoal) -> String {
     let mut prompt = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -183,12 +295,76 @@ impl LiveSession {
         self.config.load_full()
     }
 
+    async fn install_tool_backends(&self, tools: &ToolEngine) -> Result<(), ApiError> {
+        tools
+            .set_goal_backend(self.goal_backend.lock().await.clone())
+            .map_err(ApiError::internal_error)?;
+        let Some(control) = self.multi_agent_control.as_ref().and_then(|c| c.upgrade()) else {
+            tools
+                .set_multi_agent_backend(None)
+                .map_err(ApiError::internal_error)?;
+            return Ok(());
+        };
+        let Some(self_weak) = self.self_weak.get().cloned() else {
+            return Ok(());
+        };
+        let backend: Arc<dyn kiliax_core::tools::builtin::multi_agents::MultiAgentBackend> =
+            Arc::new(MultiAgentToolBackend::new(
+                self_weak,
+                Arc::downgrade(&control),
+            ));
+        tools
+            .set_multi_agent_backend(Some(backend))
+            .map_err(ApiError::internal_error)?;
+        Ok(())
+    }
+
     pub(super) async fn settings_snapshot(&self) -> domain::SessionSettings {
         self.settings.lock().await.clone()
     }
 
     pub(super) async fn workspace_root(&self) -> PathBuf {
         self.settings.lock().await.workspace_root.clone()
+    }
+
+    pub(super) async fn multi_agent_identity(&self) -> MultiAgentIdentity {
+        let session = self.session.lock().await;
+        match (
+            session.meta.root_session_id.clone(),
+            session.meta.agent_path.clone(),
+        ) {
+            (Some(root_session_id), Some(agent_path)) => MultiAgentIdentity {
+                session_id: self.session_id.clone(),
+                root_session_id,
+                parent_session_id: session.meta.parent_session_id.clone(),
+                agent_path,
+                closed: session.meta.closed,
+            },
+            _ => default_root_identity(self.session_id.clone(), session.meta.closed),
+        }
+    }
+
+    pub(super) async fn multi_agent_status(&self) -> String {
+        if self.session.lock().await.meta.closed {
+            return "closed".to_string();
+        }
+        let st = self.status.lock().await.clone();
+        if st.queue_len > 0 {
+            return "queued".to_string();
+        }
+        match st.run_state {
+            domain::SessionRunState::Idle => {
+                let session = self.session.lock().await;
+                if session.meta.last_error.is_some() {
+                    "error".to_string()
+                } else {
+                    "idle".to_string()
+                }
+            }
+            domain::SessionRunState::Running | domain::SessionRunState::Tooling => {
+                "running".to_string()
+            }
+        }
     }
 
     pub async fn on_config_updated(&self) -> Result<(), ApiError> {
@@ -300,6 +476,7 @@ impl LiveSession {
             worker: Mutex::new(None),
             tools: Mutex::new(tools),
             goal_backend: Mutex::new(None),
+            multi_agent_control: Some(Arc::downgrade(&server.multi_agent_control)),
             status: Mutex::new(domain::SessionStatus {
                 run_state: domain::SessionRunState::Idle,
                 active_run_id: None,
@@ -318,7 +495,9 @@ impl LiveSession {
             events_ring_size: AtomicUsize::new(events_ring_size),
             next_event_id: AtomicU64::new(last_event_id),
             stream_snapshot: Mutex::new(None),
+            self_weak: std::sync::OnceLock::new(),
         });
+        let _ = live.self_weak.set(Arc::downgrade(&live));
 
         {
             let backend: Arc<dyn kiliax_core::tools::builtin::GoalBackend> = live.clone();
@@ -326,6 +505,15 @@ impl LiveSession {
             let tools = live.tools.lock().await;
             tools
                 .set_goal_backend(Some(backend))
+                .map_err(ApiError::internal_error)?;
+            let multi_backend: Arc<
+                dyn kiliax_core::tools::builtin::multi_agents::MultiAgentBackend,
+            > = Arc::new(MultiAgentToolBackend::new(
+                Arc::downgrade(&live),
+                Arc::downgrade(&server.multi_agent_control),
+            ));
+            tools
+                .set_multi_agent_backend(Some(multi_backend))
                 .map_err(ApiError::internal_error)?;
         }
 
@@ -362,7 +550,117 @@ impl LiveSession {
             live.apply_settings_now(false).await?;
         }
 
+        server
+            .multi_agent_control
+            .register_live_agent(live.multi_agent_identity().await, live.clone())
+            .await;
+
         if server.runner_enabled() {
+            let worker = live.clone();
+            let handle = tokio::spawn(async move {
+                worker.worker_loop().await;
+            });
+            *live.worker.lock().await = Some(handle);
+        }
+
+        Ok(live)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn from_parts(
+        store: FileSessionStore,
+        config: Arc<ArcSwap<Config>>,
+        runs_dir: PathBuf,
+        fallback_workspace_root: PathBuf,
+        runner_enabled: bool,
+        session: SessionState,
+        settings: domain::SessionSettings,
+        tools: ToolEngine,
+        rebuild_preamble: bool,
+        multi_agent_control: Option<Arc<MultiAgentControl>>,
+    ) -> Result<Arc<Self>, ApiError> {
+        let events_api_path = session_events_api_path(&store, session.id());
+        let last_event_id = read_last_event_id(&events_api_path).await?;
+        let (events_tx, _) = broadcast::channel(2048);
+        let events_ring_size = config.load_full().server.events_ring_size;
+
+        let live = Arc::new(Self {
+            session_id: session.meta.id.clone(),
+            store,
+            config,
+            runs_dir,
+            fallback_workspace_root,
+            runner_enabled,
+            session: Mutex::new(session),
+            settings: Mutex::new(settings.clone()),
+            settings_dirty: AtomicBool::new(false),
+            closing: AtomicBool::new(false),
+            worker: Mutex::new(None),
+            tools: Mutex::new(tools),
+            goal_backend: Mutex::new(None),
+            multi_agent_control: multi_agent_control.as_ref().map(Arc::downgrade),
+            status: Mutex::new(domain::SessionStatus {
+                run_state: domain::SessionRunState::Idle,
+                active_run_id: None,
+                active_run_started_at: None,
+                step: 0,
+                active_tool: None,
+                queue_len: 0,
+                last_event_id,
+            }),
+            queue: Mutex::new(VecDeque::new()),
+            notify: Notify::new(),
+            active_cancel: Mutex::new(None),
+            events_api_path,
+            events_tx,
+            events_ring: Mutex::new(VecDeque::new()),
+            events_ring_size: AtomicUsize::new(events_ring_size),
+            next_event_id: AtomicU64::new(last_event_id),
+            stream_snapshot: Mutex::new(None),
+            self_weak: std::sync::OnceLock::new(),
+        });
+        let _ = live.self_weak.set(Arc::downgrade(&live));
+
+        {
+            let backend: Arc<dyn kiliax_core::tools::builtin::GoalBackend> = live.clone();
+            *live.goal_backend.lock().await = Some(backend);
+            let tools = live.tools.lock().await;
+            live.install_tool_backends(&tools).await?;
+        }
+
+        {
+            let mut session = live.session.lock().await;
+            session.meta.agent = settings.agent.clone();
+            session.meta.model_id = Some(settings.model_id.clone());
+            session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+            session.meta.extra_workspace_roots = settings
+                .extra_workspace_roots
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            session.meta.mcp_servers = settings
+                .mcp
+                .servers
+                .iter()
+                .map(|s| SessionMcpServerSetting {
+                    id: s.id.clone(),
+                    enable: s.enable,
+                })
+                .collect();
+            session.meta.skills = Some(skills_config_from_settings(&settings.skills));
+            session.meta.custom_tools =
+                Some(custom_tools_config_from_settings(&settings.custom_tools));
+            live.store
+                .checkpoint(&mut session)
+                .await
+                .map_err(map_session_err)?;
+        }
+
+        if rebuild_preamble {
+            live.apply_settings_now(false).await?;
+        }
+
+        if runner_enabled {
             let worker = live.clone();
             let handle = tokio::spawn(async move {
                 worker.worker_loop().await;
@@ -991,6 +1289,367 @@ impl LiveSession {
         Ok(())
     }
 
+    pub(super) async fn spawn_multi_agent(
+        &self,
+        control: Arc<MultiAgentControl>,
+        args: core_ma::SpawnAgentArgs,
+    ) -> Result<core_ma::SpawnAgentResult, ToolError> {
+        let cfg = self.config_snapshot();
+        if !cfg.multi_agent.enabled {
+            return Err(ToolError::InvalidCommand(
+                "multi-agent tools are disabled by config".to_string(),
+            ));
+        }
+        let parent_identity = self.multi_agent_identity().await;
+        let task_name = args.task_name.trim().to_string();
+        let child_path = control
+            .reserve_spawn(
+                &parent_identity,
+                &task_name,
+                cfg.multi_agent.max_concurrent_agents_per_root,
+                cfg.multi_agent.max_depth,
+            )
+            .await?;
+
+        let result = self
+            .spawn_multi_agent_reserved(
+                control.clone(),
+                args,
+                parent_identity.clone(),
+                child_path.clone(),
+            )
+            .await;
+        if result.is_err() {
+            control
+                .release_reserved_path(&parent_identity.root_session_id, &child_path)
+                .await;
+        }
+        result
+    }
+
+    async fn spawn_multi_agent_reserved(
+        &self,
+        control: Arc<MultiAgentControl>,
+        args: core_ma::SpawnAgentArgs,
+        parent_identity: MultiAgentIdentity,
+        child_path: String,
+    ) -> Result<core_ma::SpawnAgentResult, ToolError> {
+        let message = args.message.trim();
+        if message.is_empty() {
+            return Err(ToolError::InvalidCommand(
+                "message must not be empty".to_string(),
+            ));
+        }
+
+        let config = self.config_snapshot();
+        let parent_settings = self.settings.lock().await.clone();
+        let agent_type = args
+            .agent_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("general")
+            .to_string();
+        let child_profile = AgentProfile::from_name(&agent_type).ok_or_else(|| {
+            ToolError::InvalidCommand(format!("agent not supported: {agent_type}"))
+        })?;
+        let parent_profile = AgentProfile::from_name(&parent_settings.agent).ok_or_else(|| {
+            ToolError::InvalidCommand(format!("agent not supported: {}", parent_settings.agent))
+        })?;
+        if !permissions_allow_child(&parent_profile.permissions, &child_profile.permissions) {
+            return Err(ToolError::PermissionDenied(
+                "spawn_agent cannot create a child with broader permissions than the parent"
+                    .to_string(),
+            ));
+        }
+
+        let model_id = args
+            .model_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(parent_settings.model_id.as_str())
+            .to_string();
+        config
+            .resolve_model(&model_id)
+            .map_err(|err| ToolError::InvalidCommand(err.to_string()))?;
+
+        let mut child_settings = parent_settings.clone();
+        child_settings.agent = child_profile.name.clone();
+        child_settings.model_id = model_id.clone();
+
+        let mut cfg_for_tools =
+            config_with_mcp_overrides(config.as_ref(), &child_settings.mcp.servers)
+                .map_err(api_error_to_tool_error)?;
+        cfg_for_tools.custom_tools =
+            custom_tools_config_from_settings(&child_settings.custom_tools);
+        let child_tools = ToolEngine::new(&child_settings.workspace_root, cfg_for_tools);
+        child_tools.set_extra_workspace_roots(child_settings.extra_workspace_roots.clone())?;
+        if child_profile
+            .tools
+            .toolsets
+            .contains(&AgentToolset::MultiAgent)
+        {
+            let self_weak = self.self_weak.get().cloned().ok_or_else(|| {
+                ToolError::InvalidCommand("current agent session is not registered".to_string())
+            })?;
+            let backend: Arc<dyn kiliax_core::tools::builtin::multi_agents::MultiAgentBackend> =
+                Arc::new(MultiAgentToolBackend::new(
+                    self_weak,
+                    Arc::downgrade(&control),
+                ));
+            child_tools.set_multi_agent_backend(Some(backend))?;
+        }
+
+        let skills_config = skills_config_from_settings(&child_settings.skills);
+        let project_prompt = { self.session.lock().await.meta.project_prompt.clone() };
+        let mut initial_messages = build_preamble(
+            &child_profile,
+            &child_settings.model_id,
+            &child_settings.workspace_root,
+            project_prompt.clone(),
+            &child_tools,
+            &skills_config,
+        )
+        .await;
+        initial_messages.extend(self.fork_messages(args.fork_turns.as_deref()).await?);
+
+        let mut child_state = self
+            .store
+            .create(
+                child_profile.name.clone(),
+                Some(child_settings.model_id.clone()),
+                None,
+                Some(child_settings.workspace_root.display().to_string()),
+                child_settings
+                    .extra_workspace_roots
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect(),
+                initial_messages,
+            )
+            .await
+            .map_err(session_error_to_tool_error)?;
+
+        child_state.meta.root_session_id = Some(parent_identity.root_session_id.clone());
+        child_state.meta.parent_session_id = Some(parent_identity.session_id.clone());
+        child_state.meta.agent_path = Some(child_path.clone());
+        child_state.meta.agent_role = Some(child_profile.name.clone());
+        child_state.meta.closed = false;
+        self.store
+            .checkpoint(&mut child_state)
+            .await
+            .map_err(session_error_to_tool_error)?;
+
+        let child_session_id = child_state.meta.id.clone();
+        let child_live = LiveSession::from_parts(
+            self.store.clone(),
+            self.config.clone(),
+            self.runs_dir.clone(),
+            self.fallback_workspace_root.clone(),
+            self.runner_enabled,
+            child_state,
+            child_settings,
+            child_tools,
+            false,
+            Some(control.clone()),
+        )
+        .await
+        .map_err(api_error_to_tool_error)?;
+        control
+            .register_live_agent(child_live.multi_agent_identity().await, child_live.clone())
+            .await;
+        control
+            .set_last_task_message(&child_session_id, message.to_string())
+            .await;
+        child_live
+            .enqueue_run(
+                &self.runs_dir,
+                domain::RunCreateRequest {
+                    input: domain::RunInput::Text {
+                        text: message.to_string(),
+                        attachments: Vec::new(),
+                    },
+                    overrides: None,
+                    auto_resume: true,
+                },
+            )
+            .await
+            .map_err(api_error_to_tool_error)?;
+
+        Ok(core_ma::SpawnAgentResult {
+            task_name: child_path,
+            session_id: child_session_id.to_string(),
+        })
+    }
+
+    pub(super) async fn send_multi_agent_message(
+        &self,
+        control: Arc<MultiAgentControl>,
+        args: core_ma::MessageAgentArgs,
+        trigger_turn: bool,
+    ) -> Result<core_ma::MessageAgentResult, ToolError> {
+        let current = self.multi_agent_identity().await;
+        let target = control.resolve_target(&current, &args.target).await?;
+        if trigger_turn && target.agent_path == "/root" {
+            return Err(ToolError::InvalidCommand(
+                "followup_task cannot target the root agent".to_string(),
+            ));
+        }
+        if trigger_turn {
+            let live = control
+                .live_for_session(&target.session_id)
+                .await
+                .ok_or_else(|| {
+                    ToolError::InvalidCommand(format!(
+                        "target agent `{}` is not live",
+                        target.agent_path
+                    ))
+                })?;
+            live.enqueue_run(
+                &self.runs_dir,
+                domain::RunCreateRequest {
+                    input: domain::RunInput::Text {
+                        text: format!(
+                            "Message from {}:\n{}",
+                            current.agent_path,
+                            args.message.trim()
+                        ),
+                        attachments: Vec::new(),
+                    },
+                    overrides: None,
+                    auto_resume: true,
+                },
+            )
+            .await
+            .map_err(api_error_to_tool_error)?;
+        } else {
+            control
+                .queue_message(&current, &target, args.message.trim().to_string())
+                .await?;
+        }
+        control
+            .set_last_task_message(&target.session_id, args.message.trim().to_string())
+            .await;
+        Ok(core_ma::MessageAgentResult { ok: true })
+    }
+
+    pub(super) async fn wait_multi_agent(
+        &self,
+        control: Arc<MultiAgentControl>,
+        args: core_ma::WaitAgentArgs,
+    ) -> Result<core_ma::WaitAgentResult, ToolError> {
+        let cfg = self.config_snapshot();
+        let timeout_ms = args
+            .timeout_ms
+            .unwrap_or(cfg.multi_agent.default_wait_timeout_ms);
+        if timeout_ms < cfg.multi_agent.min_wait_timeout_ms {
+            return Err(ToolError::InvalidCommand(format!(
+                "timeout_ms must be at least {}",
+                cfg.multi_agent.min_wait_timeout_ms
+            )));
+        }
+        if timeout_ms > cfg.multi_agent.max_wait_timeout_ms {
+            return Err(ToolError::InvalidCommand(format!(
+                "timeout_ms must be at most {}",
+                cfg.multi_agent.max_wait_timeout_ms
+            )));
+        }
+        Ok(control.wait_for_updates(&self.session_id, timeout_ms).await)
+    }
+
+    pub(super) async fn list_multi_agents(
+        &self,
+        control: Arc<MultiAgentControl>,
+        args: core_ma::ListAgentsArgs,
+    ) -> Result<core_ma::ListAgentsResult, ToolError> {
+        let current = self.multi_agent_identity().await;
+        let agents = control
+            .list_agents(&current, args.path_prefix.as_deref())
+            .await?;
+        Ok(core_ma::ListAgentsResult { agents })
+    }
+
+    pub(super) async fn close_multi_agent(
+        &self,
+        control: Arc<MultiAgentControl>,
+        args: core_ma::CloseAgentArgs,
+    ) -> Result<core_ma::CloseAgentResult, ToolError> {
+        let current = self.multi_agent_identity().await;
+        let previous_status = control.close_agent(&current, &args.target).await?;
+        Ok(core_ma::CloseAgentResult { previous_status })
+    }
+
+    pub(super) async fn close_for_multi_agent(&self) {
+        {
+            let mut session = self.session.lock().await;
+            session.meta.closed = true;
+            let _ = self.store.checkpoint(&mut session).await;
+        }
+        self.closing.store(true, Ordering::SeqCst);
+        self.queue.lock().await.clear();
+        self.status.lock().await.queue_len = 0;
+        if let Some(tx) = self.active_cancel.lock().await.clone() {
+            let _ = tx.send(true);
+        }
+        self.notify.notify_waiters();
+    }
+
+    async fn fork_messages(&self, fork_turns: Option<&str>) -> Result<Vec<CoreMessage>, ToolError> {
+        let mode = parse_fork_turns(fork_turns)?;
+        if mode == Some(0) {
+            return Ok(Vec::new());
+        }
+
+        let session = self.session.lock().await;
+        let mut filtered = session
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                CoreMessage::User { content, hidden } if !hidden => Some(CoreMessage::User {
+                    content: content.clone(),
+                    hidden: false,
+                }),
+                CoreMessage::Assistant {
+                    content: Some(content),
+                    reasoning_content: _,
+                    tool_calls,
+                    usage: _,
+                    provider_metadata: _,
+                } if tool_calls.is_empty() && !content.trim().is_empty() => {
+                    Some(CoreMessage::Assistant {
+                        content: Some(content.clone()),
+                        reasoning_content: None,
+                        tool_calls: Vec::new(),
+                        usage: None,
+                        provider_metadata: None,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(turns) = mode {
+            let mut seen_users = 0usize;
+            let mut start = 0usize;
+            for (idx, message) in filtered.iter().enumerate().rev() {
+                if matches!(message, CoreMessage::User { .. }) {
+                    seen_users += 1;
+                    if seen_users == turns {
+                        start = idx;
+                        break;
+                    }
+                }
+            }
+            if seen_users < turns {
+                start = 0;
+            }
+            filtered = filtered.split_off(start);
+        }
+
+        Ok(filtered)
+    }
+
     async fn active_goal(&self) -> Option<SessionGoal> {
         self.session
             .lock()
@@ -1160,6 +1819,14 @@ impl LiveSession {
                         true,
                     )
                 }
+            };
+            let user_content = if let Some(control) =
+                self.multi_agent_control.as_ref().and_then(|c| c.upgrade())
+            {
+                let mailbox = control.drain_messages_for_run(&self.session_id).await;
+                append_text_to_user_content(user_content, render_mailbox_messages(&mailbox))
+            } else {
+                user_content
             };
             let hidden_user = matches!(run.input, domain::RunInput::GoalContinuation);
             let user_text = user_content_trace_text(&user_content);
@@ -1472,6 +2139,34 @@ impl LiveSession {
             );
 
             write_run_file(&self.runs_dir, &run).await?;
+            if let Some(control) = self.multi_agent_control.as_ref().and_then(|c| c.upgrade()) {
+                let identity = self.multi_agent_identity().await;
+                if identity.parent_session_id.is_some() {
+                    let message = match run.state {
+                        domain::RunState::Done => {
+                            let session = self.session.lock().await;
+                            last_assistant_text(&session.messages)
+                                .unwrap_or_else(|| "Agent finished.".to_string())
+                        }
+                        domain::RunState::Error => run
+                            .error
+                            .as_ref()
+                            .map(|err| err.message.clone())
+                            .unwrap_or_else(|| "Agent errored.".to_string()),
+                        domain::RunState::Cancelled => "Agent cancelled.".to_string(),
+                        _ => String::new(),
+                    };
+                    if !message.is_empty() {
+                        control
+                            .notify_finished(
+                                &identity,
+                                format!("{:?}", run.state).to_lowercase(),
+                                message,
+                            )
+                            .await;
+                    }
+                }
+            }
             let should_continue_goal = run.state == domain::RunState::Done
                 && self
                     .active_goal()
@@ -1550,8 +2245,7 @@ impl LiveSession {
                 let next = ToolEngine::new(&workspace_root, cfg_for_tools);
                 next.set_extra_workspace_roots(extra_workspace_roots)
                     .map_err(ApiError::internal_error)?;
-                next.set_goal_backend(self.goal_backend.lock().await.clone())
-                    .map_err(ApiError::internal_error)?;
+                self.install_tool_backends(&next).await?;
                 *tools = next;
             } else {
                 tools
@@ -1560,6 +2254,7 @@ impl LiveSession {
                 tools
                     .set_extra_workspace_roots(extra_workspace_roots)
                     .map_err(ApiError::internal_error)?;
+                self.install_tool_backends(&tools).await?;
             }
             tools.clone()
         };
@@ -2309,5 +3004,191 @@ mod tests {
         .expect("assistant message");
 
         assert_eq!(live.goal().await.unwrap().tokens_used, 7);
+    }
+
+    #[tokio::test]
+    async fn master_spawns_lists_messages_and_closes_child_agent() {
+        let dir = TempDir::new().expect("tempdir");
+        let workspace_root = dir.path().to_path_buf();
+        let server = ServerState::new_for_tests(
+            workspace_root.clone(),
+            workspace_root.join("kiliax.yaml"),
+            test_config(),
+            None,
+        )
+        .await
+        .expect("server");
+
+        let session = server
+            .store
+            .create(
+                "master",
+                Some("test/test-model".to_string()),
+                None,
+                Some(workspace_root.display().to_string()),
+                Vec::new(),
+                vec![CoreMessage::User {
+                    content: UserMessageContent::Text("coordinate".to_string()),
+                    hidden: false,
+                }],
+            )
+            .await
+            .expect("session");
+        let mut settings = default_settings(server.config_snapshot().as_ref(), Some(&session.meta))
+            .expect("settings");
+        settings.agent = "master".to_string();
+        let tools = ToolEngine::new(
+            &workspace_root,
+            config_with_mcp_overrides(server.config_snapshot().as_ref(), &settings.mcp.servers)
+                .expect("tool config"),
+        );
+        let live = LiveSession::from_state(&server, session, settings, tools, false)
+            .await
+            .expect("live session");
+
+        let spawned = live
+            .spawn_multi_agent(
+                server.multi_agent_control.clone(),
+                core_ma::SpawnAgentArgs {
+                    task_name: "worker".to_string(),
+                    message: "inspect the repo".to_string(),
+                    agent_type: Some("plan".to_string()),
+                    model_id: None,
+                    fork_turns: Some("none".to_string()),
+                },
+            )
+            .await
+            .expect("spawn");
+        assert_eq!(spawned.task_name, "/root/worker");
+
+        let duplicate = live
+            .spawn_multi_agent(
+                server.multi_agent_control.clone(),
+                core_ma::SpawnAgentArgs {
+                    task_name: "worker".to_string(),
+                    message: "again".to_string(),
+                    agent_type: None,
+                    model_id: None,
+                    fork_turns: Some("none".to_string()),
+                },
+            )
+            .await
+            .expect_err("duplicate path should fail");
+        assert!(duplicate.to_string().contains("already exists"));
+
+        let second_session = server
+            .store
+            .create(
+                "master",
+                Some("test/test-model".to_string()),
+                None,
+                Some(workspace_root.display().to_string()),
+                Vec::new(),
+                vec![CoreMessage::User {
+                    content: UserMessageContent::Text("coordinate elsewhere".to_string()),
+                    hidden: false,
+                }],
+            )
+            .await
+            .expect("second session");
+        let mut second_settings = default_settings(
+            server.config_snapshot().as_ref(),
+            Some(&second_session.meta),
+        )
+        .expect("second settings");
+        second_settings.agent = "master".to_string();
+        let second_tools = ToolEngine::new(
+            &workspace_root,
+            config_with_mcp_overrides(
+                server.config_snapshot().as_ref(),
+                &second_settings.mcp.servers,
+            )
+            .expect("second tool config"),
+        );
+        let second_live = LiveSession::from_state(
+            &server,
+            second_session,
+            second_settings,
+            second_tools,
+            false,
+        )
+        .await
+        .expect("second live session");
+        let second_spawned = second_live
+            .spawn_multi_agent(
+                server.multi_agent_control.clone(),
+                core_ma::SpawnAgentArgs {
+                    task_name: "worker".to_string(),
+                    message: "same path under another root".to_string(),
+                    agent_type: Some("plan".to_string()),
+                    model_id: None,
+                    fork_turns: Some("none".to_string()),
+                },
+            )
+            .await
+            .expect("same path in another root");
+        assert_eq!(second_spawned.task_name, "/root/worker");
+
+        let listed = live
+            .list_multi_agents(
+                server.multi_agent_control.clone(),
+                core_ma::ListAgentsArgs { path_prefix: None },
+            )
+            .await
+            .expect("list");
+        assert!(listed
+            .agents
+            .iter()
+            .any(|agent| agent.agent_name == "/root/worker"));
+
+        live.send_multi_agent_message(
+            server.multi_agent_control.clone(),
+            core_ma::MessageAgentArgs {
+                target: "/root/worker".to_string(),
+                message: "queued note".to_string(),
+            },
+            false,
+        )
+        .await
+        .expect("send message");
+        let child_id = SessionId::parse(&spawned.session_id).expect("child session id");
+        let child_live = server
+            .multi_agent_control
+            .live_for_session(&child_id)
+            .await
+            .expect("child live");
+        let waited = child_live
+            .wait_multi_agent(
+                server.multi_agent_control.clone(),
+                core_ma::WaitAgentArgs {
+                    timeout_ms: Some(1_000),
+                },
+            )
+            .await
+            .expect("wait");
+        assert!(!waited.timed_out);
+        assert_eq!(waited.updates[0].message, "queued note");
+
+        let closed = live
+            .close_multi_agent(
+                server.multi_agent_control.clone(),
+                core_ma::CloseAgentArgs {
+                    target: "worker".to_string(),
+                },
+            )
+            .await
+            .expect("close");
+        assert!(!closed.previous_status.is_empty());
+        let listed = live
+            .list_multi_agents(
+                server.multi_agent_control.clone(),
+                core_ma::ListAgentsArgs { path_prefix: None },
+            )
+            .await
+            .expect("list after close");
+        assert!(!listed
+            .agents
+            .iter()
+            .any(|agent| agent.agent_name == "/root/worker"));
     }
 }

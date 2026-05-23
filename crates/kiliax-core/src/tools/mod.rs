@@ -36,11 +36,17 @@ pub fn tool_parallelism(tool_name: &str) -> ToolParallelism {
         | builtin::TOOL_VIEW_IMAGE
         | builtin::TOOL_WEB_SEARCH
         | builtin::TOOL_SHELL_COMMAND
-        | builtin::TOOL_WRITE_STDIN => ToolParallelism::Parallel,
+        | builtin::TOOL_WRITE_STDIN
+        | builtin::TOOL_SPAWN_AGENT
+        | builtin::TOOL_SEND_MESSAGE
+        | builtin::TOOL_FOLLOWUP_TASK
+        | builtin::TOOL_LIST_AGENTS => ToolParallelism::Parallel,
         builtin::TOOL_UPDATE_PLAN | builtin::TOOL_WRITE_FILE | builtin::TOOL_EDIT_FILE => {
             ToolParallelism::Exclusive
         }
-        builtin::TOOL_APPLY_PATCH => ToolParallelism::Exclusive,
+        builtin::TOOL_APPLY_PATCH | builtin::TOOL_WAIT_AGENT | builtin::TOOL_CLOSE_AGENT => {
+            ToolParallelism::Exclusive
+        }
         _ => ToolParallelism::Exclusive,
     }
 }

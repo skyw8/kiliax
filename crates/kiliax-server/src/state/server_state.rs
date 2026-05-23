@@ -24,7 +24,7 @@ use super::{
     default_settings, list_models, map_core_message_to_domain, map_mcp_status, map_session_err,
     mcp_status_from_settings, now_ms, read_events_after, read_last_event_id, read_run_file,
     resolve_session_settings, session_events_api_path, skills_config_from_settings,
-    ts_ms_to_rfc3339, write_text_atomic, LiveSession,
+    ts_ms_to_rfc3339, write_text_atomic, LiveSession, MultiAgentControl,
 };
 
 pub struct ServerState {
@@ -36,6 +36,7 @@ pub struct ServerState {
     pub store: FileSessionStore,
     pub runs_dir: PathBuf,
     pub tools_for_caps: ToolEngine,
+    pub(super) multi_agent_control: Arc<MultiAgentControl>,
 
     pub shutdown: Arc<Notify>,
     runner_enabled: bool,
@@ -115,6 +116,7 @@ impl ServerState {
             store,
             runs_dir,
             tools_for_caps,
+            multi_agent_control: Arc::new(MultiAgentControl::new()),
             shutdown: Arc::new(Notify::new()),
             runner_enabled,
             sessions: Mutex::new(HashMap::new()),

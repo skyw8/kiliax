@@ -14,7 +14,9 @@ const SKILLS_INSTRUCTIONS_OPEN_TAG: &str = "<skills_instructions>";
 const SKILLS_INSTRUCTIONS_CLOSE_TAG: &str = "</skills_instructions>";
 const ENV_OPEN_TAG: &str = "<env>";
 const ENV_CLOSE_TAG: &str = "</env>";
-const SUBAGENTS_LINE: &str = "Subagents: not supported.";
+const SUBAGENTS_UNSUPPORTED_LINE: &str = "Subagents: not supported.";
+const SUBAGENTS_SUPPORTED_LINE: &str =
+    "Subagents: supported via spawn_agent/list_agents/wait_agent/send_message/followup_task/close_agent.";
 
 #[derive(Debug, Clone)]
 pub struct PromptBuilder {
@@ -155,9 +157,14 @@ impl PromptBuilder {
         }
 
         if self.include_environment_prompt {
+            let subagents_supported = self
+                .tool_definitions
+                .iter()
+                .any(|tool| tool.name == crate::tools::builtin::TOOL_SPAWN_AGENT);
             preamble.push(render_environment_prompt(
                 self.workspace_root.as_deref(),
                 self.model_id.as_deref(),
+                subagents_supported,
             ));
         }
 
@@ -200,7 +207,11 @@ fn model_prompt_for(model_id: Option<&str>) -> Option<&'static str> {
     None
 }
 
-fn render_environment_prompt(workspace_root: Option<&Path>, model_id: Option<&str>) -> String {
+fn render_environment_prompt(
+    workspace_root: Option<&Path>,
+    model_id: Option<&str>,
+    subagents_supported: bool,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if let Some(root) = workspace_root {
@@ -224,7 +235,14 @@ fn render_environment_prompt(workspace_root: Option<&Path>, model_id: Option<&st
     }
 
     lines.push(format!("Date: {}", today_ymd()));
-    lines.push(SUBAGENTS_LINE.to_string());
+    lines.push(
+        if subagents_supported {
+            SUBAGENTS_SUPPORTED_LINE
+        } else {
+            SUBAGENTS_UNSUPPORTED_LINE
+        }
+        .to_string(),
+    );
 
     let body = lines.join("\n");
     format!("{ENV_OPEN_TAG}\n{body}\n{ENV_CLOSE_TAG}")

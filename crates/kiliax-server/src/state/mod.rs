@@ -1,9 +1,11 @@
 pub mod domain;
 mod live_session;
+mod multi_agent;
 mod preamble;
 mod server_state;
 
 pub use live_session::LiveSession;
+pub(super) use multi_agent::MultiAgentControl;
 pub use server_state::ServerState;
 
 use std::collections::{BTreeMap, HashMap, HashSet};

@@ -5,6 +5,7 @@ mod file_tracker;
 pub(crate) mod goal;
 mod grep_files;
 mod list_dir;
+pub mod multi_agents;
 mod read_file;
 mod registry;
 mod shell;
@@ -48,6 +49,10 @@ pub const TOOL_EDIT_FILE: &str = "edit_file";
 pub const TOOL_APPLY_PATCH: &str = "apply_patch";
 pub const TOOL_UPDATE_PLAN: &str = "update_plan";
 pub const TOOL_WEB_SEARCH: &str = "web_search";
+pub use multi_agents::{
+    TOOL_CLOSE_AGENT, TOOL_FOLLOWUP_TASK, TOOL_LIST_AGENTS, TOOL_SEND_MESSAGE, TOOL_SPAWN_AGENT,
+    TOOL_WAIT_AGENT,
+};
 
 pub async fn execute(
     workspace_root: &Path,

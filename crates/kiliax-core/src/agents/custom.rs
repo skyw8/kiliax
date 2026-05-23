@@ -7,7 +7,7 @@ use crate::config::AgentRuntimeConfig;
 use crate::tools::builtin;
 use crate::tools::{Permissions, ShellPermissions};
 
-use super::{AgentKind, AgentProfile, AgentSource, AgentToolFilter, ToolAllow};
+use super::{AgentKind, AgentProfile, AgentSource, AgentToolFilter, AgentToolset, ToolAllow};
 
 const MANIFEST: &str = "AGENT.yaml";
 const DEFAULT_PROMPT: &str = "PROMPT.md";
@@ -47,6 +47,8 @@ struct CustomAgentManifest {
 struct ToolsManifest {
     #[serde(default)]
     builtin: Vec<String>,
+    #[serde(default)]
+    toolsets: Vec<AgentToolset>,
     #[serde(default)]
     mcp: AllowManifest,
     #[serde(default)]
@@ -206,6 +208,7 @@ fn parse_tools(tools: ToolsManifest) -> Result<AgentToolFilter, String> {
     }
     Ok(AgentToolFilter::custom(
         builtin_ids,
+        tools.toolsets.into_iter().collect(),
         allow_from_vec(tools.mcp.allow, "mcp")?,
         allow_from_vec(tools.custom.allow, "custom")?,
     ))

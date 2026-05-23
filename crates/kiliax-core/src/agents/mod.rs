@@ -1,6 +1,7 @@
 mod custom;
 mod general;
 mod plan;
+mod master;
 
 use std::collections::BTreeSet;
 
@@ -31,9 +32,16 @@ pub enum ToolAllow {
     Only(BTreeSet<String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolset {
+    MultiAgent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentToolFilter {
     pub builtin: Vec<BuiltinToolId>,
+    pub toolsets: BTreeSet<AgentToolset>,
     pub mcp: ToolAllow,
     pub custom: ToolAllow,
 }
@@ -60,20 +68,35 @@ impl AgentProfile {
         general::profile()
     }
 
+    pub fn master() -> Self {
+        master::profile()
+    }
+
     /// Map an agent name into a built-in or discovered custom profile.
     pub fn from_name(name: &str) -> Option<Self> {
-        match name.trim() {
+        let name = name.trim();
+        if let Some(profile) = custom::discover_custom_agents()
+            .items
+            .into_iter()
+            .find(|profile| profile.name == name)
+        {
+            return Some(profile);
+        }
+
+        match name {
             "plan" => Some(Self::plan()),
             "general" => Some(Self::general()),
-            other => custom::discover_custom_agents()
-                .items
-                .into_iter()
-                .find(|profile| profile.name == other),
+            "master" => Some(Self::master()),
+            _ => None,
         }
     }
 
     pub fn list_names() -> Vec<String> {
-        let mut out = vec!["general".to_string(), "plan".to_string()];
+        let mut out = vec![
+            "general".to_string(),
+            "plan".to_string(),
+            "master".to_string(),
+        ];
         out.extend(
             custom::discover_custom_agents()
                 .items
@@ -90,14 +113,33 @@ impl AgentToolFilter {
     pub fn builtin_with_extra(tool_ids: Vec<BuiltinToolId>) -> Self {
         Self {
             builtin: tool_ids,
+            toolsets: BTreeSet::new(),
             mcp: ToolAllow::All,
             custom: ToolAllow::All,
         }
     }
 
-    pub fn custom(tool_ids: Vec<BuiltinToolId>, mcp: ToolAllow, custom: ToolAllow) -> Self {
+    pub fn builtin_with_toolsets(
+        tool_ids: Vec<BuiltinToolId>,
+        toolsets: BTreeSet<AgentToolset>,
+    ) -> Self {
         Self {
             builtin: tool_ids,
+            toolsets,
+            mcp: ToolAllow::All,
+            custom: ToolAllow::All,
+        }
+    }
+
+    pub fn custom(
+        tool_ids: Vec<BuiltinToolId>,
+        toolsets: BTreeSet<AgentToolset>,
+        mcp: ToolAllow,
+        custom: ToolAllow,
+    ) -> Self {
+        Self {
+            builtin: tool_ids,
+            toolsets,
             mcp,
             custom,
         }
@@ -130,6 +172,14 @@ mod tests {
         let profile = AgentProfile::from_name("plan").unwrap();
         assert_eq!(profile.kind, AgentKind::Plan);
         assert_eq!(profile.name, "plan");
+    }
+
+    #[test]
+    fn from_name_recognizes_master() {
+        let profile = AgentProfile::from_name("master").unwrap();
+        assert_eq!(profile.kind, AgentKind::General);
+        assert_eq!(profile.name, "master");
+        assert!(profile.tools.toolsets.contains(&AgentToolset::MultiAgent));
     }
 
     #[test]

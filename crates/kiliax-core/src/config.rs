@@ -59,6 +59,84 @@ pub struct AgentRuntimeConfig {
     pub auto_compact_token_limit: Option<usize>,
 }
 
+fn default_multi_agent_enabled() -> bool {
+    true
+}
+
+fn default_multi_agent_max_concurrent_agents_per_root() -> usize {
+    8
+}
+
+fn default_multi_agent_max_depth() -> usize {
+    2
+}
+
+fn default_multi_agent_default_wait_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_multi_agent_min_wait_timeout_ms() -> u64 {
+    1_000
+}
+
+fn default_multi_agent_max_wait_timeout_ms() -> u64 {
+    300_000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultiAgentConfig {
+    #[serde(default = "default_multi_agent_enabled")]
+    pub enabled: bool,
+
+    #[serde(
+        default = "default_multi_agent_max_concurrent_agents_per_root",
+        alias = "maxConcurrentAgentsPerRoot",
+        alias = "max-concurrent-agents-per-root"
+    )]
+    pub max_concurrent_agents_per_root: usize,
+
+    #[serde(
+        default = "default_multi_agent_max_depth",
+        alias = "maxDepth",
+        alias = "max-depth"
+    )]
+    pub max_depth: usize,
+
+    #[serde(
+        default = "default_multi_agent_default_wait_timeout_ms",
+        alias = "defaultWaitTimeoutMs",
+        alias = "default-wait-timeout-ms"
+    )]
+    pub default_wait_timeout_ms: u64,
+
+    #[serde(
+        default = "default_multi_agent_min_wait_timeout_ms",
+        alias = "minWaitTimeoutMs",
+        alias = "min-wait-timeout-ms"
+    )]
+    pub min_wait_timeout_ms: u64,
+
+    #[serde(
+        default = "default_multi_agent_max_wait_timeout_ms",
+        alias = "maxWaitTimeoutMs",
+        alias = "max-wait-timeout-ms"
+    )]
+    pub max_wait_timeout_ms: u64,
+}
+
+impl Default for MultiAgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_multi_agent_enabled(),
+            max_concurrent_agents_per_root: default_multi_agent_max_concurrent_agents_per_root(),
+            max_depth: default_multi_agent_max_depth(),
+            default_wait_timeout_ms: default_multi_agent_default_wait_timeout_ms(),
+            min_wait_timeout_ms: default_multi_agent_min_wait_timeout_ms(),
+            max_wait_timeout_ms: default_multi_agent_max_wait_timeout_ms(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentsConfig {
@@ -391,6 +469,9 @@ pub struct Config {
     pub agents: AgentsConfig,
 
     #[serde(default)]
+    pub multi_agent: MultiAgentConfig,
+
+    #[serde(default)]
     pub mcp: McpConfig,
 }
 
@@ -636,6 +717,9 @@ struct ConfigFile {
     pub agents: AgentsConfig,
 
     #[serde(default)]
+    pub multi_agent: MultiAgentConfig,
+
+    #[serde(default)]
     pub mcp: McpConfig,
 
     // Shorthand for single-provider config:
@@ -780,6 +864,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         tools,
         runtime,
         agents,
+        multi_agent,
         mcp,
         provider,
     } = file;
@@ -812,6 +897,7 @@ fn resolve_config(file: ConfigFile) -> Result<Config, ConfigError> {
         custom_tools,
         runtime,
         agents,
+        multi_agent,
         mcp,
     })
 }
@@ -939,9 +1025,47 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
     validate_agent_runtime_config("runtime", &config.runtime)?;
     validate_agent_runtime_config("agents.plan", &config.agents.plan)?;
     validate_agent_runtime_config("agents.general", &config.agents.general)?;
+    validate_multi_agent_config(&config.multi_agent)?;
 
     validate_mcp_config(&config.mcp)?;
 
+    Ok(())
+}
+
+fn validate_multi_agent_config(cfg: &MultiAgentConfig) -> Result<(), ConfigError> {
+    if cfg.max_concurrent_agents_per_root == 0 {
+        return Err(ConfigError::Invalid(
+            "multi_agent.max_concurrent_agents_per_root must be greater than 0".to_string(),
+        ));
+    }
+    if cfg.max_depth == 0 {
+        return Err(ConfigError::Invalid(
+            "multi_agent.max_depth must be greater than 0".to_string(),
+        ));
+    }
+    if cfg.min_wait_timeout_ms == 0 {
+        return Err(ConfigError::Invalid(
+            "multi_agent.min_wait_timeout_ms must be greater than 0".to_string(),
+        ));
+    }
+    if cfg.min_wait_timeout_ms > cfg.max_wait_timeout_ms {
+        return Err(ConfigError::Invalid(
+            "multi_agent.min_wait_timeout_ms must be at most multi_agent.max_wait_timeout_ms"
+                .to_string(),
+        ));
+    }
+    if cfg.default_wait_timeout_ms < cfg.min_wait_timeout_ms {
+        return Err(ConfigError::Invalid(
+            "multi_agent.default_wait_timeout_ms must be at least multi_agent.min_wait_timeout_ms"
+                .to_string(),
+        ));
+    }
+    if cfg.default_wait_timeout_ms > cfg.max_wait_timeout_ms {
+        return Err(ConfigError::Invalid(
+            "multi_agent.default_wait_timeout_ms must be at most multi_agent.max_wait_timeout_ms"
+                .to_string(),
+        ));
+    }
     Ok(())
 }
 

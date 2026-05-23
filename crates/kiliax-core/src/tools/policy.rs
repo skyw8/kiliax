@@ -1,4 +1,4 @@
-use crate::agents::AgentProfile;
+use crate::agents::{AgentProfile, AgentToolset};
 use crate::protocol::ToolDefinition;
 use crate::tools::builtin::{BuiltinToolId, TOOL_APPLY_PATCH, TOOL_EDIT_FILE, TOOL_WRITE_FILE};
 use crate::tools::ToolEngine;
@@ -83,6 +83,10 @@ pub async fn tool_definitions_for_agent(
         .map(BuiltinToolId::definition)
         .collect();
 
+    if profile.tools.toolsets.contains(&AgentToolset::MultiAgent) && tools.multi_agent_available() {
+        out.extend(crate::tools::builtin::multi_agents::tool_definitions());
+    }
+
     out.extend(
         tools
             .extra_tool_definitions()
@@ -127,7 +131,7 @@ mod tests {
             display_name: None,
             description: None,
             developer_prompt: "prompt".to_string(),
-            tools: AgentToolFilter::custom(Vec::new(), mcp, custom),
+            tools: AgentToolFilter::custom(Vec::new(), BTreeSet::new(), mcp, custom),
             permissions: Permissions {
                 file_read: true,
                 file_write: false,

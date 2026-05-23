@@ -17,6 +17,10 @@ const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] = time
     "[year][month][day]T[hour][minute][second]Z_[subsecond digits:3]"
 );
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Session identifier used as the on-disk directory name.
 ///
 /// The generated id includes a timestamp prefix so the directory name is self-describing.
@@ -133,6 +137,21 @@ pub struct SessionMeta {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<SessionGoal>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_session_id: Option<SessionId>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<SessionId>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_path: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub closed: bool,
 
     /// Last appended event sequence number.
     pub last_seq: u64,
@@ -358,6 +377,11 @@ impl FileSessionStore {
             project_prompt: project_prompt_from_messages(&initial_messages)
                 .or_else(|| Some(String::new())),
             goal: None,
+            root_session_id: None,
+            parent_session_id: None,
+            agent_path: None,
+            agent_role: None,
+            closed: false,
             last_seq,
             last_snapshot_seq: last_seq,
             message_count: initial_messages.len(),

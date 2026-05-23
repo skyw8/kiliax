@@ -50,6 +50,7 @@ pub struct ToolEngine {
     custom_tools: crate::tools::custom::CustomToolRuntime,
     config: Arc<RwLock<Arc<crate::config::Config>>>,
     goal_backend: Arc<RwLock<Option<Arc<dyn builtin::GoalBackend>>>>,
+    multi_agent_backend: Arc<RwLock<Option<Arc<dyn builtin::multi_agents::MultiAgentBackend>>>>,
     mcp: crate::tools::mcp::McpHub,
     mcp_state: Arc<Mutex<McpState>>,
 }
@@ -65,6 +66,7 @@ impl ToolEngine {
             custom_tools: crate::tools::custom::CustomToolRuntime::default(),
             config: Arc::new(RwLock::new(Arc::new(config))),
             goal_backend: Arc::new(RwLock::new(None)),
+            multi_agent_backend: Arc::new(RwLock::new(None)),
             mcp: crate::tools::mcp::McpHub::new(),
             mcp_state: Arc::new(Mutex::new(McpState::default())),
         }
@@ -111,6 +113,34 @@ impl ToolEngine {
             .map_err(|_| ToolError::Io(std::io::Error::other("tool goal backend lock poisoned")))?;
         *guard = backend;
         Ok(())
+    }
+
+    pub fn set_multi_agent_backend(
+        &self,
+        backend: Option<Arc<dyn builtin::multi_agents::MultiAgentBackend>>,
+    ) -> Result<(), ToolError> {
+        let mut guard = self.multi_agent_backend.write().map_err(|_| {
+            ToolError::Io(std::io::Error::other(
+                "tool multi-agent backend lock poisoned",
+            ))
+        })?;
+        *guard = backend;
+        Ok(())
+    }
+
+    pub fn multi_agent_available(&self) -> bool {
+        let enabled = self
+            .config
+            .read()
+            .ok()
+            .is_some_and(|cfg| cfg.multi_agent.enabled);
+        if !enabled {
+            return false;
+        }
+        self.multi_agent_backend
+            .read()
+            .ok()
+            .is_some_and(|backend| backend.is_some())
     }
 
     pub async fn extra_tool_definitions(&self) -> Vec<ToolDefinition> {
@@ -270,6 +300,24 @@ impl ToolEngine {
             .clone();
 
         let res: Result<String, ToolError> = async {
+            if builtin::multi_agents::is_multi_agent_tool_name(call.name.as_str()) {
+                if !cfg.multi_agent.enabled {
+                    return Err(ToolError::InvalidCommand(
+                        "multi-agent tools are disabled by config".to_string(),
+                    ));
+                }
+                let backend = self
+                    .multi_agent_backend
+                    .read()
+                    .map_err(|_| {
+                        ToolError::Io(std::io::Error::other(
+                            "tool multi-agent backend lock poisoned",
+                        ))
+                    })?
+                    .clone();
+                return builtin::multi_agents::execute(backend, call).await;
+            }
+
             if call.name == builtin::TOOL_GET_GOAL || call.name == builtin::TOOL_UPDATE_GOAL {
                 let backend = self
                     .goal_backend
@@ -716,6 +764,12 @@ fn tool_category(tool_name: &str, kind: &str) -> &'static str {
         builtin::TOOL_WEB_SEARCH => "web",
         builtin::TOOL_UPDATE_PLAN => "plan",
         builtin::TOOL_GET_GOAL | builtin::TOOL_UPDATE_GOAL => "goal",
+        builtin::TOOL_SPAWN_AGENT
+        | builtin::TOOL_SEND_MESSAGE
+        | builtin::TOOL_FOLLOWUP_TASK
+        | builtin::TOOL_WAIT_AGENT
+        | builtin::TOOL_LIST_AGENTS
+        | builtin::TOOL_CLOSE_AGENT => "multi_agent",
         _ => "other",
     }
 }

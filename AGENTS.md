@@ -25,21 +25,21 @@ minimal
 
 ### crates/kiliax-core (core library)
 
-- Agents + tool permissions: `crates/kiliax-core/src/agents/`
+- Agents + tool permissions + built-in master/toolsets: `crates/kiliax-core/src/agents/`
 - Context compaction (auto + `/compact`, tool call/result normalization + tool output truncation): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
-- Config + model/agent defaults + provider-model max-output/auto-compact limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
+- Config + model/agent defaults + provider-model max-output/auto-compact limits + multi-agent limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
 - Protocol compatibility re-exports (messages/tool-calls/usage + base64 image/PDF content parts): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
 - Provider-neutral message history sanitization + request-safety helpers: `crates/kiliax-core/src/history.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
-- Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
+- Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + tool scheduling barriers + thinking/body normalization + empty assistant guard: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
-- Session store + snapshots + events + frozen project prompt metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
+- Session store + snapshots + events + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
-- Tools (builtin registry/patch application/MCP dispatch + Cargo-version client identity/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
+- Tools (builtin registry/patch application/MCP dispatch + Cargo-version client identity/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + multi-agent backend dispatch + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
   - `read_file`: read a line-numbered UTF-8 text file from the workspace (or allowed skills roots) using `filePath`, `offset`, and `limit`
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
@@ -53,6 +53,7 @@ minimal
   - `update_plan`: update the UI plan (best effort, surfaced in web)
   - `get_goal`: read the active session goal (`SessionGoal`) if present
   - `update_goal`: mark the active session goal complete (`status=complete` only)
+  - `spawn_agent` / `send_message` / `followup_task` / `wait_agent` / `list_agents` / `close_agent`: master-facing multi-agent orchestration tools backed by the server runtime
   - `web_search`: search the web via Tavily (`web_search.api_key` / `tools.tavily.api_key` in `kiliax.yaml`, fallback `TAVILY_API_KEY`)
 
 ### crates/kiliax-llm (LLM facade + providers)
@@ -74,7 +75,9 @@ minimal
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
-- State (config/session lifecycle/run queue/goal continuation loop/goal usage events with output-token accounting/durable-vs-ephemeral events + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- State (config/session lifecycle/run queue/goal continuation loop/multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
+- Live session runtime integration (spawned child sessions, tool backend wiring, forked context, mailbox delivery, parent notifications): `crates/kiliax-server/src/state/live_session.rs`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input): `crates/kiliax-server/src/state/domain.rs`
 - Infra (path validation/tmp workspace helpers/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes capabilities builtin tool summaries, message `usage`, live stream snapshots, server-side folder listing, session default writes, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
