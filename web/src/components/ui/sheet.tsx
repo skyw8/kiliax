@@ -17,7 +17,7 @@ const SheetOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/30 backdrop-blur-[1px] opacity-0 transition-opacity duration-200 data-[state=open]:opacity-100 data-[state=closed]:opacity-0",
+      "fixed inset-0 z-50 bg-black/30 opacity-0 transition-opacity duration-200 data-[state=open]:opacity-100 data-[state=closed]:opacity-0",
       className,
     )}
     {...props}
@@ -109,4 +109,3 @@ export {
   SheetTitle,
   SheetDescription,
 };
-

@@ -93,7 +93,7 @@ minimal
 - Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
-- UI primitives (Dialog/Sheet/Button/Input/etc): `web/src/components/ui/`
+- UI primitives (performant Dialog/Sheet overlays + Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + server-side folder listing + explicit session default persistence + goal APIs + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
