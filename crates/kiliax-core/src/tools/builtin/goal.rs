@@ -14,6 +14,10 @@ pub trait GoalBackend: Send + Sync {
     async fn complete_goal(&self) -> Result<Option<SessionGoal>, ToolError>;
 }
 
+pub fn tool_definitions() -> Vec<ToolDefinition> {
+    vec![get_goal_tool_definition(), update_goal_tool_definition()]
+}
+
 pub fn get_goal_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_GET_GOAL.to_string(),

@@ -86,6 +86,9 @@ pub async fn tool_definitions_for_agent(
     if profile.tools.toolsets.contains(&AgentToolset::MultiAgent) && tools.multi_agent_available() {
         out.extend(crate::tools::builtin::multi_agents::tool_definitions());
     }
+    if profile.tools.toolsets.contains(&AgentToolset::Goal) {
+        out.extend(crate::tools::builtin::goal::tool_definitions());
+    }
 
     out.extend(
         tools
@@ -117,11 +120,14 @@ fn is_gpt5_family(model_id: &str) -> bool {
 mod tests {
     use std::collections::BTreeSet;
 
-    use crate::agents::{AgentKind, AgentProfile, AgentSource, AgentToolFilter, ToolAllow};
+    use crate::agents::{
+        AgentKind, AgentProfile, AgentSource, AgentToolFilter, AgentToolset, ToolAllow,
+    };
     use crate::config::AgentRuntimeConfig;
-    use crate::tools::{Permissions, ShellPermissions};
+    use crate::tools::builtin::{TOOL_GET_GOAL, TOOL_UPDATE_GOAL};
+    use crate::tools::{Permissions, ShellPermissions, ToolEngine};
 
-    use super::allows_extra_tool;
+    use super::{allows_extra_tool, tool_definitions_for_agent};
 
     fn profile(custom: ToolAllow, mcp: ToolAllow) -> AgentProfile {
         AgentProfile {
@@ -155,5 +161,21 @@ mod tests {
         let profile = profile(ToolAllow::None, allowed);
         assert!(allows_extra_tool(&profile, "mcp__github__create_issue"));
         assert!(!allows_extra_tool(&profile, "mcp__figma__inspect"));
+    }
+
+    #[tokio::test]
+    async fn goal_toolset_expands_goal_tools() {
+        let mut profile = profile(ToolAllow::None, ToolAllow::None);
+        profile.tools.toolsets.insert(AgentToolset::Goal);
+        let tools = ToolEngine::new(".", crate::config::Config::default());
+
+        let names = tool_definitions_for_agent(&profile, &tools, "test/model")
+            .await
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<BTreeSet<_>>();
+
+        assert!(names.contains(TOOL_GET_GOAL));
+        assert!(names.contains(TOOL_UPDATE_GOAL));
     }
 }

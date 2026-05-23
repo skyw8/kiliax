@@ -35,6 +35,7 @@ pub enum ToolAllow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentToolset {
+    Goal,
     MultiAgent,
 }
 
@@ -172,6 +173,7 @@ mod tests {
         let profile = AgentProfile::from_name("plan").unwrap();
         assert_eq!(profile.kind, AgentKind::Plan);
         assert_eq!(profile.name, "plan");
+        assert!(!profile.tools.toolsets.contains(&AgentToolset::Goal));
     }
 
     #[test]
@@ -179,6 +181,7 @@ mod tests {
         let profile = AgentProfile::from_name("master").unwrap();
         assert_eq!(profile.kind, AgentKind::General);
         assert_eq!(profile.name, "master");
+        assert!(profile.tools.toolsets.contains(&AgentToolset::Goal));
         assert!(profile.tools.toolsets.contains(&AgentToolset::MultiAgent));
     }
 

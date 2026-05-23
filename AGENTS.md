@@ -25,7 +25,7 @@ minimal
 
 ### crates/kiliax-core (core library)
 
-- Agents + tool permissions + built-in master/toolsets: `crates/kiliax-core/src/agents/`
+- Agents + tool permissions + built-in master + goal/multi-agent toolsets: `crates/kiliax-core/src/agents/`
 - Context compaction (auto + `/compact`, tool call/result normalization + tool output truncation): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
 - Config + model/agent defaults + provider-model max-output/auto-compact limits + multi-agent limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
@@ -39,7 +39,7 @@ minimal
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + events + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
-- Tools (builtin registry/patch application/MCP dispatch + Cargo-version client identity/skills discovery/custom tool discovery + JSON-RPC process runtime/session goal tools + multi-agent backend dispatch + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
+- Tools (builtin registry/patch application/MCP dispatch + Cargo-version client identity/skills discovery/custom tool discovery + JSON-RPC process runtime/goal toolset backend dispatch + multi-agent backend dispatch + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
   - `read_file`: read a line-numbered UTF-8 text file from the workspace (or allowed skills roots) using `filePath`, `offset`, and `limit`
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
