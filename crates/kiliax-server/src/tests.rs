@@ -370,6 +370,106 @@ async fn messages_include_usage_when_present() {
 }
 
 #[tokio::test]
+async fn messages_endpoint_pages_current_visible_history() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let store = FileSessionStore::project(dir.path());
+    let mut session = store
+        .create(
+            "general",
+            Some("test/test-model".to_string()),
+            None,
+            Some(dir.path().to_string_lossy().to_string()),
+            Vec::new(),
+            vec![
+                Message::User {
+                    content: UserMessageContent::Text("one".to_string()),
+                    hidden: false,
+                },
+                Message::User {
+                    content: UserMessageContent::Text("two".to_string()),
+                    hidden: false,
+                },
+            ],
+        )
+        .await
+        .expect("create session");
+
+    store
+        .edit_message(
+            &mut session,
+            1,
+            Message::User {
+                content: UserMessageContent::Text("one edited".to_string()),
+                hidden: false,
+            },
+        )
+        .await
+        .expect("edit message");
+    store
+        .record_message(
+            &mut session,
+            Message::Assistant {
+                content: Some("deleted".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            },
+        )
+        .await
+        .expect("record deleted message");
+    store
+        .truncate_after(&mut session, 2)
+        .await
+        .expect("truncate");
+    store
+        .record_message(
+            &mut session,
+            Message::Assistant {
+                content: Some("three".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            },
+        )
+        .await
+        .expect("record message");
+
+    let uri = format!("/v1/sessions/{}/messages?limit=2", session.id());
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, &uri))
+        .await
+        .unwrap();
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].get("id").and_then(|v| v.as_str()), Some("2"));
+    assert_eq!(items[1].get("id").and_then(|v| v.as_str()), Some("6"));
+    assert_eq!(body.get("next_before").and_then(|v| v.as_str()), Some("2"));
+
+    let uri = format!("/v1/sessions/{}/messages?limit=2&before=2", session.id());
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, &uri))
+        .await
+        .unwrap();
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let items = body.get("items").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].get("content").and_then(|v| v.as_str()),
+        Some("one edited")
+    );
+    assert!(body.get("next_before").is_none());
+}
+
+#[tokio::test]
 async fn create_session_accepts_empty_body_and_persists_settings() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;

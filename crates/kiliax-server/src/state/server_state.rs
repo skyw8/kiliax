@@ -1481,43 +1481,24 @@ impl ServerState {
         let limit = limit.clamp(1, 200);
         let before_seq = before.as_deref().and_then(|v| v.parse::<u64>().ok());
 
-        let state = self.store.load(session_id).await.map_err(map_session_err)?;
+        let page = self
+            .store
+            .read_message_page(session_id, limit, before_seq)
+            .await
+            .map_err(map_session_err)?;
 
-        let mut pairs = state
-            .message_ids
-            .into_iter()
-            .zip(state.messages.into_iter())
-            .collect::<Vec<_>>();
-        if let Some(before_seq) = before_seq {
-            pairs.retain(|(seq, _)| *seq < before_seq);
-        }
-
-        let slice = pairs
-            .into_iter()
-            .rev()
-            .take(limit)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>();
-
-        let base_ts_ms = state.meta.created_at_ms;
-        let mut next_before: Option<String> = None;
         let mut out: Vec<domain::Message> = Vec::new();
-        for (seq, msg) in slice {
-            let ts_ms = base_ts_ms.saturating_add(seq);
-            let Some(msg) = map_core_message_to_domain(seq, ts_ms, msg) else {
+        for entry in page.items {
+            let Some(msg) = map_core_message_to_domain(entry.seq, entry.ts_ms, entry.message)
+            else {
                 continue;
             };
-            if next_before.is_none() {
-                next_before = Some(seq.to_string());
-            }
             out.push(msg);
         }
 
         Ok(domain::MessageList {
             items: out,
-            next_before,
+            next_before: page.next_before,
         })
     }
 

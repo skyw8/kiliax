@@ -1,9 +1,13 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
@@ -12,6 +16,7 @@ use crate::protocol::Message;
 
 const SESSION_SCHEMA_VERSION: u32 = 4;
 const DEFAULT_CHECKPOINT_EVERY: u64 = 32;
+const REVERSE_READ_BLOCK_BYTES: usize = 64 * 1024;
 
 const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
     "[year][month][day]T[hour][minute][second]Z_[subsecond digits:3]"
@@ -249,6 +254,19 @@ impl SessionState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionMessageEntry {
+    pub seq: u64,
+    pub ts_ms: u64,
+    pub message: Message,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionMessagePage {
+    pub items: Vec<SessionMessageEntry>,
+    pub next_before: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("invalid session id: {0}")]
@@ -445,6 +463,112 @@ impl FileSessionStore {
         }
         self.ensure_project_prompt(&mut state).await?;
         Ok(state)
+    }
+
+    pub async fn read_message_page(
+        &self,
+        id: &SessionId,
+        limit: usize,
+        before: Option<u64>,
+    ) -> Result<SessionMessagePage, SessionError> {
+        let _ = SessionId::parse(id.as_str())?;
+        let limit = limit.max(1);
+        let before = before.unwrap_or(u64::MAX);
+        let meta_path = self.meta_path(id);
+        if let Err(err) = tokio::fs::metadata(&meta_path).await {
+            return Err(if err.kind() == std::io::ErrorKind::NotFound {
+                SessionError::NotFound(id.to_string())
+            } else {
+                err.into()
+            });
+        }
+
+        let path = self.events_path(id);
+        let mut file = match tokio::fs::File::open(&path).await {
+            Ok(f) => f,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(SessionMessagePage {
+                    items: Vec::new(),
+                    next_before: None,
+                });
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        let file_len = file.seek(SeekFrom::End(0)).await?;
+        let mut pos = file_len;
+        let mut carry = Vec::<u8>::new();
+        let mut buf = vec![0u8; REVERSE_READ_BLOCK_BYTES];
+        let mut latest_edits: HashMap<u64, Message> = HashMap::new();
+        let mut min_later_truncate_cutoff: Option<u64> = None;
+        let mut collected: Vec<SessionMessageEntry> = Vec::with_capacity(limit + 1);
+
+        while pos > 0 && collected.len() <= limit {
+            let read_len = (pos.min(REVERSE_READ_BLOCK_BYTES as u64)) as usize;
+            pos -= read_len as u64;
+            file.seek(SeekFrom::Start(pos)).await?;
+            file.read_exact(&mut buf[..read_len]).await?;
+
+            let mut data = Vec::with_capacity(read_len + carry.len());
+            data.extend_from_slice(&buf[..read_len]);
+            data.extend_from_slice(&carry);
+
+            let mut end = data.len();
+            if pos + read_len as u64 == file_len {
+                while end > 0 && matches!(data[end - 1], b'\n' | b'\r') {
+                    end -= 1;
+                }
+            }
+
+            loop {
+                let Some(idx) = data[..end].iter().rposition(|b| *b == b'\n') else {
+                    carry = data[..end].to_vec();
+                    break;
+                };
+                handle_message_page_line(
+                    &data[idx + 1..end],
+                    before,
+                    limit,
+                    &mut latest_edits,
+                    &mut min_later_truncate_cutoff,
+                    &mut collected,
+                )?;
+                end = idx;
+                if end > 0 && data[end - 1] == b'\r' {
+                    end -= 1;
+                }
+                if collected.len() > limit {
+                    break;
+                }
+            }
+        }
+
+        if collected.len() <= limit && !carry.is_empty() {
+            handle_message_page_line(
+                &carry,
+                before,
+                limit,
+                &mut latest_edits,
+                &mut min_later_truncate_cutoff,
+                &mut collected,
+            )?;
+        }
+
+        let has_older = collected.len() > limit;
+        if has_older {
+            collected.truncate(limit);
+        }
+        collected.reverse();
+        let next_before = if has_older {
+            collected.first().map(|entry| entry.seq.to_string())
+        } else {
+            None
+        };
+
+        Ok(SessionMessagePage {
+            items: collected,
+            next_before,
+        })
     }
 
     async fn ensure_project_prompt(&self, state: &mut SessionState) -> Result<(), SessionError> {
@@ -778,6 +902,90 @@ impl FileSessionStore {
     }
 }
 
+fn handle_message_page_line(
+    bytes: &[u8],
+    before: u64,
+    limit: usize,
+    latest_edits: &mut HashMap<u64, Message>,
+    min_later_truncate_cutoff: &mut Option<u64>,
+    collected: &mut Vec<SessionMessageEntry>,
+) -> Result<(), SessionError> {
+    let raw = String::from_utf8_lossy(bytes);
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let line: SessionEventLine = serde_json::from_str(raw).map_err(SessionError::Deserialize)?;
+    if line.schema_version > SESSION_SCHEMA_VERSION {
+        return Err(SessionError::UnsupportedSchema(line.schema_version));
+    }
+
+    match line.event {
+        SessionEvent::TruncateAfter { message_id } => {
+            *min_later_truncate_cutoff = Some(
+                min_later_truncate_cutoff
+                    .map(|current| current.min(message_id))
+                    .unwrap_or(message_id),
+            );
+        }
+        SessionEvent::MessageEdit {
+            message_id,
+            message,
+        } => {
+            if message_id < before
+                && !is_deleted_by_later_truncate(message_id, *min_later_truncate_cutoff)
+            {
+                latest_edits.entry(message_id).or_insert(message);
+            }
+        }
+        SessionEvent::Message { message } => {
+            if collected.len() > limit {
+                return Ok(());
+            }
+            if line.seq >= before
+                || is_deleted_by_later_truncate(line.seq, *min_later_truncate_cutoff)
+            {
+                return Ok(());
+            }
+            let message = latest_edits.remove(&line.seq).unwrap_or(message);
+            if !is_display_message(&message) {
+                return Ok(());
+            }
+            collected.push(SessionMessageEntry {
+                seq: line.seq,
+                ts_ms: line.ts_ms,
+                message,
+            });
+        }
+        SessionEvent::Finish { .. }
+        | SessionEvent::Error { .. }
+        | SessionEvent::GoalSet { .. }
+        | SessionEvent::GoalCleared
+        | SessionEvent::GoalCompleted { .. }
+        | SessionEvent::GoalUsage { .. } => {}
+    }
+
+    Ok(())
+}
+
+fn is_deleted_by_later_truncate(message_id: u64, cutoff: Option<u64>) -> bool {
+    cutoff.is_some_and(|cutoff| message_id > cutoff)
+}
+
+fn is_display_message(message: &Message) -> bool {
+    match message {
+        Message::User { content, hidden } => {
+            !*hidden
+                && !content
+                    .first_text()
+                    .map(crate::compact::is_summary_message)
+                    .unwrap_or(false)
+        }
+        Message::Assistant { .. } | Message::Tool { .. } => true,
+        Message::System { .. } | Message::Developer { .. } => false,
+    }
+}
+
 fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u64) {
     state.meta.updated_at_ms = state.meta.updated_at_ms.max(ts_ms);
     state.meta.last_seq = state.meta.last_seq.max(seq);
@@ -1012,6 +1220,122 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, state.meta.id);
         assert_eq!(list[0].title.as_deref(), Some("hello"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_message_page_returns_visible_current_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(tmp.path()).with_checkpoint_every(1000);
+
+        let mut state = store
+            .create(
+                "plan",
+                Some("p/m".to_string()),
+                None,
+                None,
+                Vec::new(),
+                vec![
+                    Message::System {
+                        content: "system".to_string(),
+                    },
+                    Message::User {
+                        content: crate::protocol::UserMessageContent::Text("one".to_string()),
+                        hidden: false,
+                    },
+                    Message::User {
+                        content: crate::protocol::UserMessageContent::Text("hidden".to_string()),
+                        hidden: true,
+                    },
+                    Message::Assistant {
+                        content: Some("two".to_string()),
+                        reasoning_content: None,
+                        tool_calls: Vec::new(),
+                        usage: None,
+                        provider_metadata: None,
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        store
+            .record_message(
+                &mut state,
+                Message::User {
+                    content: crate::protocol::UserMessageContent::Text("three".to_string()),
+                    hidden: false,
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .edit_message(
+                &mut state,
+                2,
+                Message::User {
+                    content: crate::protocol::UserMessageContent::Text("one edited".to_string()),
+                    hidden: false,
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .record_message(
+                &mut state,
+                Message::Assistant {
+                    content: Some("deleted".to_string()),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+        store.truncate_after(&mut state, 5).await.unwrap();
+        store
+            .record_message(
+                &mut state,
+                Message::Assistant {
+                    content: Some("after truncate".to_string()),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let first = store.read_message_page(state.id(), 2, None).await.unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|entry| entry.seq)
+                .collect::<Vec<_>>(),
+            vec![5, 9]
+        );
+        assert_eq!(first.next_before.as_deref(), Some("5"));
+
+        let second = store
+            .read_message_page(state.id(), 2, Some(5))
+            .await
+            .unwrap();
+        assert_eq!(
+            second
+                .items
+                .iter()
+                .map(|entry| entry.seq)
+                .collect::<Vec<_>>(),
+            vec![2, 4]
+        );
+        assert_eq!(second.next_before, None);
+        assert!(matches!(
+            &second.items[0].message,
+            Message::User { content, hidden: false }
+                if content.first_text() == Some("one edited")
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]

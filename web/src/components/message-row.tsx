@@ -129,7 +129,7 @@ function renderToolCalls(
   );
 }
 
-export function MessageRow({
+export const MessageRow = React.memo(function MessageRow({
   msg,
   toolDurationsMs,
   thinkingDurationsMs,
@@ -139,6 +139,8 @@ export function MessageRow({
   onEditUser,
   onRegenerateAssistant,
   historyMutable,
+  userMessageExpanded,
+  onUserMessageExpandedChange,
 }: {
   msg: Message;
   toolDurationsMs: Record<string, number>;
@@ -149,13 +151,26 @@ export function MessageRow({
   onEditUser?: (userMessageId: string, content: string) => void;
   onRegenerateAssistant?: (assistantMessageId: string) => void;
   historyMutable?: boolean;
+  userMessageExpanded?: boolean;
+  onUserMessageExpandedChange?: (userMessageId: string, expanded: boolean) => void;
 }) {
-  const [userMessageExpanded, setUserMessageExpanded] = React.useState(false);
+  const [localUserMessageExpanded, setLocalUserMessageExpanded] = React.useState(false);
+  const expandedUserMessage = userMessageExpanded ?? localUserMessageExpanded;
+  const setExpandedUserMessage = React.useCallback(
+    (expanded: boolean) => {
+      if (onUserMessageExpandedChange) {
+        onUserMessageExpandedChange(msg.id, expanded);
+        return;
+      }
+      setLocalUserMessageExpanded(expanded);
+    },
+    [msg.id, onUserMessageExpandedChange],
+  );
 
   if (msg.role === "user") {
     const wide = hasMermaidFence(msg.content);
     const collapsible = shouldCollapseUserMessage(msg.content);
-    const collapsed = collapsible && !userMessageExpanded;
+    const collapsed = collapsible && !expandedUserMessage;
     const canEdit = Boolean(historyMutable && onEditUser && parseMessageId(msg.id));
     const queued = msg.delivery_state === "queued";
     const attachments = msg.attachments ?? [];
@@ -203,12 +218,12 @@ export function MessageRow({
                 <button
                   type="button"
                   className={`absolute right-2 top-2 rounded-md p-1 ${collapseButtonTone}`}
-                  aria-label={userMessageExpanded ? "Collapse message" : "Expand message"}
-                  title={userMessageExpanded ? "Collapse" : "Expand"}
-                  aria-expanded={userMessageExpanded}
-                  onClick={() => setUserMessageExpanded((v) => !v)}
+                  aria-label={expandedUserMessage ? "Collapse message" : "Expand message"}
+                  title={expandedUserMessage ? "Collapse" : "Expand"}
+                  aria-expanded={expandedUserMessage}
+                  onClick={() => setExpandedUserMessage(!expandedUserMessage)}
                 >
-                  {userMessageExpanded ? (
+                  {expandedUserMessage ? (
                     <ChevronUp className="h-4 w-4" />
                   ) : (
                     <ChevronDown className="h-4 w-4" />
@@ -357,4 +372,4 @@ export function MessageRow({
       </details>
     </div>
   );
-}
+});

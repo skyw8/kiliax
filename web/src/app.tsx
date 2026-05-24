@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, Flag, FolderOpen, FolderPlus, GitFork, Hammer, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, Flag, FolderOpen, FolderPlus, GitFork, Hammer, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
@@ -37,6 +37,7 @@ import { EmptyState } from "./components/empty-state";
 import { Markdown, type MermaidErrorInfo } from "./components/markdown";
 import { MessageRow } from "./components/message-row";
 import { SessionItemRow } from "./components/session-item-row";
+import { Virtuoso, type VirtuosoHandle } from "./components/virtualized-list";
 import {
   Dialog,
   DialogContent,
@@ -70,12 +71,21 @@ type StreamState = {
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
 };
 
+type ChatRow =
+  | { type: "message"; message: Message }
+  | { type: "stream-thinking" }
+  | { type: "stream-tools" }
+  | { type: "stream-assistant" };
+
 type WorkspaceFolderItem = {
   label: string;
   path: string;
 };
 
 const LIST_PAGE_SIZE = 6;
+const MESSAGE_PAGE_SIZE = 100;
+const MAX_LIVE_MESSAGE_WINDOW = 1000;
+const VIRTUOSO_BASE_INDEX = 1_000_000;
 const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,application/pdf";
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MESSAGE_COLUMN_WIDTH = "w-full max-w-[92%] sm:max-w-[78%]";
@@ -149,6 +159,42 @@ function serverTimeToMonotonicMs(value?: string | null): number | null {
   return monotonicNowMs() - elapsed;
 }
 
+function messageSeq(m: Message): bigint | null {
+  return parseMessageId(m.id);
+}
+
+function compareMessages(a: Message, b: Message): number {
+  const av = messageSeq(a);
+  const bv = messageSeq(b);
+  if (av != null && bv != null) {
+    if (av < bv) return -1;
+    if (av > bv) return 1;
+    return 0;
+  }
+  if (av != null) return -1;
+  if (bv != null) return 1;
+  return a.created_at.localeCompare(b.created_at);
+}
+
+function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
+  if (!incoming.length) return existing;
+  const byId = new Map<string, Message>();
+  for (const m of existing) byId.set(m.id, m);
+  for (const m of incoming) byId.set(m.id, m);
+  return Array.from(byId.values()).sort(compareMessages);
+}
+
+function trimLiveTail(messages: Message[]): { items: Message[]; droppedStart: number } {
+  if (messages.length <= MAX_LIVE_MESSAGE_WINDOW) {
+    return { items: messages, droppedStart: 0 };
+  }
+  const droppedStart = messages.length - MAX_LIVE_MESSAGE_WINDOW;
+  return {
+    items: messages.slice(droppedStart),
+    droppedStart,
+  };
+}
+
 export default function App() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -173,6 +219,10 @@ export default function App() {
   const selectedId = route.name === "session" ? route.sessionId : null;
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesNextBefore, setMessagesNextBefore] = useState<string | null>(null);
+  const [messagesLoadingOlder, setMessagesLoadingOlder] = useState(false);
+  const [messageFirstItemIndex, setMessageFirstItemIndex] = useState(VIRTUOSO_BASE_INDEX);
+  const [expandedUserMessages, setExpandedUserMessages] = useState<Record<string, boolean>>({});
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [stream, setStream] = useState<StreamState>({
     thinking: "",
@@ -190,6 +240,12 @@ export default function App() {
   const thinkingStartedAtRef = useRef<number | null>(null);
   const assistantStartedAtRef = useRef<number | null>(null);
   const nextThinkingDurationMsRef = useRef<number | null>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const messagesNextBeforeRef = useRef<string | null>(null);
+  const messagesLoadingOlderRef = useRef(false);
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const streamBufferRef = useRef({ thinking: "", assistant: "" });
+  const streamFlushTimerRef = useRef<number | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const [composerText, setComposerText] = useState("");
@@ -250,7 +306,7 @@ export default function App() {
 
   const lastEventIdRef = useRef(0);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const [chatScrollEl, setChatScrollEl] = useState<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
@@ -508,7 +564,138 @@ export default function App() {
   }
 
   function scrollToBottom(behavior: ScrollBehavior = "auto") {
-    chatEndRef.current?.scrollIntoView({ behavior });
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior });
+  }
+
+  function setChatScrollNode(node: HTMLDivElement | null) {
+    if (chatScrollRef.current === node) return;
+    chatScrollRef.current = node;
+    setChatScrollEl(node);
+  }
+
+  function captureScrollAnchor(): { key: string; offsetTop: number } | null {
+    const parent = chatScrollRef.current;
+    if (!parent) return null;
+    const parentRect = parent.getBoundingClientRect();
+    const rows = Array.from(parent.querySelectorAll<HTMLElement>("[data-virtual-key]"));
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom < parentRect.top) continue;
+      return {
+        key: row.dataset.virtualKey ?? "",
+        offsetTop: rect.top - parentRect.top,
+      };
+    }
+    return null;
+  }
+
+  function restoreScrollAnchor(anchor: { key: string; offsetTop: number } | null) {
+    const parent = chatScrollRef.current;
+    if (!parent || !anchor?.key) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const row = parent.querySelector<HTMLElement>(
+          `[data-virtual-key="${CSS.escape(anchor.key)}"]`,
+        );
+        if (!row) return;
+        const parentRect = parent.getBoundingClientRect();
+        const rect = row.getBoundingClientRect();
+        parent.scrollTop += rect.top - parentRect.top - anchor.offsetTop;
+      });
+    });
+  }
+
+  function resetMessageWindow(items: Message[], nextBefore?: string | null) {
+    const sorted = [...items].sort(compareMessages);
+    messagesRef.current = sorted;
+    setMessages(sorted);
+    const cursor = nextBefore ?? null;
+    messagesNextBeforeRef.current = cursor;
+    setMessagesNextBefore(cursor);
+    setMessageFirstItemIndex(VIRTUOSO_BASE_INDEX - sorted.length);
+  }
+
+  function updateMessageWindow(
+    updater: (items: Message[]) => Message[],
+    opts: { trimTail?: boolean } = {},
+  ) {
+    const prev = messagesRef.current;
+    const next = updater(prev);
+    const trimmed = opts.trimTail ? trimLiveTail(next) : { items: next, droppedStart: 0 };
+    messagesRef.current = trimmed.items;
+    setMessages(trimmed.items);
+    if (trimmed.droppedStart > 0) {
+      setMessageFirstItemIndex((idx) => idx + trimmed.droppedStart);
+      const cursor = trimmed.items.find((m) => parseMessageId(m.id) != null)?.id ?? null;
+      messagesNextBeforeRef.current = cursor;
+      setMessagesNextBefore(cursor);
+    }
+  }
+
+  function appendMessagesToWindow(nextMessages: Message[]) {
+    updateMessageWindow((prev) => mergeMessages(prev, nextMessages), {
+      trimTail: isAtBottomRef.current,
+    });
+  }
+
+  async function loadOlderMessages() {
+    const sessionId = selectedIdRef.current;
+    const before = messagesNextBeforeRef.current;
+    if (!sessionId || !before || messagesLoadingOlderRef.current) return;
+    messagesLoadingOlderRef.current = true;
+    setMessagesLoadingOlder(true);
+    const anchor = captureScrollAnchor();
+    try {
+      const page = await api.getMessages(sessionId, MESSAGE_PAGE_SIZE, before);
+      if (selectedIdRef.current !== sessionId) return;
+      const prevLen = messagesRef.current.length;
+      const merged = mergeMessages(page.items, messagesRef.current);
+      const added = Math.max(0, merged.length - prevLen);
+      messagesRef.current = merged;
+      setMessages(merged);
+      if (added > 0) {
+        setMessageFirstItemIndex((idx) => idx - added);
+      }
+      const cursor = page.next_before ?? null;
+      messagesNextBeforeRef.current = cursor;
+      setMessagesNextBefore(cursor);
+      restoreScrollAnchor(anchor);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      messagesLoadingOlderRef.current = false;
+      setMessagesLoadingOlder(false);
+    }
+  }
+
+  function flushStreamBuffers() {
+    const buffered = streamBufferRef.current;
+    if (!buffered.thinking && !buffered.assistant) return;
+    streamBufferRef.current = { thinking: "", assistant: "" };
+    setStream((s) => ({
+      ...s,
+      thinking:
+        buffered.thinking && !s.assistantStarted
+          ? s.thinking + buffered.thinking
+          : s.thinking,
+      assistant: buffered.assistant ? s.assistant + buffered.assistant : s.assistant,
+      assistantStarted: buffered.assistant ? true : s.assistantStarted,
+    }));
+  }
+
+  function scheduleStreamFlush() {
+    if (streamFlushTimerRef.current != null) return;
+    streamFlushTimerRef.current = window.setTimeout(() => {
+      streamFlushTimerRef.current = null;
+      flushStreamBuffers();
+    }, 50);
+  }
+
+  function clearStreamFlushTimer() {
+    if (streamFlushTimerRef.current != null) {
+      window.clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
   }
 
   function markPendingRunSent(runId: string) {
@@ -524,7 +711,7 @@ export default function App() {
       }),
     );
     if (!localMessageId) return;
-    setMessages((prev) =>
+    updateMessageWindow((prev) =>
       prev.map((m) =>
         m.role === "user" && m.id === localMessageId
           ? { ...m, delivery_state: "sent" }
@@ -539,7 +726,7 @@ export default function App() {
       if (selectedIdRef.current !== sessionId) return;
       setSession(s);
 
-      const msgs = await api.getMessages(sessionId, 200);
+      const msgs = await api.getMessages(sessionId, MESSAGE_PAGE_SIZE);
       if (selectedIdRef.current !== sessionId) return;
       const liveStream: StreamSnapshot | null = s.stream ?? null;
       const thinkingStartedAt = serverTimeToMonotonicMs(liveStream?.thinking_started_at);
@@ -552,8 +739,10 @@ export default function App() {
         }
       }
 
-      setMessages(msgs.items);
+      resetMessageWindow(msgs.items, msgs.next_before ?? null);
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
+      clearStreamFlushTimer();
+      streamBufferRef.current = { thinking: "", assistant: "" };
       setStream({
         thinking: liveStream?.thinking ?? "",
         assistant: liveStream?.assistant ?? "",
@@ -623,10 +812,8 @@ export default function App() {
       if (thinkingStartedAtRef.current == null && assistantStartedAtRef.current == null) {
         thinkingStartedAtRef.current = now;
       }
-      setStream((s) => {
-        if (s.assistantStarted) return s;
-        return { ...s, thinking: s.thinking + delta };
-      });
+      streamBufferRef.current.thinking += delta;
+      scheduleStreamFlush();
       return;
     }
 
@@ -640,16 +827,14 @@ export default function App() {
           nextThinkingDurationMsRef.current = now - thinkingStartedAtRef.current;
         }
       }
-      setStream((s) => ({
-        ...s,
-        assistantStarted: true,
-        assistant: s.assistant + delta,
-      }));
+      streamBufferRef.current.assistant += delta;
+      scheduleStreamFlush();
       return;
     }
 
     if (type === "tool_call") {
       markPendingRunSent(runId);
+      flushStreamBuffers();
       const call = ev?.data?.call;
       if (!call?.name) return;
       const callId = String(call.id ?? "");
@@ -670,6 +855,7 @@ export default function App() {
 
     if (type === "tool_result") {
       markPendingRunSent(runId);
+      flushStreamBuffers();
       const msg = ev?.data?.message;
       if (!msg?.role) return;
       const toolCallId = String(msg?.tool_call_id ?? "");
@@ -685,13 +871,14 @@ export default function App() {
         ...s,
         toolCalls: toolCallId ? s.toolCalls.filter((call) => call.id !== toolCallId) : s.toolCalls,
       }));
-      setMessages((m) => [...m, msg as Message]);
+      appendMessagesToWindow([msg as Message]);
       void refreshSessionsIfStale();
       return;
     }
 
     if (type === "assistant_message") {
       markPendingRunSent(runId);
+      flushStreamBuffers();
       const msg = ev?.data?.message;
       if (!msg?.role) return;
       const messageId = String(msg?.id ?? "");
@@ -714,8 +901,9 @@ export default function App() {
           return { ...prev, [messageId]: thinkingElapsed };
         });
       }
-      setMessages((m) => [...m, msg as Message]);
+      appendMessagesToWindow([msg as Message]);
       setStream({ thinking: "", assistant: "", assistantStarted: false, toolCalls: [] });
+      streamBufferRef.current = { thinking: "", assistant: "" };
       assistantStartedAtRef.current = null;
       nextThinkingDurationMsRef.current = null;
       void refreshSessionsIfStale();
@@ -942,8 +1130,7 @@ export default function App() {
       }
 
       // Optimistic user message to keep ordering stable before tool output arrives.
-      setMessages((m) => [
-        ...m,
+      appendMessagesToWindow([
         {
           role: "user",
           id: localMessageId,
@@ -988,7 +1175,7 @@ export default function App() {
         setComposerText(text);
         setComposerAttachments(attachments);
         if (didAppendLocalMessage) {
-          setMessages((m) => m.filter((msg) => msg.id !== localMessageId));
+          updateMessageWindow((m) => m.filter((msg) => msg.id !== localMessageId));
         }
       }
       handleApiError(err);
@@ -996,6 +1183,8 @@ export default function App() {
   }
 
   function resetStreamState() {
+    clearStreamFlushTimer();
+    streamBufferRef.current = { thinking: "", assistant: "" };
     setStream({ thinking: "", assistant: "", assistantStarted: false, toolCalls: [] });
     setToolDurationsMs({});
     setAssistantDurationsMs({});
@@ -1026,7 +1215,7 @@ export default function App() {
       const afterId = parseMessageId(editMessageId);
       if (afterId == null) throw new Error("Invalid user message id");
       const afterIdNum = messageIdToSafeNumber(afterId);
-      setMessages((prev) =>
+      updateMessageWindow((prev) =>
         prev
           .map((m) => {
             if (m.role === "user" && m.id === editMessageId) {
@@ -1094,7 +1283,7 @@ export default function App() {
         throw new Error("Could not locate preceding user message");
       }
       if (afterId != null) {
-        setMessages((prev) =>
+        updateMessageWindow((prev) =>
           prev.filter((m) => {
             const mid = parseMessageId(m.id);
             if (mid == null) return false;
@@ -1396,6 +1585,22 @@ export default function App() {
   }, [pending]);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    messagesNextBeforeRef.current = messagesNextBefore;
+  }, [messagesNextBefore]);
+
+  useEffect(() => {
+    messagesLoadingOlderRef.current = messagesLoadingOlder;
+  }, [messagesLoadingOlder]);
+
+  useEffect(() => {
+    return () => clearStreamFlushTimer();
+  }, []);
+
+  useEffect(() => {
     setPinnedSessionIds((prev) => {
       if (!prev.length) return prev;
       const ids = new Set(sessions.map((s) => s.id));
@@ -1497,15 +1702,18 @@ export default function App() {
     selectedIdRef.current = selectedId;
     isAtBottomRef.current = true;
     setIsAtBottom(true);
+    setExpandedUserMessages({});
     if (!selectedId) {
       setSession(null);
-      setMessages([]);
+      resetMessageWindow([], null);
       setStream({
         thinking: "",
         assistant: "",
         assistantStarted: false,
         toolCalls: [],
       });
+      clearStreamFlushTimer();
+      streamBufferRef.current = { thinking: "", assistant: "" };
       wsEvents.close();
       wsEvents.resetReconnectAttempt();
       lastEventIdRef.current = 0;
@@ -1595,6 +1803,13 @@ export default function App() {
     (thinkingStartedAtRef.current != null ? clockNowMs - thinkingStartedAtRef.current : null);
   const liveAssistantElapsedMs =
     assistantStartedAtRef.current != null ? clockNowMs - assistantStartedAtRef.current : null;
+  const chatRows = useMemo<ChatRow[]>(() => {
+    const rows: ChatRow[] = messages.map((message) => ({ type: "message", message }));
+    if (stream.thinking) rows.push({ type: "stream-thinking" });
+    if (stream.toolCalls.length) rows.push({ type: "stream-tools" });
+    if (stream.assistant) rows.push({ type: "stream-assistant" });
+    return rows;
+  }, [messages, stream.thinking, stream.toolCalls, stream.assistant]);
 
   useEffect(() => {
     const active = Boolean(
@@ -2029,7 +2244,7 @@ export default function App() {
           </div>
 
           <div
-            ref={chatScrollRef}
+            ref={setChatScrollNode}
             onScroll={updateIsAtBottom}
             className={[
               "flex-1 overflow-auto bg-zinc-50 pb-4",
@@ -2089,131 +2304,175 @@ export default function App() {
                   </div>
                 </aside>
 
-                <div className="min-w-0 space-y-3">
-                  {messages.map((m) => (
-                  <MessageRow
-                    key={`${m.role}:${m.id}`}
-                    msg={m}
-                    toolDurationsMs={toolDurationsMs}
-                    thinkingDurationsMs={thinkingDurationsMs}
-                    assistantDurationsMs={assistantDurationsMs}
-                    onMermaidError={handleMermaidError}
-                    onFork={forkSessionFromAssistant}
-                    onEditUser={openEditDialog}
-                    onRegenerateAssistant={regenerateAssistant}
-                    historyMutable={historyMutable}
-                  />
-                ))}
+                <div className="min-w-0">
+                  {chatScrollEl ? (
+                    <Virtuoso
+                      ref={virtuosoRef}
+                      customScrollParent={chatScrollEl}
+                      data={chatRows}
+                      firstItemIndex={messageFirstItemIndex}
+                      followOutput={(atBottom) => (atBottom ? "auto" : false)}
+                      increaseViewportBy={{ top: 800, bottom: 800 }}
+                      startReached={loadOlderMessages}
+                      computeItemKey={(_, row) => {
+                        if (row.type === "message") return `${row.message.role}:${row.message.id}`;
+                        return row.type;
+                      }}
+                      components={{
+                        Header: () =>
+                          messagesLoadingOlder ? (
+                            <div className="py-2 text-center text-xs text-zinc-500">
+                              Loading history…
+                            </div>
+                          ) : null,
+                      }}
+                      itemContent={(_, row) => {
+                        if (row.type === "message") {
+                          const m = row.message;
+                          return (
+                            <div className="pb-3">
+                              <MessageRow
+                                msg={m}
+                                toolDurationsMs={toolDurationsMs}
+                                thinkingDurationsMs={thinkingDurationsMs}
+                                assistantDurationsMs={assistantDurationsMs}
+                                onMermaidError={handleMermaidError}
+                                onFork={forkSessionFromAssistant}
+                                onEditUser={openEditDialog}
+                                onRegenerateAssistant={regenerateAssistant}
+                                historyMutable={historyMutable}
+                                userMessageExpanded={expandedUserMessages[m.id]}
+                                onUserMessageExpandedChange={(messageId, expanded) =>
+                                  setExpandedUserMessages((prev) => ({
+                                    ...prev,
+                                    [messageId]: expanded,
+                                  }))
+                                }
+                              />
+                            </div>
+                          );
+                        }
 
-                {stream.thinking ? (
-                  <div className="flex justify-start">
-                    <details className={`relative ${MESSAGE_COLUMN_WIDTH} min-w-0 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2`}>
-                      <button
-                        type="button"
-                        className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
-                        aria-label="Copy thinking"
-                        title="Copy thinking"
-                        onClick={() => copyToClipboard(stream.thinking)}
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                      </button>
-                      <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-600">
-                        thinking
-                        {liveThinkingElapsedMs != null ? (
-                          <span className="ml-2 text-zinc-500">
-                            ({fmtDurationCompact(liveThinkingElapsedMs)})
-                          </span>
-                        ) : null}
-                      </summary>
-                      <div className="mt-2 whitespace-pre-wrap text-xs italic text-zinc-700">
-                        {stream.thinking}
-                      </div>
-                    </details>
-                  </div>
-                ) : null}
+                        if (row.type === "stream-thinking") {
+                          return (
+                            <div className="pb-3">
+                              <div className="flex justify-start">
+                                <details className={`relative ${MESSAGE_COLUMN_WIDTH} min-w-0 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2`}>
+                                  <button
+                                    type="button"
+                                    className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                                    aria-label="Copy thinking"
+                                    title="Copy thinking"
+                                    onClick={() => copyToClipboard(stream.thinking)}
+                                  >
+                                    <Copy className="h-3.5 w-3.5" />
+                                  </button>
+                                  <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-600">
+                                    thinking
+                                    {liveThinkingElapsedMs != null ? (
+                                      <span className="ml-2 text-zinc-500">
+                                        ({fmtDurationCompact(liveThinkingElapsedMs)})
+                                      </span>
+                                    ) : null}
+                                  </summary>
+                                  <div className="mt-2 whitespace-pre-wrap text-xs italic text-zinc-700">
+                                    {stream.thinking}
+                                  </div>
+                                </details>
+                              </div>
+                            </div>
+                          );
+                        }
 
-                {stream.toolCalls.length ? (
-                  <div className="flex justify-start">
-                    <div className={`${MESSAGE_COLUMN_WIDTH} min-w-0 space-y-2`}>
-                      {stream.toolCalls.map((c) => (
-                        <details
-                          key={`toolcall:${c.id}:${c.name}`}
-                          className="relative w-full min-w-0 rounded-xl border border-zinc-200 bg-white px-4 py-2"
-                        >
-                          <button
-                            type="button"
-                            className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
-                            aria-label="Copy tool call"
-                            title="Copy tool call"
-                            onClick={() => copyToClipboard(c.arguments)}
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                          </button>
-                          <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-700">
-                            tool_call: <span className="font-mono">{c.name}</span>
-                            {toolDurationsMs[c.id] != null ? (
-                              <span className="ml-2 text-zinc-500">
-                                ({fmtDurationCompact(toolDurationsMs[c.id]!)})
-                              </span>
-                            ) : toolStartsRef.current[c.id]?.startedAt != null ? (
-                              <span className="ml-2 text-zinc-500">
-                                ({fmtDurationCompact(clockNowMs - toolStartsRef.current[c.id]!.startedAt)})
-                              </span>
-                            ) : null}
-                          </summary>
-                          <CodeBlock className="mt-2" code={c.arguments} lang="json" copyButton={false} />
-                        </details>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+                        if (row.type === "stream-tools") {
+                          return (
+                            <div className="pb-3">
+                              <div className="flex justify-start">
+                                <div className={`${MESSAGE_COLUMN_WIDTH} min-w-0 space-y-2`}>
+                                  {stream.toolCalls.map((c) => (
+                                    <details
+                                      key={`toolcall:${c.id}:${c.name}`}
+                                      className="relative w-full min-w-0 rounded-xl border border-zinc-200 bg-white px-4 py-2"
+                                    >
+                                      <button
+                                        type="button"
+                                        className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                                        aria-label="Copy tool call"
+                                        title="Copy tool call"
+                                        onClick={() => copyToClipboard(c.arguments)}
+                                      >
+                                        <Copy className="h-3.5 w-3.5" />
+                                      </button>
+                                      <summary className="cursor-pointer select-none truncate pr-10 text-xs text-zinc-700">
+                                        tool_call: <span className="font-mono">{c.name}</span>
+                                        {toolDurationsMs[c.id] != null ? (
+                                          <span className="ml-2 text-zinc-500">
+                                            ({fmtDurationCompact(toolDurationsMs[c.id]!)})
+                                          </span>
+                                        ) : toolStartsRef.current[c.id]?.startedAt != null ? (
+                                          <span className="ml-2 text-zinc-500">
+                                            ({fmtDurationCompact(clockNowMs - toolStartsRef.current[c.id]!.startedAt)})
+                                          </span>
+                                        ) : null}
+                                      </summary>
+                                      <CodeBlock className="mt-2" code={c.arguments} lang="json" copyButton={false} />
+                                    </details>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
 
-                {stream.assistant ? (
-                  <div className="flex justify-start">
-                    <div
-                      className={`${hasMermaidFence(stream.assistant) ? WIDE_MESSAGE_COLUMN_WIDTH : MESSAGE_COLUMN_WIDTH} min-w-0 rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}
-                    >
-                      <Markdown text={stream.assistant} deferMermaid />
-                      <div className="mt-2 border-t border-zinc-200 pt-1">
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
-                            aria-label="Copy message"
-                            title="Copy message"
-                            onClick={() => copyToClipboard(stream.assistant)}
-                          >
-                            <Copy className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled
-                            className="cursor-not-allowed rounded-md p-1 text-zinc-500 opacity-40"
-                            aria-label="Fork session"
-                            title="Fork session from here"
-                          >
-                            <GitFork className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
-                            aria-label="Menu"
-                            title="Menu"
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </button>
-                          {assistantStartedAtRef.current != null ? (
-                            <span className="ml-auto text-xs text-zinc-500">
-                              {fmtDurationCompact(liveAssistantElapsedMs ?? 0)}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div ref={chatEndRef} />
+                        return (
+                          <div className="pb-3">
+                            <div className="flex justify-start">
+                              <div
+                                className={`${hasMermaidFence(stream.assistant) ? WIDE_MESSAGE_COLUMN_WIDTH : MESSAGE_COLUMN_WIDTH} min-w-0 rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}
+                              >
+                                <Markdown text={stream.assistant} deferMermaid />
+                                <div className="mt-2 border-t border-zinc-200 pt-1">
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                                      aria-label="Copy message"
+                                      title="Copy message"
+                                      onClick={() => copyToClipboard(stream.assistant)}
+                                    >
+                                      <Copy className="h-4 w-4" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="cursor-not-allowed rounded-md p-1 text-zinc-500 opacity-40"
+                                      aria-label="Fork session"
+                                      title="Fork session from here"
+                                    >
+                                      <GitFork className="h-4 w-4" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
+                                      aria-label="Menu"
+                                      title="Menu"
+                                    >
+                                      <MoreHorizontal className="h-4 w-4" />
+                                    </button>
+                                    {assistantStartedAtRef.current != null ? (
+                                      <span className="ml-auto text-xs text-zinc-500">
+                                        {fmtDurationCompact(liveAssistantElapsedMs ?? 0)}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                  ) : null}
                 </div>
               </div>
             ) : (

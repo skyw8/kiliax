@@ -133,9 +133,16 @@ export const api = {
       body: JSON.stringify(req),
     });
   },
-  getMessages(sessionId: string, limit = 200): Promise<MessageListResponse> {
+  getMessages(
+    sessionId: string,
+    limit = 200,
+    before?: string | null,
+  ): Promise<MessageListResponse> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    const trimmedBefore = (before ?? "").trim();
+    if (trimmedBefore) params.set("before", trimmedBefore);
     return apiFetch<MessageListResponse>(
-      `/v1/sessions/${sessionId}/messages?limit=${limit}`,
+      `/v1/sessions/${sessionId}/messages?${params.toString()}`,
     );
   },
   createRun(sessionId: string, req: RunCreateRequest) {
