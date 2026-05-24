@@ -970,19 +970,9 @@ export default function App() {
     }
   }
 
-  function inheritedModelIdForNewSession(): string | undefined {
-    const v = (
-      session?.settings?.model_id ??
-      selectedSummary?.settings?.model_id ??
-      ""
-    ).trim();
-    return v ? v : undefined;
-  }
-
   async function onNewSession() {
     try {
-      const modelId = inheritedModelIdForNewSession();
-      const s = await api.createSession(modelId ? { settings: { model_id: modelId } } : undefined);
+      const s = await api.createSession();
       await refreshSessions();
       selectSession(s.id);
     } catch (err) {
@@ -992,9 +982,8 @@ export default function App() {
 
   async function onNewSessionInWorkspace(workspaceRoot: string) {
     try {
-      const modelId = inheritedModelIdForNewSession();
       const s = await api.createSession({
-        settings: { workspace_root: workspaceRoot, model_id: modelId },
+        settings: { workspace_root: workspaceRoot },
       });
       await refreshSessions();
       selectSession(s.id);
@@ -1027,9 +1016,8 @@ export default function App() {
     const trimmed = path.trim();
     if (!trimmed) return;
     try {
-      const modelId = inheritedModelIdForNewSession();
       const s = await api.createSession({
-        settings: { workspace_root: trimmed, model_id: modelId },
+        settings: { workspace_root: trimmed },
       });
       await refreshSessions();
       selectSession(s.id);
