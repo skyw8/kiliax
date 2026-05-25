@@ -567,6 +567,12 @@ export default function App() {
     virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior });
   }
 
+  function followToBottom(behavior: ScrollBehavior = "auto") {
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
+    requestAnimationFrame(() => scrollToBottom(behavior));
+  }
+
   function setChatScrollNode(node: HTMLDivElement | null) {
     if (chatScrollRef.current === node) return;
     chatScrollRef.current = node;
@@ -1157,6 +1163,7 @@ export default function App() {
           delivery_state: "queued",
         },
       ]);
+      followToBottom("auto");
       didAppendLocalMessage = true;
 
       const run: any = await api.createRun(sessionId, {
@@ -1248,6 +1255,7 @@ export default function App() {
       );
       resetStreamState();
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
+      followToBottom("auto");
 
       const run: any = await api.createRun(sessionId, {
         input: { type: "edit_user_message", user_message_id: afterIdNum, content: text },
@@ -1310,6 +1318,7 @@ export default function App() {
       }
       resetStreamState();
       setPending((p) => p.filter((m) => m.sessionId !== sessionId));
+      followToBottom("auto");
 
       const userIdNum = messageIdToSafeNumber(afterId);
       const run: any = await api.createRun(sessionId, {

@@ -116,6 +116,7 @@ function VirtuosoInner<T>(
     rootTop: 0,
   });
   const previousDataLengthRef = React.useRef(props.data.length);
+  const stickToBottomRef = React.useRef(true);
 
   propsRef.current = props;
 
@@ -125,6 +126,8 @@ function VirtuosoInner<T>(
     if (!root || !parent) return;
     const parentRect = parent.getBoundingClientRect();
     const rootRect = root.getBoundingClientRect();
+    const distance = parent.scrollHeight - parent.scrollTop - parent.clientHeight;
+    stickToBottomRef.current = distance <= 128;
     setViewport({
       scrollTop: parent.scrollTop,
       viewportHeight: parent.clientHeight,
@@ -218,6 +221,16 @@ function VirtuosoInner<T>(
     [headerHeight, offsets, viewport.rootTop],
   );
 
+  const scrollToBottom = React.useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      const parent = propsRef.current.customScrollParent;
+      requestAnimationFrame(() => {
+        parent.scrollTo({ top: parent.scrollHeight, behavior });
+      });
+    },
+    [],
+  );
+
   React.useImperativeHandle(
     ref,
     () => ({
@@ -239,6 +252,7 @@ function VirtuosoInner<T>(
     const parent = props.customScrollParent;
     const distance = parent.scrollHeight - parent.scrollTop - parent.clientHeight;
     const atBottom = distance <= 128;
+    stickToBottomRef.current = atBottom;
     const behavior = props.followOutput(atBottom);
     if (!behavior) return;
     requestAnimationFrame(() => {
@@ -247,11 +261,15 @@ function VirtuosoInner<T>(
   }, [props, scrollToDataIndex]);
 
   const handleSize = React.useCallback((key: string, size: number) => {
+    const shouldFollow = propsRef.current.followOutput && stickToBottomRef.current;
     setSizes((prev) => {
       if (Math.abs((prev[key] ?? 0) - size) < 0.5) return prev;
       return { ...prev, [key]: size };
     });
-  }, []);
+    if (shouldFollow) {
+      scrollToBottom("auto");
+    }
+  }, [scrollToBottom]);
 
   const Header = props.components?.Header;
 
