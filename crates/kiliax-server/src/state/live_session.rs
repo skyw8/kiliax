@@ -290,6 +290,15 @@ fn goal_continuation_prompt(goal: &SessionGoal) -> String {
     prompt
 }
 
+fn rfc3339_after_ms(delay_ms: u64) -> String {
+    use time::format_description::well_known::Rfc3339;
+
+    let delay = time::Duration::milliseconds(delay_ms.min(i64::MAX as u64) as i64);
+    (time::OffsetDateTime::now_utc() + delay)
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| now_rfc3339())
+}
+
 impl LiveSession {
     fn config_snapshot(&self) -> Arc<Config> {
         self.config.load_full()
@@ -361,7 +370,9 @@ impl LiveSession {
                     "idle".to_string()
                 }
             }
-            domain::SessionRunState::Running | domain::SessionRunState::Tooling => {
+            domain::SessionRunState::Running
+            | domain::SessionRunState::Tooling
+            | domain::SessionRunState::Retrying => {
                 "running".to_string()
             }
         }
@@ -483,6 +494,7 @@ impl LiveSession {
                 active_run_started_at: None,
                 step: 0,
                 active_tool: None,
+                retry_status: None,
                 queue_len: 0,
                 last_event_id,
             }),
@@ -605,6 +617,7 @@ impl LiveSession {
                 active_run_started_at: None,
                 step: 0,
                 active_tool: None,
+                retry_status: None,
                 queue_len: 0,
                 last_event_id,
             }),
@@ -1774,6 +1787,7 @@ impl LiveSession {
                 st.active_run_started_at = Some(run_started_at.clone());
                 st.step = 0;
                 st.active_tool = None;
+                st.retry_status = None;
             }
             *self.stream_snapshot.lock().await = None;
 
@@ -1924,11 +1938,15 @@ impl LiveSession {
                     "agent not supported",
                 )
             })?;
-            let options = AgentRuntimeOptions::from_config_for_model(
+            let mut options = AgentRuntimeOptions::from_config_for_model(
                 &profile,
                 config.as_ref(),
                 Some(effective.model_id.as_str()),
             );
+            if matches!(run.input, domain::RunInput::GoalContinuation) {
+                options.retry_mode = kiliax_core::llm::LlmRetryMode::Goal;
+            }
+            options.cancel_rx = Some(cancel_rx.clone());
             let max_steps = options.max_steps;
 
             let llm =
@@ -2086,6 +2104,7 @@ impl LiveSession {
                 st.active_run_started_at = None;
                 st.step = 0;
                 st.active_tool = None;
+                st.retry_status = None;
             }
             *self.active_cancel.lock().await = None;
 
@@ -2356,7 +2375,12 @@ impl LiveSession {
     ) -> Result<Option<String>, ApiError> {
         match ev {
             AgentEvent::StepStart { step } => {
-                self.status.lock().await.step = step as u32;
+                {
+                    let mut st = self.status.lock().await;
+                    st.run_state = domain::SessionRunState::Running;
+                    st.step = step as u32;
+                    st.retry_status = None;
+                }
                 let event_id = self.alloc_event_id();
                 let ts = now_rfc3339();
                 self.ensure_stream_snapshot(run, event_id).await;
@@ -2367,6 +2391,34 @@ impl LiveSession {
                     run_id: Some(run.id.clone()),
                     event_type: "step_start".to_string(),
                     data: serde_json::json!({ "step": step }),
+                })
+                .await?;
+            }
+            AgentEvent::LlmRetry(retry) => {
+                let event_id = self.alloc_event_id();
+                let ts = now_rfc3339();
+                let retry_status = domain::RetryStatus {
+                    kind: retry.kind.as_str().to_string(),
+                    attempt: retry.attempt,
+                    max_attempts: retry.max_attempts,
+                    next_attempt_at: rfc3339_after_ms(retry.delay_ms),
+                    delay_ms: retry.delay_ms,
+                    message: retry.message,
+                    trace_id: kiliax_core::telemetry::spans::current_trace_id(),
+                };
+                {
+                    let mut st = self.status.lock().await;
+                    st.run_state = domain::SessionRunState::Retrying;
+                    st.active_tool = None;
+                    st.retry_status = Some(retry_status.clone());
+                }
+                self.emit_ephemeral_event(domain::Event {
+                    event_id,
+                    ts,
+                    session_id: self.session_id.to_string(),
+                    run_id: Some(run.id.clone()),
+                    event_type: "run_retry".to_string(),
+                    data: serde_json::json!({ "retry_status": retry_status }),
                 })
                 .await?;
             }
@@ -2385,6 +2437,11 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantThinkingDelta { delta } => {
+                {
+                    let mut st = self.status.lock().await;
+                    st.run_state = domain::SessionRunState::Running;
+                    st.retry_status = None;
+                }
                 let event_id = self.alloc_event_id();
                 let ts = now_rfc3339();
                 self.apply_thinking_delta(run, event_id, ts.clone(), &delta)
@@ -2400,6 +2457,11 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantDelta { delta } => {
+                {
+                    let mut st = self.status.lock().await;
+                    st.run_state = domain::SessionRunState::Running;
+                    st.retry_status = None;
+                }
                 let event_id = self.alloc_event_id();
                 let ts = now_rfc3339();
                 self.apply_assistant_delta(run, event_id, ts.clone(), &delta)
@@ -2415,6 +2477,11 @@ impl LiveSession {
                 .await?;
             }
             AgentEvent::AssistantMessage { message } => {
+                {
+                    let mut st = self.status.lock().await;
+                    st.run_state = domain::SessionRunState::Running;
+                    st.retry_status = None;
+                }
                 let tokens_used = match &message {
                     CoreMessage::Assistant {
                         usage: Some(usage), ..
@@ -2450,6 +2517,7 @@ impl LiveSession {
                     let mut st = self.status.lock().await;
                     st.run_state = domain::SessionRunState::Tooling;
                     st.active_tool = Some(call.name.clone());
+                    st.retry_status = None;
                 }
                 let event_id = self.alloc_event_id();
                 let ts = now_rfc3339();
@@ -2478,6 +2546,7 @@ impl LiveSession {
                     let mut st = self.status.lock().await;
                     st.run_state = domain::SessionRunState::Running;
                     st.active_tool = None;
+                    st.retry_status = None;
                 }
                 let created_at = now_rfc3339();
                 let msg =

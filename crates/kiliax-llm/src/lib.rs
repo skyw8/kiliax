@@ -37,6 +37,7 @@ use patches::{
     inject_prompt_cache_fields, inject_reasoning_content_for_tool_calls,
     is_reasoning_content_missing_error, should_inject_reasoning_content,
 };
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
@@ -69,6 +70,43 @@ pub enum LlmError {
 
     #[error("chat completion response has no choices")]
     NoChoices,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmRetryKind {
+    NetworkTransient,
+    ServerTransient,
+    RateLimited,
+    ClientError,
+    NonRetryable,
+}
+
+impl LlmRetryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NetworkTransient => "network_transient",
+            Self::ServerTransient => "server_transient",
+            Self::RateLimited => "rate_limited",
+            Self::ClientError => "client_error",
+            Self::NonRetryable => "non_retryable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmRetryMode {
+    Run,
+    Goal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmRetryDecision {
+    pub kind: LlmRetryKind,
+    pub retryable: bool,
+    pub max_attempts: Option<u32>,
+    pub delay: Duration,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
@@ -125,6 +163,123 @@ impl LlmError {
             _ => false,
         }
     }
+}
+
+pub fn classify_llm_error(err: &LlmError) -> LlmRetryKind {
+    if err.is_context_window_exceeded() {
+        return LlmRetryKind::NonRetryable;
+    }
+
+    if let Some(status) = llm_error_status(err) {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return LlmRetryKind::RateLimited;
+        }
+        if status.is_server_error() {
+            return LlmRetryKind::ServerTransient;
+        }
+        if status.is_client_error() {
+            return LlmRetryKind::ClientError;
+        }
+    }
+
+    if llm_error_is_network_transient(err) {
+        return LlmRetryKind::NetworkTransient;
+    }
+
+    LlmRetryKind::NonRetryable
+}
+
+pub fn llm_retry_decision(
+    err: &LlmError,
+    mode: LlmRetryMode,
+    attempt: u32,
+) -> LlmRetryDecision {
+    let kind = classify_llm_error(err);
+    let max_attempts = match (mode, kind) {
+        (LlmRetryMode::Goal, LlmRetryKind::NetworkTransient | LlmRetryKind::ServerTransient) => {
+            None
+        }
+        (LlmRetryMode::Goal, LlmRetryKind::RateLimited) => Some(5),
+        (_, LlmRetryKind::NetworkTransient | LlmRetryKind::ServerTransient) => Some(5),
+        (_, LlmRetryKind::RateLimited) => Some(3),
+        _ => Some(0),
+    };
+    let retryable = match max_attempts {
+        None => true,
+        Some(max) => max > 0 && attempt < max,
+    };
+    LlmRetryDecision {
+        kind,
+        retryable,
+        max_attempts,
+        delay: llm_retry_backoff(kind, attempt),
+        message: err.to_string(),
+    }
+}
+
+fn llm_retry_backoff(kind: LlmRetryKind, attempt: u32) -> Duration {
+    let base_ms = match kind {
+        LlmRetryKind::RateLimited => 5_000,
+        _ => 500,
+    };
+    let cap_ms = match kind {
+        LlmRetryKind::RateLimited => 120_000,
+        _ => 30_000,
+    };
+    let shift = attempt.saturating_sub(1).min(10);
+    let exp = 1_u64 << shift;
+    let delay = (base_ms as u64).saturating_mul(exp).min(cap_ms);
+    let jitter = ((attempt as u64).wrapping_mul(137)) % 250;
+    Duration::from_millis(delay.saturating_add(jitter))
+}
+
+fn llm_error_status(err: &LlmError) -> Option<reqwest::StatusCode> {
+    match err {
+        LlmError::Api { status, .. } => Some(*status),
+        LlmError::OpenAI(OpenAIError::ApiError(api)) => status_from_message(&api.message),
+        _ => None,
+    }
+}
+
+fn status_from_message(message: &str) -> Option<reqwest::StatusCode> {
+    let rest = message.strip_prefix("HTTP ")?;
+    let code = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    let code = code.parse::<u16>().ok()?;
+    reqwest::StatusCode::from_u16(code).ok()
+}
+
+fn llm_error_is_network_transient(err: &LlmError) -> bool {
+    match err {
+        LlmError::Http(err) => reqwest_error_is_network_transient(err),
+        LlmError::OpenAI(OpenAIError::Reqwest(err)) => reqwest_error_is_network_transient(err),
+        LlmError::OpenAI(OpenAIError::StreamError(msg)) | LlmError::Stream(msg) => {
+            let msg = msg.to_ascii_lowercase();
+            msg.contains("connection")
+                || msg.contains("connect")
+                || msg.contains("timeout")
+                || msg.contains("timed out")
+                || msg.contains("dns")
+                || msg.contains("try again")
+                || msg.contains("stream ended")
+        }
+        _ => false,
+    }
+}
+
+fn reqwest_error_is_network_transient(err: &reqwest::Error) -> bool {
+    if err.is_timeout() || err.is_connect() || err.is_request() || err.is_body() {
+        return true;
+    }
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("dns")
+        || msg.contains("try again")
+        || msg.contains("connection")
+        || msg.contains("connect")
+        || msg.contains("timeout")
+        || msg.contains("timed out")
 }
 
 fn is_context_window_exceeded_api_body(body: &str) -> bool {
@@ -1222,6 +1377,67 @@ mod tests {
         });
 
         assert!(is_reasoning_content_missing_error(&err));
+    }
+
+    #[test]
+    fn classifies_retryable_http_statuses() {
+        let rate_limited = LlmError::Api {
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            body: "rate limited".to_string(),
+        };
+        let server_error = LlmError::Api {
+            status: reqwest::StatusCode::BAD_GATEWAY,
+            body: "bad gateway".to_string(),
+        };
+
+        assert_eq!(classify_llm_error(&rate_limited), LlmRetryKind::RateLimited);
+        assert_eq!(
+            classify_llm_error(&server_error),
+            LlmRetryKind::ServerTransient
+        );
+    }
+
+    #[test]
+    fn does_not_retry_client_or_context_errors() {
+        let unauthorized = LlmError::Api {
+            status: reqwest::StatusCode::UNAUTHORIZED,
+            body: "bad key".to_string(),
+        };
+        let context = LlmError::Api {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: r#"{"error":{"message":"maximum context length exceeded"}}"#.to_string(),
+        };
+
+        assert_eq!(classify_llm_error(&unauthorized), LlmRetryKind::ClientError);
+        assert_eq!(classify_llm_error(&context), LlmRetryKind::NonRetryable);
+        assert!(!llm_retry_decision(&unauthorized, LlmRetryMode::Goal, 1).retryable);
+        assert!(!llm_retry_decision(&context, LlmRetryMode::Goal, 1).retryable);
+    }
+
+    #[test]
+    fn goal_retries_network_and_server_without_attempt_limit_but_limits_429() {
+        let network = LlmError::Stream("dns error: Try again".to_string());
+        let server = LlmError::Api {
+            status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            body: "unavailable".to_string(),
+        };
+        let rate_limited = LlmError::Api {
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            body: "rate limited".to_string(),
+        };
+
+        let network_decision = llm_retry_decision(&network, LlmRetryMode::Goal, 42);
+        let server_decision = llm_retry_decision(&server, LlmRetryMode::Goal, 42);
+        let rate_limited_first = llm_retry_decision(&rate_limited, LlmRetryMode::Goal, 1);
+        let rate_limited_late = llm_retry_decision(&rate_limited, LlmRetryMode::Goal, 5);
+
+        assert!(network_decision.retryable);
+        assert_eq!(network_decision.max_attempts, None);
+        assert!(server_decision.retryable);
+        assert_eq!(server_decision.max_attempts, None);
+        assert!(rate_limited_first.retryable);
+        assert_eq!(rate_limited_first.max_attempts, Some(5));
+        assert!(!rate_limited_late.retryable);
     }
 
     #[test]

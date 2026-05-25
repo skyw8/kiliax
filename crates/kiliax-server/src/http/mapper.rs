@@ -7,6 +7,7 @@ impl From<domain::SessionRunState> for api::SessionRunState {
             domain::SessionRunState::Idle => Self::Idle,
             domain::SessionRunState::Running => Self::Running,
             domain::SessionRunState::Tooling => Self::Tooling,
+            domain::SessionRunState::Retrying => Self::Retrying,
         }
     }
 }
@@ -19,8 +20,23 @@ impl From<domain::SessionStatus> for api::SessionStatus {
             active_run_started_at: value.active_run_started_at,
             step: value.step,
             active_tool: value.active_tool,
+            retry_status: value.retry_status.map(Into::into),
             queue_len: value.queue_len,
             last_event_id: value.last_event_id,
+        }
+    }
+}
+
+impl From<domain::RetryStatus> for api::RetryStatus {
+    fn from(value: domain::RetryStatus) -> Self {
+        Self {
+            kind: value.kind,
+            attempt: value.attempt,
+            max_attempts: value.max_attempts,
+            next_attempt_at: value.next_attempt_at,
+            delay_ms: value.delay_ms,
+            message: value.message,
+            trace_id: value.trace_id,
         }
     }
 }

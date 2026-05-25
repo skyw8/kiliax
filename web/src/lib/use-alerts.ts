@@ -23,7 +23,10 @@ export function useAlerts() {
   }, []);
 
   const pushAlert = useCallback((alert: AlertItem) => {
-    setAlerts((prev) => pruneAlerts([...prev, alert]));
+    setAlerts((prev) => {
+      const next = prev.filter((item) => item.id !== alert.id);
+      return pruneAlerts([...next, alert]);
+    });
   }, []);
 
   const clearAlerts = useCallback(() => {
@@ -63,4 +66,3 @@ export function useAlerts() {
 
   return { alerts, pushAlert, closeAlert, clearAlerts };
 }
-

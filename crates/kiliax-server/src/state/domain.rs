@@ -24,6 +24,8 @@ pub struct SessionStatus {
     pub step: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_status: Option<RetryStatus>,
     pub queue_len: usize,
     pub last_event_id: u64,
 }
@@ -34,6 +36,20 @@ pub enum SessionRunState {
     Idle,
     Running,
     Tooling,
+    Retrying,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetryStatus {
+    pub kind: String,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
+    pub next_attempt_at: String,
+    pub delay_ms: u64,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

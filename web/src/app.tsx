@@ -805,6 +805,32 @@ export default function App() {
       return;
     }
 
+    if (type === "run_retry") {
+      markPendingRunSent(runId);
+      const retry = ev?.data?.retry_status ?? null;
+      const attempt = typeof retry?.attempt === "number" ? retry.attempt : 1;
+      const maxAttempts =
+        typeof retry?.max_attempts === "number" ? String(retry.max_attempts) : "∞";
+      const delayMs = typeof retry?.delay_ms === "number" ? retry.delay_ms : 0;
+      const delay = fmtDurationCompact(delayMs);
+      const kind = String(retry?.kind ?? "retry").replaceAll("_", " ");
+      const traceId = retry?.trace_id ?? undefined;
+      pushAlert({
+        id: runId ? `run-retry-${runId}` : "run-retry",
+        level: "error",
+        title: "LLM request failed, retrying",
+        subtitle: `${kind} • attempt ${attempt}/${maxAttempts} • next in ${delay}`,
+        message: String(retry?.message ?? "The provider request failed and will be retried."),
+        traceId,
+        details: { retry_status: retry, run_id: runId },
+      });
+      if (selectedIdRef.current) {
+        void fetchSession(selectedIdRef.current);
+      }
+      await refreshSessionsIfStale(0);
+      return;
+    }
+
     if (type === "assistant_thinking_delta") {
       markPendingRunSent(runId);
       const delta = ev?.data?.delta ?? "";
@@ -956,6 +982,9 @@ export default function App() {
     }
 
     if (type === "run_done" || type === "run_error" || type === "run_cancelled") {
+      if (runId) {
+        closeAlert(`run-retry-${runId}`);
+      }
       if (runId) {
         delete localMessageByRunRef.current[runId];
       }
@@ -1608,7 +1637,8 @@ export default function App() {
           summary.status.active_run_id != null ||
           summary.status.queue_len > 0 ||
           summary.status.run_state === "running" ||
-          summary.status.run_state === "tooling";
+          summary.status.run_state === "tooling" ||
+          summary.status.run_state === "retrying";
         if (hasWork) return true;
 
         // Keep the pending entry only while the sessions list hasn't reflected it yet.
@@ -1747,7 +1777,8 @@ export default function App() {
       (selectedSummary.status.active_run_id != null ||
         selectedSummary.status.queue_len > 0 ||
         selectedSummary.status.run_state === "running" ||
-        selectedSummary.status.run_state === "tooling"),
+        selectedSummary.status.run_state === "tooling" ||
+        selectedSummary.status.run_state === "retrying"),
   );
   const historyMutable = Boolean(
     selectedSummary &&

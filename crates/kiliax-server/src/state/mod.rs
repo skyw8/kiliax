@@ -955,10 +955,11 @@ fn runtime_error_code(err: &AgentRuntimeError) -> &'static str {
     match err {
         AgentRuntimeError::MaxSteps { .. } => "max_steps_exceeded",
         AgentRuntimeError::EmptyAssistantMessage { .. } => "empty_assistant_message",
-        AgentRuntimeError::Llm(kiliax_core::llm::LlmError::InvalidRequest(_)) => {
+        AgentRuntimeError::Llm(kiliax_core::llm::LlmError::InvalidRequest(_))
+        | AgentRuntimeError::LlmBeforeOutput(kiliax_core::llm::LlmError::InvalidRequest(_)) => {
             "invalid_message_history"
         }
-        AgentRuntimeError::Llm(_) => "llm_error",
+        AgentRuntimeError::Llm(_) | AgentRuntimeError::LlmBeforeOutput(_) => "llm_error",
         AgentRuntimeError::Tool(_) => "tool_error",
         AgentRuntimeError::Cancelled => "cancelled",
     }

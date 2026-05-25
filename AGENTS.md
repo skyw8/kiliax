@@ -35,7 +35,7 @@ minimal
 - Provider-neutral message history sanitization + request-safety helpers: `crates/kiliax-core/src/history.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
 - Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + available subagent descriptions + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
-- Agent runtime loop + tool scheduling barriers + thinking/body normalization + empty assistant guard: `crates/kiliax-core/src/runtime.rs`
+- Agent runtime loop + LLM retry/backoff event emission + tool scheduling barriers + thinking/body normalization + empty assistant guard: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + append-only events + reverse paged visible-message reads + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
@@ -58,7 +58,7 @@ minimal
 
 ### crates/kiliax-llm (LLM facade + providers)
 
-- Provider-neutral LLM facade, provider API routing, shared LLM error classification, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
+- Provider-neutral LLM facade, provider API routing, shared LLM error classification/retry policy, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks + image/PDF user content parts) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
 - OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + thinking-provider `reasoning_content` compatibility + Langfuse completion timing): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
 - OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/openai_responses.rs`
@@ -75,7 +75,7 @@ minimal
 - Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
-- State (config/session lifecycle/run queue/goal continuation loop/multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- State (config/session lifecycle/run queue/goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
 - Live session runtime integration (spawned child sessions, tool backend wiring, forked context, mailbox delivery, parent notifications): `crates/kiliax-server/src/state/live_session.rs`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input): `crates/kiliax-server/src/state/domain.rs`
@@ -89,7 +89,7 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + virtualized/paged session history + centered composer dock/attached workspace launchers + WS streaming with buffered live snapshot restore/active tool-call reconciliation/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
+- Main UI (responsive layout + virtualized/paged session history + centered composer dock/attached workspace launchers + WS streaming with buffered live snapshot restore/active tool-call reconciliation/retry alerts/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Dialog components: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
@@ -97,7 +97,7 @@ minimal
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
 - API client + server-side folder listing + explicit session default persistence + goal APIs + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
-- Types (includes message `usage`, live stream snapshots, session default writes, and base64 run attachments): `web/src/lib/types.ts`
+- Types (includes message `usage`, retry status, live stream snapshots, session default writes, and base64 run attachments): `web/src/lib/types.ts`
 
 ## constraints
 **All UI languages default to English, including any prompts, outputs, etc.**

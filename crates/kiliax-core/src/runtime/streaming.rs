@@ -52,6 +52,7 @@ pub(super) async fn drive_stream_step(
     let mut last_usage = None;
     let mut provider_metadata = None;
     let mut assistant_body_started = false;
+    let mut saw_chunk = false;
 
     loop {
         let item = tokio::select! {
@@ -63,7 +64,12 @@ pub(super) async fn drive_stream_step(
         let Some(item) = item else {
             break;
         };
-        let chunk = item?;
+        let chunk = match item {
+            Ok(chunk) => chunk,
+            Err(err) if !saw_chunk => return Err(AgentRuntimeError::LlmBeforeOutput(err)),
+            Err(err) => return Err(AgentRuntimeError::Llm(err)),
+        };
+        saw_chunk = true;
 
         let ChatStreamChunk {
             content_delta,

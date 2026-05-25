@@ -3,7 +3,7 @@ use tracing::Instrument;
 use crate::agents::{AgentKind, AgentProfile};
 
 use crate::history::{assistant_message_is_empty, sanitize_history_for_next_request};
-use crate::llm::{LlmClient, LlmError};
+use crate::llm::{llm_retry_decision, LlmClient, LlmError, LlmRetryKind, LlmRetryMode};
 use crate::protocol::{ChatRequest, FinishReason, Message, ToolCall, ToolChoice, ToolDefinition};
 use crate::telemetry;
 use crate::tools::{policy, ToolEngine, ToolError};
@@ -18,6 +18,9 @@ use tool_calls::{group_tool_calls, normalize_tool_call_ids, ToolCallGroup};
 pub enum AgentRuntimeError {
     #[error(transparent)]
     Llm(#[from] LlmError),
+
+    #[error(transparent)]
+    LlmBeforeOutput(LlmError),
 
     #[error(transparent)]
     Tool(#[from] ToolError),
@@ -48,6 +51,8 @@ pub struct AgentRuntimeOptions {
     pub tool_error_mode: ToolErrorMode,
     pub temperature: Option<f32>,
     pub auto_compact_token_limit: Option<usize>,
+    pub retry_mode: LlmRetryMode,
+    pub cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 impl Default for AgentRuntimeOptions {
@@ -59,6 +64,8 @@ impl Default for AgentRuntimeOptions {
             tool_error_mode: ToolErrorMode::ToolMessage,
             temperature: None,
             auto_compact_token_limit: None,
+            retry_mode: LlmRetryMode::Run,
+            cancel_rx: None,
         }
     }
 }
@@ -397,26 +404,22 @@ impl AgentRuntime {
                         }
 
                         let mut req = ChatRequest::new(messages.clone());
-            req.tools = tool_definitions_for(&profile, &tools, &model_id).await;
+                        req.tools = tool_definitions_for(&profile, &tools, &model_id).await;
                         req.tool_choice = options.tool_choice.clone();
                         req.parallel_tool_calls = options.parallel_tool_calls;
                         req.temperature = options.temperature;
 
-                        let stream = match llm.chat_stream(req).await {
-                            Ok(s) => s,
-                            Err(err) => {
-                                telemetry::metrics::record_run_finished(
-                                    &profile.name,
-                                    "error",
-                                    step_no as u64,
-                                    started.elapsed(),
-                                );
-                                let _ = tx.send(Err(err.into())).await;
-                                return LoopControl::Return;
-                            }
-                        };
+                        let step_result = drive_step_with_retry(
+                            &llm,
+                            req,
+                            step,
+                            options.retry_mode,
+                            options.cancel_rx.clone(),
+                            &tx,
+                        )
+                        .await;
 
-                        match drive_stream_step(step, stream, &tx).await {
+                        match step_result {
                             Ok(mut step_out) => {
                                 if tx.is_closed() {
                                     return LoopControl::Return;
@@ -823,12 +826,90 @@ async fn tool_definitions_for(
 pub enum AgentEvent {
     StepStart { step: usize },
     StepEnd { step: usize },
+    LlmRetry(LlmRetryEvent),
     AssistantDelta { delta: String },
     AssistantThinkingDelta { delta: String },
     AssistantMessage { message: Message },
     ToolCall { call: ToolCall },
     ToolResult { message: Message },
     Done(AgentRunOutput),
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmRetryEvent {
+    pub kind: LlmRetryKind,
+    pub attempt: u32,
+    pub max_attempts: Option<u32>,
+    pub delay_ms: u64,
+    pub message: String,
+}
+
+async fn drive_step_with_retry(
+    llm: &LlmClient,
+    req: ChatRequest,
+    step: usize,
+    mode: LlmRetryMode,
+    mut cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    tx: &tokio::sync::mpsc::Sender<Result<AgentEvent, AgentRuntimeError>>,
+) -> Result<streaming::StreamStepOutput, AgentRuntimeError> {
+    let mut attempt = 1_u32;
+    loop {
+        let stream = match llm.chat_stream(req.clone()).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                let decision = llm_retry_decision(&err, mode, attempt);
+                retry_or_return(err, decision, attempt, cancel_rx.as_mut(), tx).await?;
+                attempt = attempt.saturating_add(1);
+                continue;
+            }
+        };
+
+        match drive_stream_step(step, stream, tx).await {
+            Ok(out) => return Ok(out),
+            Err(AgentRuntimeError::LlmBeforeOutput(err)) => {
+                let decision = llm_retry_decision(&err, mode, attempt);
+                retry_or_return(err, decision, attempt, cancel_rx.as_mut(), tx).await?;
+                attempt = attempt.saturating_add(1);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+async fn retry_or_return(
+    err: LlmError,
+    decision: crate::llm::LlmRetryDecision,
+    attempt: u32,
+    cancel_rx: Option<&mut tokio::sync::watch::Receiver<bool>>,
+    tx: &tokio::sync::mpsc::Sender<Result<AgentEvent, AgentRuntimeError>>,
+) -> Result<(), AgentRuntimeError> {
+    if !decision.retryable {
+        return Err(err.into());
+    }
+    let event = AgentEvent::LlmRetry(LlmRetryEvent {
+        kind: decision.kind,
+        attempt,
+        max_attempts: decision.max_attempts,
+        delay_ms: decision.delay.as_millis().min(u128::from(u64::MAX)) as u64,
+        message: decision.message,
+    });
+    if tx.send(Ok(event)).await.is_err() {
+        return Err(err.into());
+    }
+
+    if let Some(rx) = cancel_rx {
+        tokio::select! {
+            _ = tokio::time::sleep(decision.delay) => {}
+            changed = rx.changed() => {
+                if changed.is_ok() && *rx.borrow() {
+                    return Err(AgentRuntimeError::Cancelled);
+                }
+            }
+        }
+    } else {
+        tokio::time::sleep(decision.delay).await;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

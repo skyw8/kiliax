@@ -5,6 +5,9 @@ export function statusBadge(summary: SessionSummary): {
   variant: "idle" | "step" | "done" | "error";
 } {
   const runState = summary.status.run_state;
+  if (runState === "retrying") {
+    return { label: "retrying", variant: "step" };
+  }
   if (runState === "running" || runState === "tooling") {
     const step = summary.status.step > 0 ? summary.status.step : 1;
     return { label: `step ${step}`, variant: "step" };
@@ -25,11 +28,14 @@ export function sortSessions(items: SessionSummary[], pinnedIds: string[]): Sess
     }
 
     const aRunning =
-      a.status.run_state === "running" || a.status.run_state === "tooling";
+      a.status.run_state === "running" ||
+      a.status.run_state === "tooling" ||
+      a.status.run_state === "retrying";
     const bRunning =
-      b.status.run_state === "running" || b.status.run_state === "tooling";
+      b.status.run_state === "running" ||
+      b.status.run_state === "tooling" ||
+      b.status.run_state === "retrying";
     if (aRunning !== bRunning) return aRunning ? -1 : 1;
     return b.updated_at.localeCompare(a.updated_at);
   });
 }
-

@@ -1,4 +1,4 @@
-export type SessionRunState = "idle" | "running" | "tooling";
+export type SessionRunState = "idle" | "running" | "tooling" | "retrying";
 export type SessionLastOutcome = "none" | "done" | "error";
 export type SessionGoalStatus = "active" | "complete";
 
@@ -51,8 +51,19 @@ export interface SessionStatus {
   active_run_started_at?: string | null;
   step: number;
   active_tool?: string | null;
+  retry_status?: RetryStatus | null;
   queue_len: number;
   last_event_id: number;
+}
+
+export interface RetryStatus {
+  kind: string;
+  attempt: number;
+  max_attempts?: number | null;
+  next_attempt_at: string;
+  delay_ms: number;
+  message: string;
+  trace_id?: string | null;
 }
 
 export interface SessionSummary {
