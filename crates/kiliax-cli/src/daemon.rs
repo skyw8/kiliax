@@ -5,7 +5,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use kiliax_core::config::ServerConfig;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8123;
@@ -87,20 +86,6 @@ async fn ping(state: &DaemonState) -> bool {
     }
     match req.send().await {
         Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
-    }
-}
-
-async fn ping_web(state: &DaemonState) -> bool {
-    let Ok(mut url) = Url::parse(&format!("{}/", state.url_base())) else {
-        return false;
-    };
-    url.query_pairs_mut()
-        .append_pair("token", state.token.trim());
-
-    let client = reqwest::Client::new();
-    match client.get(url).timeout(PING_TIMEOUT_FAST).send().await {
-        Ok(resp) => resp.status().is_success() || resp.status().is_redirection(),
         Err(_) => false,
     }
 }
@@ -214,11 +199,10 @@ pub async fn ensure_running(
 
         if ping(&parsed).await {
             let api_ok = ping(&check).await;
-            let web_ok = ping_web(&check).await;
             let token_required = token_is_required(&check).await;
 
             let mut identity_ok = true;
-            if api_ok && web_ok && token_required {
+            if api_ok && token_required {
                 if let Some(info) = fetch_admin_info(&check).await {
                     let desired_root = workspace_root.display().to_string();
                     let desired_config_path = config_path.display().to_string();
@@ -228,7 +212,6 @@ pub async fn ensure_running(
             }
 
             if api_ok
-                && web_ok
                 && token_required
                 && identity_ok
                 && (desired_token.is_none() || parsed.token.trim() == token)
@@ -290,11 +273,10 @@ pub async fn ensure_running(
             started_at_ms: None,
         };
         if ping(&candidate).await {
-            let web_ok = ping_web(&candidate).await;
             let token_required = token_is_required(&candidate).await;
 
             let mut identity_ok = true;
-            if web_ok && token_required {
+            if token_required {
                 if let Some(info) = fetch_admin_info(&candidate).await {
                     let desired_root = workspace_root.display().to_string();
                     let desired_config_path = config_path.display().to_string();
@@ -303,7 +285,7 @@ pub async fn ensure_running(
                 }
             }
 
-            if web_ok && token_required && identity_ok {
+            if token_required && identity_ok {
                 let text = serde_json::to_string_pretty(&candidate)
                     .context("failed to serialize server state")?;
                 tokio::fs::write(&state_file, text).await.with_context(|| {

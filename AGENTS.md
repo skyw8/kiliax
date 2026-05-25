@@ -67,7 +67,7 @@ minimal
 ### crates/kiliax-cli (CLI)
 
 - CLI command routing + local session goal commands: `crates/kiliax-cli/src/main.rs`
-- Server daemon control: `crates/kiliax-cli/src/daemon.rs`
+- Server daemon control + idempotent start via bearer API/admin identity checks: `crates/kiliax-cli/src/daemon.rs`
 - Foreground server run argument parsing: `crates/kiliax-cli/src/server_run_args.rs`
 
 ### crates/kiliax-server (HTTP control plane)
