@@ -13,6 +13,7 @@ fn print_help() {
     println!("{bin} {version}");
     println!();
     println!("Usage:");
+    println!("  {bin}");
     println!("  {bin} server start");
     println!("  {bin} server run [OPTIONS]");
     println!("  {bin} server stop");
@@ -28,7 +29,7 @@ fn print_help() {
     println!("Config search order:");
     println!("  1) ~/.kiliax/kiliax.yaml");
     println!();
-    println!("If no config is found, {bin} will write a template and exit.");
+    println!("If no config is found, {bin} will write a template and continue.");
 }
 
 async fn handle_goal_command(args: &[String]) -> Result<()> {
@@ -108,19 +109,60 @@ fn write_default_config(paths: &[std::path::PathBuf]) -> Result<std::path::PathB
     Ok(target.clone())
 }
 
-fn load_or_init_config() -> Result<Option<config::LoadedConfig>> {
+fn load_or_init_config() -> Result<config::LoadedConfig> {
     match config::load() {
-        Ok(loaded) => Ok(Some(loaded)),
+        Ok(loaded) => Ok(loaded),
         Err(config::ConfigError::NotFound { paths }) => {
             let path = write_default_config(&paths)?;
-            let bin = env!("CARGO_PKG_NAME");
-            println!("No `kiliax.yaml` found.");
-            println!("Created template config at: {}", path.display());
-            println!("Edit it, then rerun `{bin}`.");
-            Ok(None)
+            // Silent first-run experience: create a template config and continue.
+            Ok(config::load_from_path(path)?)
         }
         Err(err) => Err(err.into()),
     }
+}
+
+fn is_wsl() -> bool {
+    if std::env::consts::OS != "linux" {
+        return false;
+    }
+    std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
+}
+
+fn try_open_browser(url: &str) {
+    use std::process::{Command, Stdio};
+
+    let spawn = |program: &str, args: &[&str]| -> std::io::Result<()> {
+        Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    };
+
+    let _ = if is_wsl() {
+        // Best-effort: open in the Windows default browser.
+        spawn("wslview", &[url]).or_else(|_| spawn("cmd.exe", &["/c", "start", "", url]))
+    } else if std::env::consts::OS == "windows" {
+        spawn("cmd.exe", &["/c", "start", "", url])
+    } else if std::env::consts::OS == "macos" {
+        spawn("open", &[url])
+    } else {
+        spawn("xdg-open", &[url])
+    };
+}
+
+async fn ensure_server_and_open(workspace_root: &std::path::Path) -> Result<()> {
+    let loaded = load_or_init_config()?;
+    let state = daemon::ensure_running(workspace_root, &loaded.path, &loaded.config.server).await?;
+    let url = format!(
+        "http://{}:{}/?token={}",
+        state.host, state.port, state.token
+    );
+    println!("{url}");
+    try_open_browser(&url);
+    Ok(())
 }
 
 #[tokio::main]
@@ -137,20 +179,14 @@ async fn main() -> Result<()> {
 
     let workspace_root = std::env::current_dir()?;
 
+    if args.is_empty() {
+        return ensure_server_and_open(&workspace_root).await;
+    }
+
     if args.first().is_some_and(|a| a == "server") {
         match args.get(1).map(String::as_str) {
             Some("start") => {
-                let Some(loaded) = load_or_init_config()? else {
-                    return Ok(());
-                };
-                let state =
-                    daemon::ensure_running(&workspace_root, &loaded.path, &loaded.config.server)
-                        .await?;
-                println!("kiliax server: {}:{}", state.host, state.port);
-                println!(
-                    "kiliax-web: http://{}:{}/?token={}",
-                    state.host, state.port, state.token
-                );
+                ensure_server_and_open(&workspace_root).await?;
             }
             Some("run") => {
                 if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -173,17 +209,7 @@ async fn main() -> Result<()> {
             },
             Some("restart") => {
                 let _ = daemon::stop().await?;
-                let Some(loaded) = load_or_init_config()? else {
-                    return Ok(());
-                };
-                let state =
-                    daemon::ensure_running(&workspace_root, &loaded.path, &loaded.config.server)
-                        .await?;
-                println!("kiliax server: {}:{}", state.host, state.port);
-                println!(
-                    "kiliax-web: http://{}:{}/?token={}",
-                    state.host, state.port, state.token
-                );
+                ensure_server_and_open(&workspace_root).await?;
             }
             _ => print_help(),
         }

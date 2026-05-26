@@ -372,9 +372,7 @@ impl LiveSession {
             }
             domain::SessionRunState::Running
             | domain::SessionRunState::Tooling
-            | domain::SessionRunState::Retrying => {
-                "running".to_string()
-            }
+            | domain::SessionRunState::Retrying => "running".to_string(),
         }
     }
 

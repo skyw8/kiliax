@@ -189,11 +189,7 @@ pub fn classify_llm_error(err: &LlmError) -> LlmRetryKind {
     LlmRetryKind::NonRetryable
 }
 
-pub fn llm_retry_decision(
-    err: &LlmError,
-    mode: LlmRetryMode,
-    attempt: u32,
-) -> LlmRetryDecision {
+pub fn llm_retry_decision(err: &LlmError, mode: LlmRetryMode, attempt: u32) -> LlmRetryDecision {
     let kind = classify_llm_error(err);
     let max_attempts = match (mode, kind) {
         (LlmRetryMode::Goal, LlmRetryKind::NetworkTransient | LlmRetryKind::ServerTransient) => {
