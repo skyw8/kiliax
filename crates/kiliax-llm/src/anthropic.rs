@@ -9,8 +9,8 @@ use tracing::Instrument;
 
 use crate::types::{
     ChatRequest, ChatResponse, ChatStreamChunk, FinishReason, Message, ProviderMessageMetadata,
-    TokenUsage, ToolCall, ToolCallDelta, ToolChoice, ToolDefinition, UserContentPart,
-    UserMessageContent,
+    ReasoningEffort, TokenUsage, ToolCall, ToolCallDelta, ToolChoice, ToolDefinition,
+    UserContentPart, UserMessageContent,
 };
 
 use super::openai_conv::validate_pdf_file_data;
@@ -324,7 +324,22 @@ struct AnthropicMessagesRequest {
     tool_choice: Option<AnthropicToolChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_config: Option<AnthropicOutputConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<AnthropicThinkingConfig>,
     stream: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicOutputConfig {
+    effort: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicThinkingConfig {
+    Adaptive,
 }
 
 fn model_family(model: &str, family: &str) -> bool {
@@ -471,6 +486,7 @@ async fn to_anthropic_request(
         tool_choice,
         parallel_tool_calls,
         temperature,
+        reasoning_effort,
     } = req;
 
     let mut system_parts = Vec::new();
@@ -577,8 +593,30 @@ async fn to_anthropic_request(
         tools,
         tool_choice,
         temperature,
+        output_config: reasoning_effort.map(|effort| AnthropicOutputConfig {
+            effort: anthropic_effort(effort).to_string(),
+        }),
+        thinking: reasoning_effort
+            .filter(|_| should_enable_anthropic_adaptive_thinking(model))
+            .map(|_| AnthropicThinkingConfig::Adaptive),
         stream,
     })
+}
+
+fn anthropic_effort(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::None | ReasoningEffort::Minimal | ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::Xhigh => "xhigh",
+        ReasoningEffort::Max => "max",
+    }
+}
+
+fn should_enable_anthropic_adaptive_thinking(model: &str) -> bool {
+    model_family(model, "claude-opus-4-7")
+        || model_family(model, "claude-opus-4-6")
+        || model_family(model, "claude-sonnet-4-6")
 }
 
 fn assistant_thinking_blocks(
@@ -1435,6 +1473,7 @@ mod tests {
             },
             parallel_tool_calls: Some(true),
             temperature: Some(0.2),
+            reasoning_effort: Some(ReasoningEffort::Medium),
         };
 
         let body = to_anthropic_request(TEST_MODEL, None, req, false)
@@ -1456,6 +1495,10 @@ mod tests {
             serde_json::json!({"type": "tool", "name": "read"})
         );
         assert_eq!(json["max_tokens"], serde_json::json!(64_000));
+        assert_eq!(
+            json["output_config"],
+            serde_json::json!({"effort": "medium"})
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1529,6 +1572,7 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: Some(false),
             temperature: None,
+            reasoning_effort: None,
         };
 
         let body = to_anthropic_request(TEST_MODEL, None, req, false)
@@ -1539,6 +1583,27 @@ mod tests {
             json["tool_choice"],
             serde_json::json!({"type": "auto", "disable_parallel_tool_use": true})
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn maps_reasoning_effort_to_adaptive_thinking_for_supported_claude() {
+        let req = ChatRequest {
+            reasoning_effort: Some(ReasoningEffort::Xhigh),
+            ..ChatRequest::new(vec![Message::User {
+                content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
+            }])
+        };
+
+        let body = to_anthropic_request("claude-sonnet-4-6", None, req, false)
+            .await
+            .unwrap();
+        let json = serde_json::to_value(body).unwrap();
+        assert_eq!(
+            json["output_config"],
+            serde_json::json!({"effort": "xhigh"})
+        );
+        assert_eq!(json["thinking"], serde_json::json!({"type": "adaptive"}));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1572,6 +1637,7 @@ mod tests {
             },
             parallel_tool_calls: None,
             temperature: None,
+            reasoning_effort: None,
         };
 
         let body = to_anthropic_request(TEST_MODEL, None, req, false)
@@ -1620,6 +1686,7 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
+            reasoning_effort: None,
         };
 
         let body = to_anthropic_request(TEST_MODEL, None, req, false)
@@ -1672,6 +1739,7 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
+            reasoning_effort: None,
         };
 
         let body = to_anthropic_request(TEST_MODEL, None, req, false)
@@ -1721,6 +1789,7 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
+            reasoning_effort: None,
         };
 
         let body = to_anthropic_request(TEST_MODEL, None, req, false)
@@ -1773,6 +1842,7 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
+            reasoning_effort: None,
         };
 
         let body = to_anthropic_request(TEST_MODEL, None, req, false)

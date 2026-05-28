@@ -4,7 +4,9 @@ use crate::agents::{AgentKind, AgentProfile};
 
 use crate::history::{assistant_message_is_empty, sanitize_history_for_next_request};
 use crate::llm::{llm_retry_decision, LlmClient, LlmError, LlmRetryKind, LlmRetryMode};
-use crate::protocol::{ChatRequest, FinishReason, Message, ToolCall, ToolChoice, ToolDefinition};
+use crate::protocol::{
+    ChatRequest, FinishReason, Message, ReasoningEffort, ToolCall, ToolChoice, ToolDefinition,
+};
 use crate::telemetry;
 use crate::tools::{policy, ToolEngine, ToolError};
 
@@ -50,6 +52,7 @@ pub struct AgentRuntimeOptions {
     pub parallel_tool_calls: Option<bool>,
     pub tool_error_mode: ToolErrorMode,
     pub temperature: Option<f32>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub auto_compact_token_limit: Option<usize>,
     pub retry_mode: LlmRetryMode,
     pub cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
@@ -63,6 +66,7 @@ impl Default for AgentRuntimeOptions {
             parallel_tool_calls: None,
             tool_error_mode: ToolErrorMode::ToolMessage,
             temperature: None,
+            reasoning_effort: None,
             auto_compact_token_limit: None,
             retry_mode: LlmRetryMode::Run,
             cancel_rx: None,
@@ -118,6 +122,15 @@ impl AgentRuntimeOptions {
             model_id.and_then(|model_id| config.model_auto_compact_token_limit(model_id))
         {
             options.auto_compact_token_limit = Some(auto_compact_token_limit);
+        }
+        if let Some(temperature) = model_id.and_then(|model_id| config.model_temperature(model_id))
+        {
+            options.temperature = Some(temperature);
+        }
+        if let Some(reasoning_effort) =
+            model_id.and_then(|model_id| config.model_reasoning_effort(model_id))
+        {
+            options.reasoning_effort = Some(reasoning_effort);
         }
 
         options
@@ -176,6 +189,7 @@ impl AgentRuntime {
             req.tool_choice = options.tool_choice.clone();
             req.parallel_tool_calls = options.parallel_tool_calls;
             req.temperature = options.temperature;
+            req.reasoning_effort = options.reasoning_effort;
 
             let resp = self.llm.chat(req).await?;
 
@@ -408,6 +422,7 @@ impl AgentRuntime {
                         req.tool_choice = options.tool_choice.clone();
                         req.parallel_tool_calls = options.parallel_tool_calls;
                         req.temperature = options.temperature;
+                        req.reasoning_effort = options.reasoning_effort;
 
                         let step_result = drive_step_with_retry(
                             &llm,
@@ -1113,6 +1128,8 @@ providers:
       - small
       - id: large
         auto_compact_token_limit: 2000
+        temperature: 0.2
+        reasoning_effort: low
 runtime:
   auto_compact_token_limit: 1000
 "#,
@@ -1127,6 +1144,8 @@ runtime:
 
         assert_eq!(small.auto_compact_token_limit, Some(1000));
         assert_eq!(large.auto_compact_token_limit, Some(2000));
+        assert_eq!(large.temperature, Some(0.2));
+        assert_eq!(large.reasoning_effort, Some(ReasoningEffort::Low));
     }
 
     #[test]

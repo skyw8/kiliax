@@ -27,7 +27,7 @@ minimal
 
 - Agents + explicit subagent availability + tool permissions + built-in master/explore + goal/multi-agent toolsets: `crates/kiliax-core/src/agents/`
 - Context compaction (auto + `/compact`, tool call/result normalization + tool output truncation): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
-- Config + model/agent defaults + provider-model max-output/auto-compact limits + multi-agent limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
+- Config + model/agent defaults + provider-model max-output/auto-compact/temperature/reasoning-effort limits + multi-agent limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
 - Protocol compatibility re-exports (messages/tool-calls/usage + base64 image/PDF content parts): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
@@ -60,9 +60,9 @@ minimal
 
 - Provider-neutral LLM facade, provider API routing, shared LLM error classification/retry policy, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks + image/PDF user content parts) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
-- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + thinking-provider `reasoning_content` compatibility + Langfuse completion timing): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
+- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + thinking-provider `reasoning_content` compatibility + per-model temperature/reasoning_effort + Langfuse completion timing): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
 - OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/openai_responses.rs`
-- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + Claude/configured model max-token resolution + thinking block preservation/replay + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/anthropic.rs`
+- Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + Claude/configured model max-token resolution + effort/adaptive thinking config + thinking block preservation/replay + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/anthropic.rs`
 
 ### crates/kiliax-cli (CLI)
 
@@ -92,11 +92,11 @@ minimal
 - Main UI (responsive layout + virtualized/paged session history + centered composer dock/attached workspace launchers + WS streaming with buffered live snapshot restore/active tool-call reconciliation/persisted user-message reconciliation/retry alerts/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Virtualized chat list + paged history windowing + pinned-bottom follow state for streaming row height changes: `web/src/components/virtualized-list.tsx`
-- Dialog components: `web/src/components/*-dialog.tsx`
+- Dialog components including provider/model settings for per-model compact/temperature/reasoning controls: `web/src/components/*-dialog.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (performant Dialog/Sheet overlays + Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
-- API client + server-side folder listing + explicit session default persistence + goal APIs + display formatters: `web/src/lib/api.ts`, `web/src/lib/app-utils.ts`
+- API client + typed provider-model config payloads + server-side folder listing + explicit session default persistence + goal APIs + display formatters: `web/src/lib/api.ts`, `web/src/lib/types.ts`, `web/src/lib/app-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
 - Types (includes message `usage`, retry status, live stream snapshots, session default writes, run client message ids, and base64 run attachments): `web/src/lib/types.ts`
 

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub use kiliax_llm::{ProviderApi, ProviderRoute as ResolvedModel};
+pub use kiliax_llm::{types::ReasoningEffort, ProviderApi, ProviderRoute as ResolvedModel};
 use serde::{Deserialize, Serialize};
 
 const CONFIG_FILENAME: &str = "kiliax.yaml";
@@ -434,7 +434,7 @@ impl Default for OtelConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Config {
     #[serde(default)]
     pub default_model: Option<String>,
@@ -475,7 +475,7 @@ pub struct Config {
     pub mcp: McpConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderConfig {
     #[serde(default, alias = "kind", alias = "type")]
     pub api: ProviderApi,
@@ -496,14 +496,14 @@ pub struct ProviderConfig {
     pub models: Vec<ModelConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(untagged)]
 enum ModelConfigDef {
     Id(String),
     Full(ModelConfigFull),
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct ModelConfigFull {
     #[serde(alias = "name", alias = "model")]
@@ -519,14 +519,22 @@ struct ModelConfigFull {
         alias = "auto-compact-token-limit"
     )]
     auto_compact_token_limit: Option<usize>,
+
+    #[serde(default)]
+    temperature: Option<f32>,
+
+    #[serde(default, alias = "reasoningEffort", alias = "reasoning-effort")]
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(from = "ModelConfigDef")]
 pub struct ModelConfig {
     pub id: String,
     pub max_output_tokens: Option<u32>,
     pub auto_compact_token_limit: Option<usize>,
+    pub temperature: Option<f32>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ModelConfig {
@@ -535,6 +543,8 @@ impl ModelConfig {
             id: id.into(),
             max_output_tokens: None,
             auto_compact_token_limit: None,
+            temperature: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -547,6 +557,8 @@ impl From<ModelConfigDef> for ModelConfig {
                 id: model.id,
                 max_output_tokens: model.max_output_tokens,
                 auto_compact_token_limit: model.auto_compact_token_limit,
+                temperature: model.temperature,
+                reasoning_effort: model.reasoning_effort,
             },
         }
     }
@@ -557,19 +569,29 @@ impl Serialize for ModelConfig {
     where
         S: serde::Serializer,
     {
-        if self.max_output_tokens.is_none() && self.auto_compact_token_limit.is_none() {
+        if self.max_output_tokens.is_none()
+            && self.auto_compact_token_limit.is_none()
+            && self.temperature.is_none()
+            && self.reasoning_effort.is_none()
+        {
             return serializer.serialize_str(&self.id);
         }
 
         use serde::ser::SerializeMap;
 
-        let mut map = serializer.serialize_map(Some(3))?;
+        let mut map = serializer.serialize_map(Some(5))?;
         map.serialize_entry("id", &self.id)?;
         if let Some(limit) = self.max_output_tokens {
             map.serialize_entry("max_output_tokens", &limit)?;
         }
         if let Some(limit) = self.auto_compact_token_limit {
             map.serialize_entry("auto_compact_token_limit", &limit)?;
+        }
+        if let Some(temperature) = self.temperature {
+            map.serialize_entry("temperature", &temperature)?;
+        }
+        if let Some(reasoning_effort) = self.reasoning_effort {
+            map.serialize_entry("reasoning_effort", &reasoning_effort)?;
         }
         map.end()
     }
@@ -670,6 +692,19 @@ impl Config {
     }
 
     pub fn model_auto_compact_token_limit(&self, model_id: &str) -> Option<usize> {
+        self.model_config(model_id)
+            .and_then(|m| m.auto_compact_token_limit)
+    }
+
+    pub fn model_temperature(&self, model_id: &str) -> Option<f32> {
+        self.model_config(model_id).and_then(|m| m.temperature)
+    }
+
+    pub fn model_reasoning_effort(&self, model_id: &str) -> Option<ReasoningEffort> {
+        self.model_config(model_id).and_then(|m| m.reasoning_effort)
+    }
+
+    fn model_config(&self, model_id: &str) -> Option<&ModelConfig> {
         let route = self.resolve_model(model_id).ok()?;
         let provider = self.providers.get(&route.provider)?;
         let qualified = route.model_id();
@@ -677,11 +712,10 @@ impl Config {
             .models
             .iter()
             .find(|m| m.id == route.model || m.id == qualified)
-            .and_then(|m| m.auto_compact_token_limit)
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 struct ConfigFile {
     #[serde(default)]
     pub default_model: Option<String>,
@@ -738,13 +772,13 @@ struct ToolsConfig {
     pub tavily: WebSearchConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LoadedConfig {
     pub path: PathBuf,
     pub config: Config,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedConfig {
     pub config: Config,
     pub normalized: bool,
@@ -969,6 +1003,14 @@ fn validate(config: &Config) -> Result<(), ConfigError> {
             if m.max_output_tokens.is_some_and(|v| v == 0) {
                 return Err(ConfigError::Invalid(format!(
                     "provider {name} model {:?} max_output_tokens must be greater than 0",
+                    m.id
+                )));
+            }
+            if m.temperature
+                .is_some_and(|v| !v.is_finite() || !(0.0..=2.0).contains(&v))
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {name} model {:?} temperature must be between 0 and 2",
                     m.id
                 )));
             }

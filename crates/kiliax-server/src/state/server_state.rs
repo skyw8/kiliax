@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
-use kiliax_core::config::{Config, ModelConfig, ProviderApi, ProviderConfig};
+use kiliax_core::config::{Config, ModelConfig, ProviderApi, ProviderConfig, ReasoningEffort};
 use kiliax_core::session::{FileSessionStore, SessionId};
 use kiliax_core::tools::ToolEngine;
 use tokio::sync::{broadcast, Mutex, Notify};
@@ -59,6 +59,77 @@ fn parse_provider_api(raw: &str) -> Result<ProviderApi, ApiError> {
         "anthropic_messages" | "anthropic" => Ok(ProviderApi::AnthropicMessages),
         other => Err(ApiError::invalid_argument(format!(
             "unsupported provider api: {other}"
+        ))),
+    }
+}
+
+fn model_summary(model: &ModelConfig) -> api::ConfigModelSummary {
+    api::ConfigModelSummary {
+        id: model.id.clone(),
+        auto_compact_token_limit: model.auto_compact_token_limit,
+        temperature: model.temperature,
+        reasoning_effort: model.reasoning_effort.map(|v| v.as_str().to_string()),
+    }
+}
+
+fn normalize_model_upsert(
+    value: api::ConfigModelUpsert,
+) -> Result<api::ConfigModelPatch, ApiError> {
+    Ok(match value {
+        api::ConfigModelUpsert::Id(id) => api::ConfigModelPatch {
+            id,
+            auto_compact_token_limit: None,
+            temperature: None,
+            reasoning_effort: None,
+        },
+        api::ConfigModelUpsert::Full(model) => model,
+    })
+}
+
+fn apply_model_patch(
+    model: &mut ModelConfig,
+    patch: api::ConfigModelPatch,
+) -> Result<(), ApiError> {
+    model.id = patch.id.trim().to_string();
+    if let Some(value) = patch.auto_compact_token_limit {
+        model.auto_compact_token_limit = match value {
+            None => None,
+            Some(0) => {
+                return Err(ApiError::invalid_argument(
+                    "auto_compact_token_limit must be > 0 or null",
+                ))
+            }
+            Some(v) => Some(v),
+        };
+    }
+    if let Some(value) = patch.temperature {
+        model.temperature = match value {
+            None => None,
+            Some(v) if !v.is_finite() || !(0.0..=2.0).contains(&v) => {
+                return Err(ApiError::invalid_argument(
+                    "temperature must be between 0 and 2 or null",
+                ))
+            }
+            Some(v) => Some(v),
+        };
+    }
+    if let Some(value) = patch.reasoning_effort {
+        model.reasoning_effort = value.map(|v| parse_reasoning_effort(&v)).transpose()?;
+    }
+    Ok(())
+}
+
+fn parse_reasoning_effort(raw: &str) -> Result<ReasoningEffort, ApiError> {
+    match raw.trim() {
+        "none" => Ok(ReasoningEffort::None),
+        "minimal" => Ok(ReasoningEffort::Minimal),
+        "low" => Ok(ReasoningEffort::Low),
+        "medium" => Ok(ReasoningEffort::Medium),
+        "high" => Ok(ReasoningEffort::High),
+        "xhigh" => Ok(ReasoningEffort::Xhigh),
+        "max" => Ok(ReasoningEffort::Max),
+        other => Err(ApiError::invalid_argument(format!(
+            "unsupported reasoning_effort: {other}"
         ))),
     }
 }
@@ -358,7 +429,7 @@ impl ServerState {
                     api: p.api.as_config_str().to_string(),
                     base_url: p.base_url.clone(),
                     api_key_set: p.api_key.is_some(),
-                    models: p.models.iter().map(|m| m.id.clone()).collect(),
+                    models: p.models.iter().map(model_summary).collect(),
                 })
                 .collect(),
         })
@@ -440,19 +511,20 @@ impl ServerState {
                     let mut seen: HashSet<String> = HashSet::new();
                     let mut out = Vec::new();
                     for m in models {
-                        let trimmed = m.trim();
+                        let model_patch = normalize_model_upsert(m)?;
+                        let trimmed = model_patch.id.trim();
                         if trimmed.is_empty() {
                             return Err(ApiError::invalid_argument(
                                 "provider models must not contain empty strings",
                             ));
                         }
                         if seen.insert(trimmed.to_string()) {
-                            out.push(
-                                old_models
-                                    .get(trimmed)
-                                    .cloned()
-                                    .unwrap_or_else(|| ModelConfig::new(trimmed)),
-                            );
+                            let mut model = old_models
+                                .get(trimmed)
+                                .cloned()
+                                .unwrap_or_else(|| ModelConfig::new(trimmed));
+                            apply_model_patch(&mut model, model_patch)?;
+                            out.push(model);
                         }
                     }
                     existing.models = out;
@@ -496,14 +568,17 @@ impl ServerState {
                         let mut seen: HashSet<String> = HashSet::new();
                         let mut out = Vec::new();
                         for m in models {
-                            let trimmed = m.trim();
+                            let model_patch = normalize_model_upsert(m)?;
+                            let trimmed = model_patch.id.trim();
                             if trimmed.is_empty() {
                                 return Err(ApiError::invalid_argument(
                                     "provider models must not contain empty strings",
                                 ));
                             }
                             if seen.insert(trimmed.to_string()) {
-                                out.push(ModelConfig::new(trimmed));
+                                let mut model = ModelConfig::new(trimmed);
+                                apply_model_patch(&mut model, model_patch)?;
+                                out.push(model);
                             }
                         }
                         out

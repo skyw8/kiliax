@@ -468,7 +468,18 @@ pub struct ConfigProviderSummary {
     pub api: String,
     pub base_url: String,
     pub api_key_set: bool,
-    pub models: Vec<String>,
+    pub models: Vec<ConfigModelSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ConfigModelSummary {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_compact_token_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -499,7 +510,26 @@ pub struct ConfigProviderUpsert {
     pub api_key: Option<Option<String>>,
 
     #[serde(default)]
-    pub models: Option<Vec<String>>,
+    pub models: Option<Vec<ConfigModelUpsert>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum ConfigModelUpsert {
+    Id(String),
+    Full(ConfigModelPatch),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigModelPatch {
+    pub id: String,
+    #[serde(default)]
+    pub auto_compact_token_limit: Option<Option<usize>>,
+    #[serde(default)]
+    pub temperature: Option<Option<f32>>,
+    #[serde(default)]
+    pub reasoning_effort: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

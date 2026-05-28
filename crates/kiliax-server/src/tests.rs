@@ -2042,6 +2042,61 @@ async fn patch_config_providers_sets_api_key_without_echo() {
 }
 
 #[tokio::test]
+async fn patch_config_providers_updates_model_settings() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, None).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_json(
+            Method::PATCH,
+            "/v1/config/providers",
+            serde_json::json!({
+                "upsert": [{
+                    "id": "test",
+                    "models": [{
+                        "id": "test-model",
+                        "auto_compact_token_limit": 12345,
+                        "temperature": 0.2,
+                        "reasoning_effort": "low"
+                    }]
+                }]
+            }),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/v1/config/providers"))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let provider = body["providers"]
+        .as_array()
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("test"))
+        })
+        .expect("missing test provider");
+    let model = provider["models"]
+        .as_array()
+        .and_then(|models| {
+            models
+                .iter()
+                .find(|m| m.get("id").and_then(|v| v.as_str()) == Some("test-model"))
+        })
+        .expect("missing test model");
+    assert_eq!(model["auto_compact_token_limit"], serde_json::json!(12345));
+    assert_eq!(model["reasoning_effort"], serde_json::json!("low"));
+    assert!((model["temperature"].as_f64().unwrap() - 0.2).abs() < 0.0001);
+}
+
+#[tokio::test]
 async fn patch_config_providers_accepts_legacy_kind_alias() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;

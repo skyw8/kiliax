@@ -10,7 +10,8 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::Instrument;
 
 use crate::types::{
-    ChatRequest, ChatResponse, ChatStreamChunk, TokenUsage, ToolChoice, ToolDefinition,
+    ChatRequest, ChatResponse, ChatStreamChunk, ReasoningEffort, TokenUsage, ToolChoice,
+    ToolDefinition,
 };
 
 mod anthropic;
@@ -424,6 +425,7 @@ async fn build_openai_chat_body(
     tool_choice: &ToolChoice,
     parallel_tool_calls: Option<bool>,
     temperature: Option<f32>,
+    reasoning_effort: Option<ReasoningEffort>,
     stream: bool,
 ) -> Result<Value, LlmError> {
     let mut messages = Vec::with_capacity(internal_messages.len());
@@ -461,6 +463,12 @@ async fn build_openai_chat_body(
     if let Some(temperature) = temperature {
         obj.insert("temperature".to_string(), json!(temperature));
     }
+    if let Some(reasoning_effort) = reasoning_effort {
+        obj.insert(
+            "reasoning_effort".to_string(),
+            Value::String(reasoning_effort.as_str().to_string()),
+        );
+    }
 
     Ok(body)
 }
@@ -478,6 +486,7 @@ impl LlmProvider for OpenAICompatibleProvider {
             tool_choice,
             parallel_tool_calls,
             temperature,
+            reasoning_effort,
         } = req;
 
         let started = std::time::Instant::now();
@@ -531,6 +540,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 &tool_choice,
                 parallel_tool_calls,
                 temperature,
+                reasoning_effort,
                 false,
             )
             .await?;
@@ -682,6 +692,7 @@ impl LlmProvider for OpenAICompatibleProvider {
             tool_choice,
             parallel_tool_calls,
             temperature,
+            reasoning_effort,
         } = req;
 
         let started = std::time::Instant::now();
@@ -741,6 +752,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 &tool_choice,
                 parallel_tool_calls,
                 temperature,
+                reasoning_effort,
                 true,
             )
             .await?;
@@ -1143,6 +1155,7 @@ mod tests {
             &req.tool_choice,
             req.parallel_tool_calls,
             req.temperature,
+            req.reasoning_effort,
             false,
         )
         .await
@@ -1193,6 +1206,7 @@ mod tests {
             &req.tool_choice,
             req.parallel_tool_calls,
             req.temperature,
+            req.reasoning_effort,
             false,
         )
         .await
@@ -1207,6 +1221,31 @@ mod tests {
             body["messages"][0]["content"][1]["file"]["file_data"],
             json!("JVBERi0=")
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn openai_chat_body_maps_reasoning_effort() {
+        let req = ChatRequest {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..ChatRequest::new(vec![Message::User {
+                content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
+            }])
+        };
+
+        let body = build_openai_chat_body(
+            "gpt-test",
+            &req.messages,
+            req.tools,
+            &req.tool_choice,
+            req.parallel_tool_calls,
+            req.temperature,
+            req.reasoning_effort,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(body["reasoning_effort"], json!("high"));
     }
 
     #[test]

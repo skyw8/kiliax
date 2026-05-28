@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { newAlertId } from "../lib/app-utils";
 import { cn } from "../lib/utils";
 import type {
+  ConfigModelSummary,
   ConfigProviderSummary,
   ConfigProvidersResponse,
   ConfigRuntimeResponse,
@@ -20,10 +21,27 @@ type ProviderDraft = {
   id: string;
   api: ProviderApiId;
   baseUrl: string;
-  models: string[];
+  models: ModelDraft[];
   apiKeySet: boolean;
   apiKeyDraft: string;
   modelDraft: string;
+  selectedModelId: string;
+};
+
+type ModelDraft = {
+  id: string;
+  autoCompactTokenLimit: string;
+  temperature: string;
+  reasoningEffort: string;
+};
+
+type ModelConfigField = {
+  key: keyof Pick<ModelDraft, "autoCompactTokenLimit" | "temperature" | "reasoningEffort">;
+  label: string;
+  section: "context" | "generation" | "reasoning";
+  type: "number" | "select";
+  placeholder?: string;
+  unit?: string;
 };
 
 type SettingsTab = "providers" | "agents" | "yaml";
@@ -32,6 +50,30 @@ type ProviderApiId = "openai_chat_completions" | "openai_responses" | "anthropic
 const PROVIDERS_PANE_DEFAULT_MODEL = "__default_model__";
 const PROVIDERS_PANE_NEW_PROVIDER = "__new_provider__";
 const DEFAULT_PROVIDER_API: ProviderApiId = "openai_chat_completions";
+const MODEL_CONFIG_FIELDS: ModelConfigField[] = [
+  {
+    key: "autoCompactTokenLimit",
+    label: "Auto compact limit",
+    section: "context",
+    type: "number",
+    placeholder: "inherit",
+    unit: "tokens",
+  },
+  {
+    key: "temperature",
+    label: "Temperature",
+    section: "generation",
+    type: "number",
+    placeholder: "inherit",
+  },
+  {
+    key: "reasoningEffort",
+    label: "Reasoning effort",
+    section: "reasoning",
+    type: "select",
+  },
+];
+const REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 const PROVIDER_API_OPTIONS: Array<{
   value: ProviderApiId;
   label: string;
@@ -100,7 +142,7 @@ export function SettingsDialog(props: {
   const [newProviderId, setNewProviderId] = useState("");
   const [newProviderApi, setNewProviderApi] = useState<ProviderApiId>(DEFAULT_PROVIDER_API);
   const [newProviderBaseUrl, setNewProviderBaseUrl] = useState("");
-  const [newProviderModels, setNewProviderModels] = useState<string[]>([]);
+  const [newProviderModels, setNewProviderModels] = useState<ModelDraft[]>([]);
   const [newProviderModelDraft, setNewProviderModelDraft] = useState("");
   const [newProviderApiKey, setNewProviderApiKey] = useState("");
 
@@ -115,13 +157,22 @@ export function SettingsDialog(props: {
   const providersPaneSelectedProvider = useMemo(() => {
     return settingsProviders.find((p) => p.id === providersPaneSelection) ?? null;
   }, [settingsProviders, providersPaneSelection]);
+  const providersPaneSelectedModel = useMemo(() => {
+    return (
+      providersPaneSelectedProvider?.models.find(
+        (m) => m.id === providersPaneSelectedProvider.selectedModelId,
+      ) ??
+      providersPaneSelectedProvider?.models[0] ??
+      null
+    );
+  }, [providersPaneSelectedProvider]);
 
   const defaultModelSuggestions = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
     for (const p of settingsProviders) {
       for (const m of p.models ?? []) {
-        const trimmed = (m ?? "").trim();
+        const trimmed = (m.id ?? "").trim();
         if (!trimmed) continue;
         const qualified = trimmed.includes("/") ? trimmed : `${p.id}/${trimmed}`;
         if (seen.has(qualified)) continue;
@@ -148,22 +199,113 @@ export function SettingsDialog(props: {
     setProviderDeleteConfirm(null);
   }, []);
 
-  function normalizeModels(models: string[]): string[] {
+  function newModelDraft(id: string): ModelDraft {
+    return {
+      id,
+      autoCompactTokenLimit: "",
+      temperature: "",
+      reasoningEffort: "",
+    };
+  }
+
+  function normalizeModels(models: Array<string | ConfigModelSummary | ModelDraft>): ModelDraft[] {
     const seen = new Set<string>();
-    const out: string[] = [];
+    const out: ModelDraft[] = [];
     for (const raw of models ?? []) {
-      const v = (raw ?? "").trim();
+      const id = typeof raw === "string" ? raw : raw.id;
+      const v = (id ?? "").trim();
       if (!v) continue;
       if (seen.has(v)) continue;
       seen.add(v);
-      out.push(v);
+      if (typeof raw === "string") {
+        out.push(newModelDraft(v));
+      } else {
+        const autoCompactTokenLimit =
+          "auto_compact_token_limit" in raw
+            ? raw.auto_compact_token_limit
+            : "autoCompactTokenLimit" in raw
+              ? raw.autoCompactTokenLimit
+              : "";
+        const temperature = raw.temperature;
+        const reasoningEffort =
+          "reasoning_effort" in raw
+            ? raw.reasoning_effort
+            : "reasoningEffort" in raw
+              ? raw.reasoningEffort
+              : "";
+        out.push({
+          id: v,
+          autoCompactTokenLimit:
+            typeof autoCompactTokenLimit === "number"
+              ? String(autoCompactTokenLimit)
+              : autoCompactTokenLimit ?? "",
+          temperature: typeof temperature === "number" ? String(temperature) : temperature ?? "",
+          reasoningEffort: reasoningEffort ?? "",
+        });
+      }
     }
     return out;
   }
 
-  function parseModelTokens(raw: string): string[] {
+  function parseModelTokens(raw: string): ModelDraft[] {
     if (!raw) return [];
     return normalizeModels(raw.split(/[\r\n,]+/g));
+  }
+
+  function modelDraftsForApi(models: ModelDraft[]) {
+    return models.map((m) => ({
+      id: m.id.trim(),
+      auto_compact_token_limit: m.autoCompactTokenLimit.trim()
+        ? Number(m.autoCompactTokenLimit.trim())
+        : null,
+      temperature: m.temperature.trim() ? Number(m.temperature.trim()) : null,
+      reasoning_effort: m.reasoningEffort.trim() || null,
+    }));
+  }
+
+  function validateModelDrafts(models: ModelDraft[]): boolean {
+    for (const m of models) {
+      const label = m.id.trim() || "model";
+      const compact = m.autoCompactTokenLimit.trim();
+      if (compact) {
+        const n = Number(compact);
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+          pushAlert({
+            id: newAlertId("cfg"),
+            level: "error",
+            title: "Invalid model setting",
+            message: `${label} auto compact limit must be a positive integer.`,
+            autoCloseMs: 4000,
+          });
+          return false;
+        }
+      }
+      const temperature = m.temperature.trim();
+      if (temperature) {
+        const n = Number(temperature);
+        if (!Number.isFinite(n) || n < 0 || n > 2) {
+          pushAlert({
+            id: newAlertId("cfg"),
+            level: "error",
+            title: "Invalid model setting",
+            message: `${label} temperature must be between 0 and 2.`,
+            autoCloseMs: 4000,
+          });
+          return false;
+        }
+      }
+      if (m.reasoningEffort.trim() && !REASONING_EFFORT_OPTIONS.includes(m.reasoningEffort.trim())) {
+        pushAlert({
+          id: newAlertId("cfg"),
+          level: "error",
+          title: "Invalid model setting",
+          message: `${label} reasoning effort is not supported.`,
+          autoCloseMs: 4000,
+        });
+        return false;
+      }
+    }
+    return true;
   }
 
   function normalizeProviderDraft(p: ConfigProviderSummary): ProviderDraft {
@@ -175,6 +317,7 @@ export function SettingsDialog(props: {
       apiKeySet: Boolean(p.api_key_set),
       apiKeyDraft: "",
       modelDraft: "",
+      selectedModelId: normalizeModels(p.models ?? [])[0]?.id ?? "",
     };
   }
 
@@ -244,7 +387,12 @@ export function SettingsDialog(props: {
     setSettingsProviders((prev) =>
       prev.map((p) =>
         p.id === id
-          ? { ...p, models: normalizeModels([...p.models, ...tokens]), modelDraft: "" }
+          ? {
+              ...p,
+              models: normalizeModels([...p.models, ...tokens]),
+              modelDraft: "",
+              selectedModelId: p.selectedModelId || tokens[0]?.id || "",
+            }
           : p,
       ),
     );
@@ -252,7 +400,32 @@ export function SettingsDialog(props: {
 
   function removeModelFromProvider(id: string, model: string) {
     setSettingsProviders((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, models: p.models.filter((m) => m !== model) } : p)),
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const models = p.models.filter((m) => m.id !== model);
+        return {
+          ...p,
+          models,
+          selectedModelId: p.selectedModelId === model ? models[0]?.id ?? "" : p.selectedModelId,
+        };
+      }),
+    );
+  }
+
+  function updateProviderModel(
+    providerId: string,
+    modelId: string,
+    patch: Partial<ModelDraft>,
+  ) {
+    setSettingsProviders((prev) =>
+      prev.map((p) =>
+        p.id === providerId
+          ? {
+              ...p,
+              models: p.models.map((m) => (m.id === modelId ? { ...m, ...patch } : m)),
+            }
+          : p,
+      ),
     );
   }
 
@@ -264,7 +437,7 @@ export function SettingsDialog(props: {
   }
 
   function removeModelFromNewProvider(model: string) {
-    setNewProviderModels((prev) => prev.filter((m) => m !== model));
+    setNewProviderModels((prev) => prev.filter((m) => m.id !== model));
   }
 
   async function saveProvidersDefaultModel() {
@@ -331,6 +504,7 @@ export function SettingsDialog(props: {
       });
       return;
     }
+    if (!validateModelDrafts(models)) return;
 
     setSettingsSaving(true);
     try {
@@ -340,7 +514,7 @@ export function SettingsDialog(props: {
             id,
             api: newProviderApi,
             base_url: baseUrl,
-            models,
+            models: modelDraftsForApi(models),
             api_key: apiKey ? apiKey : undefined,
           },
         ],
@@ -375,11 +549,12 @@ export function SettingsDialog(props: {
       return;
     }
     const models = normalizeModels(p.models);
+    if (!validateModelDrafts(models)) return;
 
     setSettingsSaving(true);
     try {
       await api.patchConfigProviders({
-        upsert: [{ id, api: p.api, base_url: baseUrl, models }],
+        upsert: [{ id, api: p.api, base_url: baseUrl, models: modelDraftsForApi(models) }],
       });
       setProviderDraft(id, { baseUrl, models });
       await onConfigChanged();
@@ -782,17 +957,17 @@ export function SettingsDialog(props: {
                           {newProviderModels.length ? (
                             newProviderModels.map((m) => (
                               <div
-                                key={m}
+                                key={m.id}
                                 className="flex min-w-0 max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs"
                               >
-                                <span className="max-w-[240px] truncate font-mono" title={m}>
-                                  {m}
+                                <span className="max-w-[240px] truncate font-mono" title={m.id}>
+                                  {m.id}
                                 </span>
                                 <button
                                   type="button"
                                   className="rounded-full p-0.5 text-zinc-500 hover:bg-zinc-200"
-                                  aria-label={`Remove model ${m}`}
-                                  onClick={() => removeModelFromNewProvider(m)}
+                                  aria-label={`Remove model ${m.id}`}
+                                  onClick={() => removeModelFromNewProvider(m.id)}
                                 >
                                   <X className="h-3 w-3" />
                                 </button>
@@ -882,29 +1057,106 @@ export function SettingsDialog(props: {
                             {providersPaneSelectedProvider.models.length} total
                           </div>
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_280px]">
+                          <div className="min-h-[96px] rounded-md border border-zinc-200">
                           {providersPaneSelectedProvider.models.length ? (
                             providersPaneSelectedProvider.models.map((m) => (
                               <div
-                                key={m}
-                                className="flex min-w-0 max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs"
+                                role="button"
+                                tabIndex={0}
+                                key={m.id}
+                                className={cn(
+                                  "flex w-full min-w-0 items-center justify-between gap-2 border-b border-zinc-100 px-2 py-2 text-left text-xs last:border-b-0 hover:bg-zinc-50",
+                                  providersPaneSelectedModel?.id === m.id ? "bg-blue-50" : "",
+                                )}
+                                onClick={() =>
+                                  setProviderDraft(providersPaneSelectedProvider.id, {
+                                    selectedModelId: m.id,
+                                  })
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    setProviderDraft(providersPaneSelectedProvider.id, {
+                                      selectedModelId: m.id,
+                                    });
+                                  }
+                                }}
                               >
-                                <span className="max-w-[240px] truncate font-mono" title={m}>
-                                  {m}
+                                <span className="min-w-0 truncate font-mono" title={m.id}>
+                                  {m.id}
                                 </span>
                                 <button
                                   type="button"
-                                  className="rounded-full p-0.5 text-zinc-500 hover:bg-zinc-200"
-                                  aria-label={`Remove model ${m}`}
-                                  onClick={() => removeModelFromProvider(providersPaneSelectedProvider.id, m)}
+                                  className="shrink-0 rounded-full p-0.5 text-zinc-500 hover:bg-zinc-200"
+                                  aria-label={`Remove model ${m.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeModelFromProvider(providersPaneSelectedProvider.id, m.id);
+                                  }}
                                 >
                                   <X className="h-3 w-3" />
                                 </button>
                               </div>
                             ))
                           ) : (
-                            <div className="text-xs text-zinc-500">No models</div>
+                            <div className="p-2 text-xs text-zinc-500">No models</div>
                           )}
+                          </div>
+                          <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2">
+                            {providersPaneSelectedModel ? (
+                              <div className="space-y-2">
+                                {MODEL_CONFIG_FIELDS.map((field) => (
+                                  <div key={field.key}>
+                                    <div className="mb-1 flex items-center justify-between gap-2">
+                                      <div className="text-xs text-zinc-600">{field.label}</div>
+                                      {field.unit ? (
+                                        <div className="text-[11px] text-zinc-500">{field.unit}</div>
+                                      ) : null}
+                                    </div>
+                                    {field.type === "select" ? (
+                                      <select
+                                        className="h-8 w-full rounded-md border border-zinc-200 bg-white px-2 text-xs"
+                                        value={providersPaneSelectedModel[field.key]}
+                                        onChange={(e) =>
+                                          updateProviderModel(
+                                            providersPaneSelectedProvider.id,
+                                            providersPaneSelectedModel.id,
+                                            { [field.key]: e.target.value },
+                                          )
+                                        }
+                                      >
+                                        <option value="">inherit</option>
+                                        {REASONING_EFFORT_OPTIONS.map((value) => (
+                                          <option key={value} value={value}>
+                                            {value}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <Input
+                                        className="h-8 text-xs"
+                                        inputMode="decimal"
+                                        placeholder={field.placeholder}
+                                        value={providersPaneSelectedModel[field.key]}
+                                        onChange={(e) =>
+                                          updateProviderModel(
+                                            providersPaneSelectedProvider.id,
+                                            providersPaneSelectedModel.id,
+                                            { [field.key]: e.target.value },
+                                          )
+                                        }
+                                      />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="py-8 text-center text-xs text-zinc-500">
+                                Select a model
+                              </div>
+                            )}
+                          </div>
                         </div>
                         <div className="mt-2 flex gap-2">
                           <Input

@@ -211,7 +211,14 @@ export interface ConfigProviderSummary {
   api: string;
   base_url: string;
   api_key_set: boolean;
-  models: string[];
+  models: ConfigModelSummary[];
+}
+
+export interface ConfigModelSummary {
+  id: string;
+  auto_compact_token_limit?: number | null;
+  temperature?: number | null;
+  reasoning_effort?: string | null;
 }
 
 export interface ConfigProvidersResponse {
@@ -224,8 +231,17 @@ export interface ConfigProviderUpsert {
   api?: string;
   base_url?: string;
   api_key?: string | null;
-  models?: string[];
+  models?: ConfigModelUpsert[];
 }
+
+export type ConfigModelUpsert =
+  | string
+  | {
+      id: string;
+      auto_compact_token_limit?: number | null;
+      temperature?: number | null;
+      reasoning_effort?: string | null;
+    };
 
 export interface ConfigProvidersPatchRequest {
   default_model?: string | null;

@@ -339,6 +339,7 @@ async fn to_responses_request(
         tool_choice,
         parallel_tool_calls,
         temperature,
+        reasoning_effort,
     } = req;
 
     let mut instructions = Vec::new();
@@ -446,6 +447,12 @@ async fn to_responses_request(
     }
     if let Some(temperature) = temperature {
         obj.insert("temperature".to_string(), json!(temperature));
+    }
+    if let Some(reasoning_effort) = reasoning_effort {
+        obj.insert(
+            "reasoning".to_string(),
+            json!({ "effort": reasoning_effort.as_str() }),
+        );
     }
     inject_prompt_cache_fields(&mut body, prompt_cache_key);
 
@@ -1158,6 +1165,7 @@ fn stream_error(data: &str) -> LlmError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ReasoningEffort;
 
     fn user(text: &str) -> Message {
         Message::User {
@@ -1189,6 +1197,7 @@ mod tests {
             },
             parallel_tool_calls: Some(false),
             temperature: Some(0.2),
+            reasoning_effort: Some(ReasoningEffort::Low),
         };
 
         let body = to_responses_request("gpt-test", req, false, None)
@@ -1205,6 +1214,8 @@ mod tests {
             json!({"type":"function","name":"read"})
         );
         assert_eq!(body["parallel_tool_calls"], json!(false));
+        assert!((body["temperature"].as_f64().unwrap() - 0.2).abs() < 0.0001);
+        assert_eq!(body["reasoning"], json!({"effort": "low"}));
         assert!(body.get("max_output_tokens").is_none());
     }
 
@@ -1320,6 +1331,7 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: None,
             temperature: None,
+            reasoning_effort: None,
         };
 
         let body = to_responses_request("qwen3.5-plus", req, false, None)
