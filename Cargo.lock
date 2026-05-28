@@ -1152,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "kiliax"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1168,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "kiliax-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1199,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "kiliax-llm"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-openai",
  "async-trait",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "kiliax-otel"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "gethostname",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "kiliax-server"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "arc-swap",
