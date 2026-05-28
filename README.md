@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/master/install.sh | ba
 iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/master/install.ps1 | iex
 ```
 
-The install script will detect if you already have kiliax installed and update it to the latest version automatically. If already up to date, it will skip the installation.
+The install script will detect if you already have `ki` installed and update it to the latest version automatically. If already up to date, it will skip the installation.
 
 To force reinstall (even if same version):
 ```bash
@@ -32,9 +32,23 @@ FORCE=1 curl -fsSL https://raw.githubusercontent.com/skyw8/kiliax/master/install
 $env:FORCE=1; iwr -useb https://raw.githubusercontent.com/skyw8/kiliax/master/install.ps1 | iex
 ```
 
-### Manual Install
 
-Download the latest binary for your platform from [GitHub Releases](https://github.com/skyw8/kiliax/releases) and extract it to a directory in your PATH.
+## Quick Start
+Manage the background server (REST + SSE/WS + Web UI) with:
+
+```bash
+# open or start the Web UI directly
+ki
+
+# server
+ki server start
+ki server stop
+ki server restart
+```
+
+## Manual Install
+
+Download the latest binary for your platform from [GitHub Releases](https://github.com/skyw8/kiliax/releases), rename it to `ki`, and place it in a directory in your PATH.
 
 ### Build from Source
 
@@ -44,26 +58,12 @@ cd kiliax
 cargo build --release -p kiliax
 ```
 
-## usage
-Manage the background server (REST + SSE/WS + Web UI) with:
-
-```bash
-# server
-kiliax server start
-kiliax server stop
-kiliax server restart
-
-# or shorter
-ki
-```
-
-
-## build&run
+### build & run
 
 ```bash
 # web
 cd web
-bun install&bun run build
+bun install & bun run build
 
 cargo run -p kiliax -- server start
 # http://127.0.0.1:8123/docs

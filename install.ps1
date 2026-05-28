@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 
 $Repo = "skyw8/kiliax"
 $BinaryName = "kiliax"
+$CliName = "ki"
 $InstallDir = $env:INSTALL_DIR
 if (-not $InstallDir) {
     $InstallDir = "$env:LOCALAPPDATA\Programs\kiliax"
@@ -45,16 +46,26 @@ function Main {
         Write-Host "[*] Installing to: $InstallDir" -ForegroundColor Cyan
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-        $targetPath = "$InstallDir\$BinaryName.exe"
+        $targetPath = "$InstallDir\$CliName.exe"
         if (Test-Path $targetPath) {
             # Stop running process if any
-            $process = Get-Process -Name $BinaryName -ErrorAction SilentlyContinue
+            $process = Get-Process -Name $CliName -ErrorAction SilentlyContinue
             if ($process) {
+                Write-Host "[*] Stopping running $CliName..." -ForegroundColor Cyan
+                Stop-Process -Name $CliName -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 500
+            }
+            Remove-Item -Path $targetPath -Force
+        }
+        $oldPath = "$InstallDir\$BinaryName.exe"
+        if (Test-Path $oldPath) {
+            $oldProcess = Get-Process -Name $BinaryName -ErrorAction SilentlyContinue
+            if ($oldProcess) {
                 Write-Host "[*] Stopping running $BinaryName..." -ForegroundColor Cyan
                 Stop-Process -Name $BinaryName -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Milliseconds 500
             }
-            Remove-Item -Path $targetPath -Force
+            Remove-Item -Path $oldPath -Force
         }
         Move-Item -Path $tmpFile -Destination $targetPath -Force
 
@@ -63,20 +74,14 @@ function Main {
         if ($currentPath -notlike "*$InstallDir*") {
             Write-Host "[*] Adding to user PATH..." -ForegroundColor Cyan
             [Environment]::SetEnvironmentVariable("Path", "$currentPath;$InstallDir", "User")
-            Write-Host "[!] Please restart your terminal to use $BinaryName" -ForegroundColor Yellow
+            Write-Host "[!] Please restart your terminal to use $CliName" -ForegroundColor Yellow
         }
 
         Write-Host "[+] Installation successful!" -ForegroundColor Green
-
-
-        # Create ki alias
-        $kiPath = "$InstallDir\ki.exe"
-        Copy-Item "$InstallDir\$BinaryName.exe" $kiPath -Force
-        Write-Host "[+] Created alias: ki -> $BinaryName" -ForegroundColor Green
         Write-Host ""
-        Write-Host "Run 'kiliax --help' or 'ki --help' to get started" -ForegroundColor Cyan
+        Write-Host "Run 'ki --help' to get started" -ForegroundColor Cyan
         Write-Host ""
-        & "$InstallDir\$BinaryName.exe" --version 2>$null
+        & "$InstallDir\$CliName.exe" --version 2>$null
         Write-Host ""
     }
     finally {

@@ -66,13 +66,13 @@ minimal
 
 ### crates/kiliax-cli (CLI)
 
-- CLI command routing + default `kiliax`/`ki` => ensure server is running and open Web UI (silent first-run config init) + local session goal commands: `crates/kiliax-cli/src/main.rs`
+- CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + local session goal commands: `crates/kiliax-cli/src/main.rs`
 - Server daemon control + idempotent start via bearer API/admin identity checks: `crates/kiliax-cli/src/daemon.rs`
 - Foreground server run argument parsing: `crates/kiliax-cli/src/server_run_args.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
-- Runner (`kiliax server run`): `crates/kiliax-server/src/runner.rs`
+- Runner (`ki server run` when installed): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue/goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`

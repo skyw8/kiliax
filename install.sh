@@ -6,6 +6,7 @@ set -euo pipefail
 
 REPO="skyw8/kiliax"
 BINARY_NAME="kiliax"
+CLI_NAME="ki"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 log() { echo "$@"; }
@@ -119,29 +120,21 @@ main() {
     # Install
     log "[*] Installing to: $INSTALL_DIR"
     if [ -w "$INSTALL_DIR" ]; then
-        mv -f "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
+        mv -f "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/$CLI_NAME"
+        rm -f "$INSTALL_DIR/$BINARY_NAME"
     else
         log "[*] Elevated permissions required..."
-        sudo mv -f "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/"
+        sudo mv -f "$tmp_dir/$BINARY_NAME" "$INSTALL_DIR/$CLI_NAME"
+        sudo rm -f "$INSTALL_DIR/$BINARY_NAME"
     fi
 
     # Verify
-    if command -v "$BINARY_NAME" &> /dev/null; then
+    if command -v "$CLI_NAME" &> /dev/null; then
         log "[+] Installation successful!"
         log ""
-        "$BINARY_NAME" --version 2>/dev/null || true
+        "$CLI_NAME" --version 2>/dev/null || true
         log ""
-
-        # Create ki alias
-        ki_path="$INSTALL_DIR/ki"
-        if [ -w "$INSTALL_DIR" ]; then
-            ln -sf "$INSTALL_DIR/$BINARY_NAME" "$ki_path"
-        else
-            sudo ln -sf "$INSTALL_DIR/$BINARY_NAME" "$ki_path"
-        fi
-        log "[+] Created alias: ki -> $BINARY_NAME"
-        log ""
-        log "Run 'kiliax --help' or 'ki --help' to get started"
+        log "Run 'ki --help' to get started"
     else
         warn "[!] Installation complete, but $INSTALL_DIR is not in your PATH"
         warn "Add this to your ~/.bashrc or ~/.zshrc:"
