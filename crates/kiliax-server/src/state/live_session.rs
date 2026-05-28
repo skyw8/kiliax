@@ -1238,6 +1238,10 @@ impl LiveSession {
             error: None,
             input: req.input,
             overrides: req.overrides,
+            client_message_id: req
+                .client_message_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
         };
 
         write_run_file(runs_dir, &run).await?;
@@ -1488,6 +1492,7 @@ impl LiveSession {
                     },
                     overrides: None,
                     auto_resume: true,
+                    client_message_id: None,
                 },
             )
             .await
@@ -1535,6 +1540,7 @@ impl LiveSession {
                     },
                     overrides: None,
                     auto_resume: true,
+                    client_message_id: None,
                 },
             )
             .await
@@ -1698,6 +1704,7 @@ impl LiveSession {
             error: None,
             input: domain::RunInput::GoalContinuation,
             overrides: None,
+            client_message_id: None,
         };
         {
             let q = self.queue.lock().await;
@@ -2001,11 +2008,28 @@ impl LiveSession {
                 }
 
                 // Persist user message at execution time (after optional pre-turn compaction).
-                self.record_message(CoreMessage::User {
+                let user_message = CoreMessage::User {
                     content: user_content.clone(),
                     hidden: hidden_user,
-                })
-                .await?;
+                };
+                let seq = self.record_message(user_message.clone()).await?;
+                let created_at = now_rfc3339();
+                if let Some(msg) =
+                    map_core_message_to_domain_event_message(seq, created_at.clone(), user_message)
+                {
+                    self.emit_event(domain::Event {
+                        event_id: self.alloc_event_id(),
+                        ts: created_at,
+                        session_id: self.session_id.to_string(),
+                        run_id: Some(run.id.clone()),
+                        event_type: "user_message".to_string(),
+                        data: serde_json::json!({
+                            "message": msg,
+                            "client_message_id": run.client_message_id.clone(),
+                        }),
+                    })
+                    .await?;
+                }
             }
 
             let runtime = AgentRuntime::new(llm, tools_for_run.clone());
@@ -2927,6 +2951,7 @@ mod tests {
                 attachments: Vec::new(),
             },
             overrides: None,
+            client_message_id: None,
         };
 
         live.handle_agent_event(
@@ -3060,6 +3085,7 @@ mod tests {
                 attachments: Vec::new(),
             },
             overrides: None,
+            client_message_id: None,
         };
 
         live.handle_agent_event(

@@ -389,6 +389,8 @@ pub struct RunCreateRequest {
     pub overrides: Option<RunOverrides>,
     #[serde(default)]
     pub auto_resume: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,6 +426,8 @@ pub struct Run {
     pub input: RunInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overrides: Option<RunOverrides>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

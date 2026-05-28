@@ -555,7 +555,7 @@ export default function App() {
   function updateIsAtBottom() {
     const el = chatScrollRef.current;
     if (!el) return;
-    const thresholdPx = 96;
+    const thresholdPx = 2;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const next = distance <= thresholdPx;
     if (next === isAtBottomRef.current) return;
@@ -726,6 +726,42 @@ export default function App() {
     );
   }
 
+  function reconcilePersistedUserMessage(
+    runId: string,
+    msg: Message,
+    clientMessageId?: string,
+  ) {
+    if (msg.role !== "user") return;
+    const trimmedClientId = (clientMessageId ?? "").trim();
+    const hasClientLocalMessage = Boolean(
+      trimmedClientId &&
+        messagesRef.current.some((m) => m.role === "user" && m.id === trimmedClientId),
+    );
+    const localMessageId =
+      (hasClientLocalMessage ? trimmedClientId : undefined) ??
+      (runId ? localMessageByRunRef.current[runId] : undefined) ??
+      (runId ? pendingRef.current.find((p) => p.runId === runId)?.localMessageId : undefined);
+
+    if (runId) {
+      delete localMessageByRunRef.current[runId];
+    }
+    setPending((prev) =>
+      prev.map((p) => {
+        const sameRun = runId && p.runId === runId;
+        const sameLocal = localMessageId && p.localMessageId === localMessageId;
+        if (!sameRun && !sameLocal) return p;
+        return { ...p, localMessageId: undefined };
+      }),
+    );
+
+    updateMessageWindow((prev) => {
+      const withoutLocal = localMessageId
+        ? prev.filter((m) => !(m.role === "user" && m.id === localMessageId))
+        : prev;
+      return mergeMessages(withoutLocal, [msg]);
+    });
+  }
+
   async function fetchSession(sessionId: string) {
     try {
       const s = await api.getSession(sessionId);
@@ -799,6 +835,18 @@ export default function App() {
       if (sid) {
         await fetchSession(sid);
       }
+      return;
+    }
+
+    if (type === "user_message") {
+      const msg = ev?.data?.message;
+      if (!msg?.role) return;
+      reconcilePersistedUserMessage(
+        runId,
+        msg as Message,
+        String(ev?.data?.client_message_id ?? ""),
+      );
+      void refreshSessionsIfStale();
       return;
     }
 
@@ -1167,6 +1215,7 @@ export default function App() {
       didAppendLocalMessage = true;
 
       const run: any = await api.createRun(sessionId, {
+        client_message_id: localMessageId,
         input: {
           type: "text",
           text,
@@ -1178,7 +1227,10 @@ export default function App() {
         },
       });
       createdRunId = String(run?.id ?? "").trim() || null;
-      if (createdRunId) {
+      const stillHasLocalMessage = messagesRef.current.some(
+        (m) => m.role === "user" && m.id === localMessageId,
+      );
+      if (createdRunId && stillHasLocalMessage) {
         localMessageByRunRef.current[createdRunId] = localMessageId;
       }
       setPending((p) => [
@@ -1186,7 +1238,7 @@ export default function App() {
         {
           sessionId,
           runId: createdRunId ?? "",
-          localMessageId,
+          localMessageId: stillHasLocalMessage ? localMessageId : undefined,
           baseEventId,
           createdAt: new Date().toISOString(),
           content: text,
@@ -1766,11 +1818,6 @@ export default function App() {
     [pending, selectedId],
   );
 
-  useEffect(() => {
-    if (!isAtBottomRef.current) return;
-    scrollToBottom("auto");
-  }, [messages, pendingForSelected.length, stream.assistant, stream.thinking, stream.toolCalls.length]);
-
   const selectedSummary = sortedSessions.find((s) => s.id === selectedId) ?? null;
   const selectedBadge = selectedSummary ? statusBadge(selectedSummary) : null;
 
@@ -2275,7 +2322,7 @@ export default function App() {
             ref={setChatScrollNode}
             onScroll={updateIsAtBottom}
             className={[
-              "flex-1 overflow-auto bg-zinc-50 pb-4",
+              "chat-scroll flex-1 overflow-auto bg-zinc-50 pb-4",
               selectedId ? "pr-3 sm:pr-4" : "",
             ].join(" ")}
           >
@@ -2335,6 +2382,7 @@ export default function App() {
                 <div className="min-w-0">
                   {chatScrollEl ? (
                     <Virtuoso
+                      key={selectedId}
                       ref={virtuosoRef}
                       customScrollParent={chatScrollEl}
                       data={chatRows}

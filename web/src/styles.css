@@ -15,6 +15,10 @@ body {
   container-type: inline-size;
 }
 
+.chat-scroll {
+  overflow-anchor: none;
+}
+
 .composer-layout {
   display: grid;
   grid-template-columns:

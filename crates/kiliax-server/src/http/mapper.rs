@@ -549,6 +549,7 @@ impl From<domain::Run> for api::Run {
             error: value.error.map(Into::into),
             input: value.input.into(),
             overrides: value.overrides.map(Into::into),
+            client_message_id: value.client_message_id,
         }
     }
 }
@@ -623,6 +624,7 @@ impl From<api::RunCreateRequest> for domain::RunCreateRequest {
             input: value.input.into(),
             overrides: value.overrides.map(Into::into),
             auto_resume: value.auto_resume,
+            client_message_id: value.client_message_id,
         }
     }
 }

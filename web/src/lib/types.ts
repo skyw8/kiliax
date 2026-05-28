@@ -336,6 +336,7 @@ export interface RunCreateRequest {
   input: RunInput;
   overrides?: RunOverrides;
   auto_resume?: boolean;
+  client_message_id?: string;
 }
 
 export interface ApiErrorShape {
