@@ -1360,16 +1360,26 @@ mod tests {
     async fn write_stdin_interacts_with_running_session() {
         let tmp = tempfile::tempdir().unwrap();
         let sessions = ShellSessions::new();
+        #[cfg(windows)]
+        let command = "$line = [Console]::In.ReadLine(); Write-Output ('got:' + $line)";
+        #[cfg(not(windows))]
+        let command = "read line; echo got:$line";
+        let mut first_args = serde_json::json!({
+            "cmd": command,
+            "login": false,
+            "yield_time_ms": 20
+        });
+        #[cfg(windows)]
+        {
+            first_args["shell"] = serde_json::json!("powershell.exe");
+        }
+
         let first = execute_shell_command(
             tmp.path(),
             &[],
             &allow_all_permissions(),
             &sessions,
-            &tool_call(serde_json::json!({
-                "cmd": "read line; echo got:$line",
-                "login": false,
-                "yield_time_ms": 20
-            })),
+            &tool_call(first_args),
         )
         .await
         .unwrap();
@@ -1382,7 +1392,7 @@ mod tests {
             &stdin_call(serde_json::json!({
                 "session_id": session_id,
                 "chars": "hello\n",
-                "yield_time_ms": 100
+                "yield_time_ms": 1000
             })),
         )
         .await
@@ -1391,7 +1401,7 @@ mod tests {
 
         assert_eq!(second["running"], false);
         assert_eq!(second["exit_code"], 0);
-        assert_eq!(second["stdout"], "got:hello\n");
+        assert_eq!(second["stdout"].as_str().unwrap_or("").trim(), "got:hello");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1431,18 +1441,23 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn shell_command_accepts_model_provided_shell() {
         let tmp = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let (shell, cmd) = ("cmd.exe", "echo sh-ok");
+        #[cfg(not(windows))]
+        let (shell, cmd) = ("/bin/sh", "printf sh-ok");
+
         let out = run_shell(
             tmp.path(),
             serde_json::json!({
-                "cmd": "printf sh-ok",
-                "shell": "/bin/sh",
+                "cmd": cmd,
+                "shell": shell,
                 "login": false
             }),
         )
         .await;
 
         assert_eq!(out["exit_code"], 0);
-        assert_eq!(out["stdout"], "sh-ok");
+        assert_eq!(out["stdout"].as_str().unwrap_or("").trim(), "sh-ok");
     }
 
     #[cfg(unix)]
