@@ -2320,6 +2320,7 @@ export default function App() {
                     variant="ghost"
                     size="sm"
                     className="justify-start gap-2"
+                    aria-label="Add folder"
                     onClick={chooseExtraFolder}
                   >
                     <FolderPlus className="h-4 w-4 text-violet-600" />
