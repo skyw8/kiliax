@@ -19,6 +19,7 @@ fn print_help() {
     println!("  {bin} server stop");
     println!("  {bin} server restart");
     println!("  {bin} mcp serve [--transport stdio|http] [--base-url URL] [--token TOKEN]");
+    println!("  {bin} mcp skill install [--path DIR] [--force]");
     println!("  {bin} goal get --session <SESSION_ID>");
     println!("  {bin} goal set --session <SESSION_ID> <OBJECTIVE...>");
     println!("  {bin} goal clear --session <SESSION_ID>");
@@ -309,6 +310,38 @@ fn is_loopback_bind_host(host: &str) -> bool {
     matches!(host.trim(), "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
+struct McpSkillInstallArgs {
+    path: std::path::PathBuf,
+    force: bool,
+}
+
+fn parse_mcp_skill_install_args(args: &[String]) -> Result<McpSkillInstallArgs> {
+    let mut path: Option<std::path::PathBuf> = None;
+    let mut force = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--path" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--path expects a directory");
+                };
+                path = Some(std::path::PathBuf::from(value));
+            }
+            "--force" => force = true,
+            other => anyhow::bail!("unknown mcp skill install option: {other}"),
+        }
+    }
+    let path = path.unwrap_or_else(default_kiliax_skills_root);
+    Ok(McpSkillInstallArgs { path, force })
+}
+
+fn default_kiliax_skills_root() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".kiliax")
+        .join("skills")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -391,6 +424,17 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+            Some("skill") => match args.get(2).map(String::as_str) {
+                Some("install") => {
+                    let install_args = parse_mcp_skill_install_args(&args[3..])?;
+                    let dir = kiliax_mcp::install_call_kiliax_skill(
+                        &install_args.path,
+                        install_args.force,
+                    )?;
+                    println!("{}", dir.display());
+                }
+                _ => print_help(),
+            },
             _ => print_help(),
         }
         return Ok(());
