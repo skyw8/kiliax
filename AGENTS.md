@@ -66,7 +66,7 @@ minimal
 
 ### crates/kiliax-cli (CLI)
 
-- CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + stdio MCP export (`ki mcp serve`) + local session goal commands: `crates/kiliax-cli/src/main.rs`
+- CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + local/remote stdio MCP export (`ki mcp serve [--base-url URL] [--token TOKEN]`) + local session goal commands: `crates/kiliax-cli/src/main.rs`
 - Server daemon control + idempotent start via bearer API/admin identity checks: `crates/kiliax-cli/src/daemon.rs`
 - Foreground server run argument parsing: `crates/kiliax-cli/src/server_run_args.rs`
 

@@ -18,7 +18,7 @@ fn print_help() {
     println!("  {bin} server run [OPTIONS]");
     println!("  {bin} server stop");
     println!("  {bin} server restart");
-    println!("  {bin} mcp serve");
+    println!("  {bin} mcp serve [--base-url URL] [--token TOKEN]");
     println!("  {bin} goal get --session <SESSION_ID>");
     println!("  {bin} goal set --session <SESSION_ID> <OBJECTIVE...>");
     println!("  {bin} goal clear --session <SESSION_ID>");
@@ -171,6 +171,47 @@ async fn ensure_server(workspace_root: &std::path::Path) -> Result<daemon::Daemo
     daemon::ensure_running(workspace_root, &loaded.path, &loaded.config.server).await
 }
 
+struct McpServeArgs {
+    base_url: Option<String>,
+    token: Option<String>,
+}
+
+fn parse_mcp_serve_args(args: &[String]) -> Result<McpServeArgs> {
+    let mut base_url = std::env::var("KILIAX_BASE_URL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let mut token = std::env::var("KILIAX_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--base-url" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--base-url expects a URL");
+                };
+                let value = value.trim();
+                if value.is_empty() {
+                    anyhow::bail!("--base-url must not be empty");
+                }
+                base_url = Some(value.to_string());
+            }
+            "--token" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--token expects a token");
+                };
+                token = Some(value.trim().to_string());
+            }
+            other => anyhow::bail!("unknown mcp serve option: {other}"),
+        }
+    }
+
+    Ok(McpServeArgs { base_url, token })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -225,13 +266,17 @@ async fn main() -> Result<()> {
     if args.first().is_some_and(|a| a == "mcp") {
         match args.get(1).map(String::as_str) {
             Some("serve") => {
-                let state = ensure_server(&workspace_root).await?;
-                let base_url = format!("http://{}:{}", state.host, state.port);
-                kiliax_mcp::serve_stdio(kiliax_mcp::McpServerOptions {
-                    base_url,
-                    token: Some(state.token),
-                })
-                .await?;
+                let serve_args = parse_mcp_serve_args(&args[2..])?;
+                let (base_url, token) = if let Some(base_url) = serve_args.base_url {
+                    (base_url, serve_args.token)
+                } else {
+                    let state = ensure_server(&workspace_root).await?;
+                    (
+                        format!("http://{}:{}", state.host, state.port),
+                        Some(state.token),
+                    )
+                };
+                kiliax_mcp::serve_stdio(kiliax_mcp::McpServerOptions { base_url, token }).await?;
             }
             _ => print_help(),
         }
