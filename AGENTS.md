@@ -73,19 +73,19 @@ minimal
 ### crates/kiliax-mcp (MCP export adapter)
 
 - Stdio MCP server adapter that exposes kiliax as an agent service for other agents, forwarding tools/resources/prompts to the running HTTP control plane: `crates/kiliax-mcp/src/lib.rs`
-- MCP schema definitions for tools/resources/prompts covering capabilities, agent/session listing, session snapshots/messages, run creation/continuation/cancellation, and skills enablement: `crates/kiliax-mcp/src/protocol.rs`
+- MCP schema definitions for tools/resources/prompts covering capabilities, agent/session listing, session snapshots/messages, run creation/continuation/cancellation, single-skill invocation, and skills enablement: `crates/kiliax-mcp/src/protocol.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`ki server run` when installed): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers + client-safe path display normalization: `crates/kiliax-server/src/http/mapper.rs`
-- State (config/session lifecycle/run queue/goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- State (config/session lifecycle/run queue with per-run model/agent/MCP/skills/custom-tools overrides + goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
 - Live session runtime integration (spawned child sessions, tool backend wiring, forked context, mailbox delivery, parent notifications, persisted user-message event emission): `crates/kiliax-server/src/state/live_session.rs`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input/client message ids): `crates/kiliax-server/src/state/domain.rs`
 - Infra (path validation/tmp workspace helpers/client path display normalization/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
-- REST/OpenAPI schemas (includes capabilities builtin tool summaries, message `usage`, live stream snapshots, server-side folder listing, session default writes, run client message ids, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
+- REST/OpenAPI schemas (includes capabilities builtin tool summaries, message `usage`, live stream snapshots, server-side folder listing, session default writes, run client message ids, run overrides, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 
 ### crates/kiliax-otel (OpenTelemetry)

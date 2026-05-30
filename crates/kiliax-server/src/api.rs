@@ -365,6 +365,10 @@ pub struct RunOverrides {
     #[serde(default)]
     pub model_id: Option<String>,
     #[serde(default)]
+    pub skills: Option<SkillsSettingsPatch>,
+    #[serde(default)]
+    pub custom_tools: Option<CustomToolsSettingsPatch>,
+    #[serde(default)]
     pub mcp: Option<McpServersPatch>,
 }
 

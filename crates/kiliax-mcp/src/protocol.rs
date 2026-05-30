@@ -124,6 +124,29 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             ),
         },
         ToolDefinition {
+            name: "run_skill",
+            description: "Create a Kiliax session with exactly one skill enabled, submit a prompt, and optionally wait for completion.",
+            input_schema: required_schema(
+                vec![
+                    ("skill_id", json!({ "type": "string" })),
+                    ("prompt", json!({ "type": "string" })),
+                    ("title", json!({ "type": "string" })),
+                    ("workspace", json!({ "type": "string" })),
+                    ("extra_workspace_roots", json!({ "type": "array", "items": { "type": "string" } })),
+                    ("agent", json!({ "type": "string" })),
+                    ("model_id", json!({ "type": "string" })),
+                    ("mcp", json!({ "type": "object" })),
+                    ("custom_tools", json!({ "type": "object" })),
+                    ("overrides", json!({ "type": "object" })),
+                    ("attachments", attachment_array_schema()),
+                    ("wait", json!({ "type": "boolean", "default": true })),
+                    ("timeout_seconds", json!({ "type": "integer", "minimum": 1 })),
+                    ("message_limit", json!({ "type": "integer", "minimum": 1, "maximum": 200 })),
+                ],
+                vec!["skill_id", "prompt"],
+            ),
+        },
+        ToolDefinition {
             name: "continue_session",
             description: "Submit a follow-up prompt to an existing Kiliax session and optionally wait for completion.",
             input_schema: required_schema(
@@ -279,6 +302,7 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), tools.len());
         assert!(names.contains(&"run_agent"));
+        assert!(names.contains(&"run_skill"));
         assert!(names.contains(&"continue_session"));
         assert!(names.contains(&"get_capabilities"));
         assert!(names.contains(&"list_skills"));

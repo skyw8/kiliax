@@ -501,6 +501,8 @@ impl From<domain::RunOverrides> for api::RunOverrides {
         Self {
             agent: value.agent,
             model_id: value.model_id,
+            skills: value.skills.map(Into::into),
+            custom_tools: value.custom_tools.map(Into::into),
             mcp: value.mcp.map(Into::into),
         }
     }
@@ -511,6 +513,8 @@ impl From<api::RunOverrides> for domain::RunOverrides {
         Self {
             agent: value.agent,
             model_id: value.model_id,
+            skills: value.skills.map(Into::into),
+            custom_tools: value.custom_tools.map(Into::into),
             mcp: value.mcp.map(Into::into),
         }
     }

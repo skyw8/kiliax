@@ -246,6 +246,11 @@ async fn call_tool(
                 .map_err(|e| McpError::invalid_params(e.to_string()))?;
             run_agent(client, req).await?
         }
+        "run_skill" => {
+            let req: RunSkillArgs = serde_json::from_value(args)
+                .map_err(|e| McpError::invalid_params(e.to_string()))?;
+            run_skill(client, req).await?
+        }
         "continue_session" => {
             let req: ContinueSessionArgs = serde_json::from_value(args)
                 .map_err(|e| McpError::invalid_params(e.to_string()))?;
@@ -355,6 +360,52 @@ fn get_prompt(params: Value) -> std::result::Result<Value, McpError> {
             }
         }]
     }))
+}
+
+async fn run_skill(
+    client: &KiliaxHttpClient,
+    req: RunSkillArgs,
+) -> std::result::Result<Value, McpError> {
+    let skill_id = req.skill_id.trim();
+    if skill_id.is_empty() {
+        return Err(McpError::invalid_params("skill_id must not be empty"));
+    }
+
+    let mut agent_req = RunAgentArgs {
+        prompt: req.prompt,
+        title: req.title.or_else(|| Some(format!("Skill: {skill_id}"))),
+        workspace: req.workspace,
+        extra_workspace_roots: req.extra_workspace_roots,
+        agent: req.agent,
+        model_id: req.model_id,
+        mcp: req.mcp,
+        skills: Some(json!({
+            "default_enable": false,
+            "overrides": [{ "id": skill_id, "enable": true }]
+        })),
+        custom_tools: req.custom_tools,
+        overrides: req.overrides,
+        attachments: req.attachments,
+        wait: req.wait,
+        timeout_seconds: req.timeout_seconds,
+        message_limit: req.message_limit,
+    };
+
+    let run_overrides = agent_req.overrides.take().unwrap_or_else(|| json!({}));
+    let mut run_overrides = run_overrides
+        .as_object()
+        .cloned()
+        .ok_or_else(|| McpError::invalid_params("overrides must be an object"))?;
+    run_overrides.insert(
+        "skills".to_string(),
+        json!({
+            "default_enable": false,
+            "overrides": [{ "id": skill_id, "enable": true }]
+        }),
+    );
+    agent_req.overrides = Some(Value::Object(run_overrides));
+
+    run_agent(client, agent_req).await
 }
 
 async fn run_agent(
@@ -604,6 +655,36 @@ struct RunAgentArgs {
     mcp: Option<Value>,
     #[serde(default)]
     skills: Option<Value>,
+    #[serde(default)]
+    custom_tools: Option<Value>,
+    #[serde(default)]
+    overrides: Option<Value>,
+    #[serde(default)]
+    attachments: Vec<RunAttachment>,
+    #[serde(default)]
+    wait: Option<bool>,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+    #[serde(default)]
+    message_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunSkillArgs {
+    skill_id: String,
+    prompt: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    extra_workspace_roots: Option<Vec<String>>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(default)]
+    mcp: Option<Value>,
     #[serde(default)]
     custom_tools: Option<Value>,
     #[serde(default)]

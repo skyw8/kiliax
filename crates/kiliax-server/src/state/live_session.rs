@@ -31,8 +31,9 @@ use super::preamble::{build_preamble, replace_preamble, replace_preamble_with_id
 use super::{
     append_event, apply_settings_patch, config_with_mcp_overrides,
     custom_tools_config_from_settings, error_chain_vec, format_error_chain_text,
-    map_core_message_to_domain_event_message, map_mcp_status, map_session_err, merge_mcp_settings,
-    new_run_id, now_rfc3339, read_last_event_id, resolve_session_settings, runtime_error_code,
+    map_core_message_to_domain_event_message, map_mcp_status, map_session_err,
+    merge_custom_tool_overrides, merge_mcp_settings, merge_skill_overrides, new_run_id,
+    now_rfc3339, read_last_event_id, resolve_session_settings, runtime_error_code,
     runtime_error_hint, session_events_api_path, skills_config_from_settings, ts_ms_to_rfc3339,
     write_run_file, MultiAgentControl, ServerState,
 };
@@ -2040,12 +2041,14 @@ impl LiveSession {
             let goal_time_started = std::time::Instant::now();
             if effective.agent != base_settings.agent
                 || effective.model_id != base_settings.model_id
+                || effective.skills.default_enable != base_settings.skills.default_enable
+                || effective.skills.overrides != base_settings.skills.overrides
                 || effective.mcp.servers != base_settings.mcp.servers
                 || effective.custom_tools.default_enable
                     != base_settings.custom_tools.default_enable
                 || effective.custom_tools.overrides != base_settings.custom_tools.overrides
             {
-                let skills_config = skills_config_from_settings(&base_settings.skills);
+                let skills_config = skills_config_from_settings(&effective.skills);
                 let preamble = build_preamble(
                     &profile,
                     &effective.model_id,
@@ -2790,6 +2793,22 @@ fn apply_run_overrides(
         if let Some(mcp) = o.mcp.as_ref().and_then(|m| m.servers.as_ref()) {
             merge_mcp_settings(&mut out.mcp.servers, mcp, config, false)?;
         }
+        if let Some(skills) = o.skills.as_ref() {
+            if let Some(v) = skills.default_enable {
+                out.skills.default_enable = v;
+            }
+            if let Some(overrides) = skills.overrides.as_ref() {
+                merge_skill_overrides(&mut out.skills.overrides, overrides)?;
+            }
+        }
+        if let Some(custom_tools) = o.custom_tools.as_ref() {
+            if let Some(v) = custom_tools.default_enable {
+                out.custom_tools.default_enable = v;
+            }
+            if let Some(overrides) = custom_tools.overrides.as_ref() {
+                merge_custom_tool_overrides(&mut out.custom_tools.overrides, overrides)?;
+            }
+        }
     }
     Ok(out)
 }
@@ -2816,6 +2835,56 @@ mod tests {
             },
         );
         cfg
+    }
+
+    #[test]
+    fn run_overrides_can_select_skills_and_custom_tools() {
+        let cfg = test_config();
+        let mut base = default_settings(&cfg, None).expect("settings");
+        base.skills.default_enable = true;
+        base.custom_tools.default_enable = false;
+
+        let effective = apply_run_overrides(
+            &base,
+            Some(&domain::RunOverrides {
+                agent: None,
+                model_id: None,
+                skills: Some(domain::SkillsSettingsPatch {
+                    default_enable: Some(false),
+                    overrides: Some(vec![domain::SkillEnableSetting {
+                        id: "demo_skill".to_string(),
+                        enable: true,
+                    }]),
+                }),
+                custom_tools: Some(domain::CustomToolsSettingsPatch {
+                    default_enable: Some(true),
+                    overrides: Some(vec![domain::CustomToolEnableSetting {
+                        id: "demo_tool".to_string(),
+                        enable: false,
+                    }]),
+                }),
+                mcp: None,
+            }),
+            &cfg,
+        )
+        .expect("overrides");
+
+        assert!(!effective.skills.default_enable);
+        assert_eq!(
+            effective.skills.overrides,
+            vec![domain::SkillEnableSetting {
+                id: "demo_skill".to_string(),
+                enable: true
+            }]
+        );
+        assert!(effective.custom_tools.default_enable);
+        assert_eq!(
+            effective.custom_tools.overrides,
+            vec![domain::CustomToolEnableSetting {
+                id: "demo_tool".to_string(),
+                enable: false
+            }]
+        );
     }
 
     #[tokio::test]
