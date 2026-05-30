@@ -84,7 +84,9 @@ async fn handle_request(client: &KiliaxHttpClient, req: JsonRpcRequest) -> Optio
         "initialize" => Ok(json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
-                "tools": {}
+                "tools": {},
+                "resources": {},
+                "prompts": {}
             },
             "serverInfo": {
                 "name": "kiliax",
@@ -94,6 +96,10 @@ async fn handle_request(client: &KiliaxHttpClient, req: JsonRpcRequest) -> Optio
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
         "tools/call" => call_tool(client, req.params).await,
+        "resources/list" => Ok(json!({ "resources": protocol::resource_definitions() })),
+        "resources/read" => read_resource(client, req.params).await,
+        "prompts/list" => Ok(json!({ "prompts": protocol::prompt_definitions() })),
+        "prompts/get" => get_prompt(req.params),
         _ => Err(McpError::method_not_found(method)),
     };
 
@@ -182,6 +188,52 @@ async fn call_tool(
             }
             client.get_json(&path).await?
         }
+        "list_skills" => {
+            let req: ListSkillsArgs = serde_json::from_value(args)
+                .map_err(|e| McpError::invalid_params(e.to_string()))?;
+            match req
+                .session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            {
+                Some(session_id) => {
+                    client
+                        .get_json(&format!("/v1/sessions/{session_id}/skills"))
+                        .await?
+                }
+                None => client.get_json("/v1/skills").await?,
+            }
+        }
+        "get_config_skills" => client.get_json("/v1/config/skills").await?,
+        "set_config_skills" => {
+            let req: SetConfigSkillsArgs = serde_json::from_value(args)
+                .map_err(|e| McpError::invalid_params(e.to_string()))?;
+            client
+                .patch_json(
+                    "/v1/config/skills",
+                    json!({
+                        "default_enable": req.default_enable,
+                        "skills": req.skills
+                    }),
+                )
+                .await?
+        }
+        "set_session_skills" => {
+            let req: SetSessionSkillsArgs = serde_json::from_value(args)
+                .map_err(|e| McpError::invalid_params(e.to_string()))?;
+            client
+                .patch_json(
+                    &format!("/v1/sessions/{}/settings", req.session_id),
+                    json!({
+                        "skills": {
+                            "default_enable": req.default_enable,
+                            "overrides": req.overrides
+                        }
+                    }),
+                )
+                .await?
+        }
         "cancel_run" => {
             let req: RunIdArgs = serde_json::from_value(args)
                 .map_err(|e| McpError::invalid_params(e.to_string()))?;
@@ -206,6 +258,101 @@ async fn call_tool(
         "content": [{
             "type": "text",
             "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+        }]
+    }))
+}
+
+async fn read_resource(
+    client: &KiliaxHttpClient,
+    params: Value,
+) -> std::result::Result<Value, McpError> {
+    let uri = params
+        .get("uri")
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpError::invalid_params("resources/read params.uri is required"))?;
+    let value = match uri {
+        "kiliax://capabilities" => client.get_json("/v1/capabilities").await?,
+        "kiliax://sessions" => client.get_json("/v1/sessions?limit=50").await?,
+        "kiliax://skills" => client.get_json("/v1/skills").await?,
+        "kiliax://config/skills" => client.get_json("/v1/config/skills").await?,
+        "kiliax://custom-tools" => client.get_json("/v1/custom-tools").await?,
+        _ => return Err(McpError::invalid_params(format!("unknown resource: {uri}"))),
+    };
+
+    Ok(json!({
+        "contents": [{
+            "uri": uri,
+            "mimeType": "application/json",
+            "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+        }]
+    }))
+}
+
+fn get_prompt(params: Value) -> std::result::Result<Value, McpError> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpError::invalid_params("prompts/get params.name is required"))?;
+    let args = params
+        .get("arguments")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let task = args
+        .get("task")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let workspace = args
+        .get("workspace")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let session_id = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+
+    let (description, text) = match name {
+        "run_agent" => {
+            let mut text =
+                String::from("Use the kiliax MCP tool `run_agent` to execute this task.");
+            if !workspace.is_empty() {
+                text.push_str("\nWorkspace: ");
+                text.push_str(workspace);
+            }
+            if !task.is_empty() {
+                text.push_str("\nTask: ");
+                text.push_str(task);
+            }
+            ("Create a new Kiliax agent run.", text)
+        }
+        "continue_session" => {
+            if session_id.is_empty() {
+                return Err(McpError::invalid_params(
+                    "session_id is required for continue_session prompt",
+                ));
+            }
+            let mut text =
+                format!("Use the kiliax MCP tool `continue_session` for session `{session_id}`.");
+            if !task.is_empty() {
+                text.push_str("\nTask: ");
+                text.push_str(task);
+            }
+            ("Continue an existing Kiliax session.", text)
+        }
+        _ => return Err(McpError::invalid_params(format!("unknown prompt: {name}"))),
+    };
+
+    Ok(json!({
+        "description": description,
+        "messages": [{
+            "role": "user",
+            "content": {
+                "type": "text",
+                "text": text
+            }
         }]
     }))
 }
@@ -412,6 +559,35 @@ struct GetMessagesArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct ListSkillsArgs {
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetConfigSkillsArgs {
+    #[serde(default)]
+    default_enable: Option<bool>,
+    #[serde(default)]
+    skills: Vec<EnableSetting>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetSessionSkillsArgs {
+    session_id: String,
+    #[serde(default)]
+    default_enable: Option<bool>,
+    #[serde(default)]
+    overrides: Vec<EnableSetting>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct EnableSetting {
+    id: String,
+    enable: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct RunAgentArgs {
     prompt: String,
     #[serde(default)]
@@ -506,6 +682,18 @@ impl KiliaxHttpClient {
         self.decode_response(resp).await
     }
 
+    async fn patch_json(&self, path: &str, body: Value) -> std::result::Result<Value, McpError> {
+        let mut req = self
+            .client
+            .patch(format!("{}{}", self.base_url, path))
+            .json(&body);
+        if let Some(token) = self.token.as_deref() {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().await.map_err(McpError::from_anyhow)?;
+        self.decode_response(resp).await
+    }
+
     async fn decode_response(
         &self,
         resp: reqwest::Response,
@@ -531,6 +719,9 @@ impl KiliaxHttpClient {
                 code,
                 message: format!("HTTP {status}: {msg}"),
             });
+        }
+        if text.trim().is_empty() {
+            return Ok(json!({ "ok": true }));
         }
         serde_json::from_str(&text)
             .with_context(|| format!("invalid JSON response: {text}"))

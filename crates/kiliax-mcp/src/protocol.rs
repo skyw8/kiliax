@@ -9,6 +9,29 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceDefinition {
+    pub uri: &'static str,
+    pub name: &'static str,
+    #[serde(rename = "mimeType")]
+    pub mime_type: &'static str,
+    pub description: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptDefinition {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub arguments: Vec<PromptArgument>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptArgument {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub required: bool,
+}
+
 pub fn tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
@@ -43,6 +66,36 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     ("session_id", json!({ "type": "string" })),
                     ("limit", json!({ "type": "integer", "minimum": 1, "maximum": 200 })),
                     ("before", json!({ "type": "string" })),
+                ],
+                vec!["session_id"],
+            ),
+        },
+        ToolDefinition {
+            name: "list_skills",
+            description: "List Kiliax skills globally or for a session workspace.",
+            input_schema: object_schema(vec![("session_id", json!({ "type": "string" }))]),
+        },
+        ToolDefinition {
+            name: "get_config_skills",
+            description: "Return global Kiliax skill enablement defaults and overrides.",
+            input_schema: object_schema(vec![]),
+        },
+        ToolDefinition {
+            name: "set_config_skills",
+            description: "Update global Kiliax skill enablement defaults and overrides.",
+            input_schema: object_schema(vec![
+                ("default_enable", json!({ "type": "boolean" })),
+                ("skills", enable_array_schema()),
+            ]),
+        },
+        ToolDefinition {
+            name: "set_session_skills",
+            description: "Update skill enablement for a Kiliax session.",
+            input_schema: required_schema(
+                vec![
+                    ("session_id", json!({ "type": "string" })),
+                    ("default_enable", json!({ "type": "boolean" })),
+                    ("overrides", enable_array_schema()),
                 ],
                 vec!["session_id"],
             ),
@@ -94,6 +147,93 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
+pub fn resource_definitions() -> Vec<ResourceDefinition> {
+    vec![
+        ResourceDefinition {
+            uri: "kiliax://capabilities",
+            name: "Kiliax capabilities",
+            mime_type: "application/json",
+            description: "Agents, models, built-in tools, and MCP server status.",
+        },
+        ResourceDefinition {
+            uri: "kiliax://sessions",
+            name: "Kiliax sessions",
+            mime_type: "application/json",
+            description: "Recent Kiliax sessions.",
+        },
+        ResourceDefinition {
+            uri: "kiliax://skills",
+            name: "Kiliax skills",
+            mime_type: "application/json",
+            description: "Discovered global/workspace skills.",
+        },
+        ResourceDefinition {
+            uri: "kiliax://config/skills",
+            name: "Kiliax skill config",
+            mime_type: "application/json",
+            description: "Global skill enablement defaults and overrides.",
+        },
+        ResourceDefinition {
+            uri: "kiliax://custom-tools",
+            name: "Kiliax custom tools",
+            mime_type: "application/json",
+            description: "Discovered custom tools.",
+        },
+    ]
+}
+
+pub fn prompt_definitions() -> Vec<PromptDefinition> {
+    vec![
+        PromptDefinition {
+            name: "run_agent",
+            description: "Prompt a host agent to start a Kiliax session for a task.",
+            arguments: vec![
+                PromptArgument {
+                    name: "task",
+                    description: "Task to delegate to Kiliax.",
+                    required: false,
+                },
+                PromptArgument {
+                    name: "workspace",
+                    description: "Optional server-side workspace path.",
+                    required: false,
+                },
+            ],
+        },
+        PromptDefinition {
+            name: "continue_session",
+            description: "Prompt a host agent to continue an existing Kiliax session.",
+            arguments: vec![
+                PromptArgument {
+                    name: "session_id",
+                    description: "Kiliax session id.",
+                    required: true,
+                },
+                PromptArgument {
+                    name: "task",
+                    description: "Follow-up task.",
+                    required: false,
+                },
+            ],
+        },
+    ]
+}
+
+fn enable_array_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "enable": { "type": "boolean" }
+            },
+            "required": ["id", "enable"],
+            "additionalProperties": false
+        }
+    })
+}
+
 fn attachment_array_schema() -> Value {
     json!({
         "type": "array",
@@ -141,5 +281,16 @@ mod tests {
         assert!(names.contains(&"run_agent"));
         assert!(names.contains(&"continue_session"));
         assert!(names.contains(&"get_capabilities"));
+        assert!(names.contains(&"list_skills"));
+    }
+
+    #[test]
+    fn resources_and_prompts_are_exposed() {
+        let resources = resource_definitions();
+        assert!(resources.iter().any(|r| r.uri == "kiliax://capabilities"));
+
+        let prompts = prompt_definitions();
+        assert!(prompts.iter().any(|p| p.name == "run_agent"));
+        assert!(prompts.iter().any(|p| p.name == "continue_session"));
     }
 }
