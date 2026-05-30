@@ -1,4 +1,5 @@
 import { isOverlaySidebarViewport } from "./app-utils";
+import { pathString } from "./workspace-utils";
 
 const PINNED_SESSIONS_KEY = "kiliax:pinned_session_ids";
 const PINNED_WORKSPACES_KEY = "kiliax:pinned_workspace_roots";
@@ -32,7 +33,9 @@ export function loadPinnedWorkspaceRoots(): string[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((v) => typeof v === "string");
+    return Array.from(
+      new Set(parsed.map((v) => pathString(v).trim()).filter(Boolean)),
+    );
   } catch {
     return [];
   }
@@ -40,7 +43,10 @@ export function loadPinnedWorkspaceRoots(): string[] {
 
 export function savePinnedWorkspaceRoots(roots: string[]) {
   try {
-    localStorage.setItem(PINNED_WORKSPACES_KEY, JSON.stringify(roots));
+    const normalized = Array.from(
+      new Set(roots.map((v) => pathString(v).trim()).filter(Boolean)),
+    );
+    localStorage.setItem(PINNED_WORKSPACES_KEY, JSON.stringify(normalized));
   } catch {
     // ignore
   }

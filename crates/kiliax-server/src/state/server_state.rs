@@ -349,7 +349,7 @@ impl ServerState {
         };
         let config = self.config_snapshot().as_ref().clone();
         Ok(api::ConfigResponse {
-            path: self.config_path.display().to_string(),
+            path: client_display_path(&self.config_path),
             yaml,
             config,
         })
@@ -384,7 +384,7 @@ impl ServerState {
         }
 
         Ok(api::ConfigResponse {
-            path: self.config_path.display().to_string(),
+            path: client_display_path(&self.config_path),
             yaml,
             config: next,
         })
@@ -783,7 +783,7 @@ impl ServerState {
                 .into_iter()
                 .map(|e| api::SkillLoadError {
                     id: e.id,
-                    path: e.path.display().to_string(),
+                    path: client_display_path(&e.path),
                     error: e.error,
                 })
                 .collect(),
@@ -807,7 +807,7 @@ impl ServerState {
                 .into_iter()
                 .map(|e| api::SkillLoadError {
                     id: e.id,
-                    path: e.path.display().to_string(),
+                    path: client_display_path(&e.path),
                     error: e.error,
                 })
                 .collect(),
@@ -839,7 +839,7 @@ impl ServerState {
                 .into_iter()
                 .map(|e| api::CustomToolLoadError {
                     id: e.id,
-                    path: e.path.display().to_string(),
+                    path: client_display_path(&e.path),
                     error: e.error,
                 })
                 .collect(),
@@ -1018,7 +1018,7 @@ impl ServerState {
             .create(
                 settings.agent.clone(),
                 Some(settings.model_id.clone()),
-                Some(self.config_path.display().to_string()),
+                Some(client_display_path(&self.config_path)),
                 Some(client_display_path(&settings.workspace_root)),
                 settings
                     .extra_workspace_roots
@@ -1135,7 +1135,7 @@ impl ServerState {
             .create(
                 profile.name.to_string(),
                 Some(settings.model_id.clone()),
-                Some(self.config_path.display().to_string()),
+                Some(client_display_path(&self.config_path)),
                 Some(client_display_path(&settings.workspace_root)),
                 settings
                     .extra_workspace_roots
@@ -1589,7 +1589,7 @@ impl ServerState {
                 .into_iter()
                 .map(|e| api::AgentLoadError {
                     id: e.id,
-                    path: e.path.display().to_string(),
+                    path: client_display_path(&e.path),
                     error: e.error,
                 })
                 .collect(),

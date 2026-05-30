@@ -7,6 +7,7 @@ use axum::Json;
 use utoipa_axum::router::UtoipaMethodRouter;
 
 use crate::error::ApiError;
+use crate::infra::client_display_path;
 use crate::state::ServerState;
 
 pub(in crate::http) fn info_routes() -> UtoipaMethodRouter<Arc<ServerState>> {
@@ -31,8 +32,8 @@ async fn get_admin_info(
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(crate::api::AdminInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        workspace_root: state.workspace_root.display().to_string(),
-        config_path: state.config_path.display().to_string(),
+        workspace_root: client_display_path(&state.workspace_root),
+        config_path: client_display_path(&state.config_path),
     }))
 }
 

@@ -350,7 +350,9 @@ export default function App() {
     // Web default sessions use tmp workspaces; keep them out of the Workspaces pane.
     // They remain accessible via the Sessions pane.
     const nonTmp = groups.filter((g) => !g.isTmp);
-    const pinnedRank = new Map(pinnedWorkspaceRoots.map((r, idx) => [r, idx]));
+    const pinnedRank = new Map(
+      pinnedWorkspaceRoots.map((r, idx) => [pathString(r).trim(), idx]),
+    );
     nonTmp.sort((a, b) => {
       const aPinned = pinnedRank.has(a.root);
       const bPinned = pinnedRank.has(b.root);
@@ -1062,9 +1064,11 @@ export default function App() {
   }
 
   async function onNewSessionInWorkspace(workspaceRoot: string) {
+    const root = pathString(workspaceRoot).trim();
+    if (!root) return;
     try {
       const s = await api.createSession({
-        settings: { workspace_root: workspaceRoot },
+        settings: { workspace_root: root },
       });
       await refreshSessions();
       selectSession(s.id);
@@ -1074,15 +1078,17 @@ export default function App() {
   }
 
   async function deleteWorkspace(workspaceRoot: string) {
+    const root = pathString(workspaceRoot).trim();
+    if (!root) return;
     const ids = sessions
-      .filter((s) => (s.settings.workspace_root ?? "") === workspaceRoot)
+      .filter((s) => pathString(s.settings.workspace_root).trim() === root)
       .map((s) => s.id);
-    const deleteWorkspaceRoot = isTmpWorkspaceRoot(workspaceRoot);
+    const deleteWorkspaceRoot = isTmpWorkspaceRoot(root);
     try {
       for (const id of ids) {
         await api.deleteSession(id, { delete_workspace_root: deleteWorkspaceRoot });
       }
-      setPinnedWorkspaceRoots((prev) => prev.filter((r) => r !== workspaceRoot));
+      setPinnedWorkspaceRoots((prev) => prev.filter((r) => pathString(r).trim() !== root));
       setPinnedSessionIds((prev) => prev.filter((id) => !ids.includes(id)));
       if (selectedIdRef.current && ids.includes(selectedIdRef.current)) {
         navigate("/", { replace: true });
@@ -1400,8 +1406,9 @@ export default function App() {
 
   async function deleteSession(sessionId: string) {
     try {
-      const root =
-        sessions.find((s) => s.id === sessionId)?.settings.workspace_root ?? "";
+      const root = pathString(
+        sessions.find((s) => s.id === sessionId)?.settings.workspace_root,
+      );
       await api.deleteSession(sessionId, {
         delete_workspace_root: isTmpWorkspaceRoot(root),
       });
@@ -1472,11 +1479,13 @@ export default function App() {
   }
 
   function togglePinnedWorkspace(workspaceRoot: string) {
+    const root = pathString(workspaceRoot).trim();
+    if (!root) return;
     setPinnedWorkspaceRoots((prev) => {
-      const exists = prev.includes(workspaceRoot);
+      const exists = prev.some((r) => pathString(r).trim() === root);
       const next = exists
-        ? prev.filter((r) => r !== workspaceRoot)
-        : [workspaceRoot, ...prev];
+        ? prev.filter((r) => pathString(r).trim() !== root)
+        : [root, ...prev.map((r) => pathString(r).trim()).filter(Boolean)];
       return next;
     });
   }
@@ -2009,7 +2018,9 @@ export default function App() {
               <div className="space-y-1">
                 {visibleWorkspaceGroups.map((g) => {
                   const expanded = Boolean(expandedWorkspaces[g.root]);
-                  const pinnedWorkspace = pinnedWorkspaceRoots.includes(g.root);
+                  const pinnedWorkspace = pinnedWorkspaceRoots.some(
+                    (root) => pathString(root).trim() === g.root,
+                  );
                   return (
                     <div key={g.root} className="rounded-md">
                       <div className="group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-white/70">
@@ -2294,14 +2305,14 @@ export default function App() {
                     variant="ghost"
                     size="sm"
                     className="min-w-0 max-w-full justify-start gap-2 px-2 lg:max-w-[420px]"
-                    title={session.settings.workspace_root ?? ""}
+                    title={pathString(session.settings.workspace_root)}
                     onClick={() => setWorkspaceFoldersOpen(true)}
                   >
                     <span className="hidden shrink-0 text-xs font-normal text-zinc-600 sm:inline">
                       workspace
                     </span>
                     <span className="min-w-0 truncate font-mono text-xs font-normal text-zinc-800">
-                      {workspaceDisplayName(session.settings.workspace_root ?? "")}
+                      {workspaceDisplayName(session.settings.workspace_root)}
                     </span>
                   </Button>
 
@@ -2836,7 +2847,11 @@ export default function App() {
           description={workspaceActionSheetLabel}
           pinLabel={
             workspaceActionSheet?.workspaceRoot &&
-            pinnedWorkspaceRoots.includes(workspaceActionSheet.workspaceRoot)
+            pinnedWorkspaceRoots.some(
+              (root) =>
+                pathString(root).trim() ===
+                pathString(workspaceActionSheet.workspaceRoot).trim(),
+            )
               ? "Unpin"
               : "Pin"
           }
@@ -2907,7 +2922,11 @@ export default function App() {
         x={workspaceMenu?.x ?? 0}
         y={workspaceMenu?.y ?? 0}
         pinLabel={
-          workspaceMenu && pinnedWorkspaceRoots.includes(workspaceMenu.workspaceRoot)
+          workspaceMenu &&
+          pinnedWorkspaceRoots.some(
+            (root) =>
+              pathString(root).trim() === pathString(workspaceMenu.workspaceRoot).trim(),
+          )
             ? "Unpin"
             : "Pin"
         }
@@ -2929,7 +2948,7 @@ export default function App() {
         open={Boolean(deleteConfirm)}
         onClose={() => setDeleteConfirm(null)}
         description={deleteSessionSummary?.title ?? deleteSessionSummary?.id ?? ""}
-        showTmpWorkspaceWarning={isTmpWorkspaceRoot(deleteSessionSummary?.settings.workspace_root ?? "")}
+        showTmpWorkspaceWarning={isTmpWorkspaceRoot(deleteSessionSummary?.settings.workspace_root)}
         onDelete={async () => {
           const sessionId = deleteConfirm?.sessionId;
           if (!sessionId) return;
@@ -2940,8 +2959,8 @@ export default function App() {
       <DeleteWorkspaceDialog
         open={Boolean(workspaceDeleteConfirm)}
         onClose={() => setWorkspaceDeleteConfirm(null)}
-        workspaceRoot={workspaceDeleteConfirm?.workspaceRoot ?? ""}
-        isTmpWorkspaceRoot={isTmpWorkspaceRoot(workspaceDeleteConfirm?.workspaceRoot ?? "")}
+        workspaceRoot={pathString(workspaceDeleteConfirm?.workspaceRoot)}
+        isTmpWorkspaceRoot={isTmpWorkspaceRoot(workspaceDeleteConfirm?.workspaceRoot)}
         onDelete={async () => {
           const root = workspaceDeleteConfirm?.workspaceRoot;
           if (!root) return;
@@ -3002,7 +3021,7 @@ export default function App() {
           <DialogHeader>
             <DialogTitle>Workspace folders</DialogTitle>
             <DialogDescription>
-              {workspaceDisplayName(session?.settings.workspace_root ?? "")}
+              {workspaceDisplayName(session?.settings.workspace_root)}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
