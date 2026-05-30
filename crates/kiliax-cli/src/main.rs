@@ -18,7 +18,7 @@ fn print_help() {
     println!("  {bin} server run [OPTIONS]");
     println!("  {bin} server stop");
     println!("  {bin} server restart");
-    println!("  {bin} mcp serve [--base-url URL] [--token TOKEN]");
+    println!("  {bin} mcp serve [--transport stdio|http] [--base-url URL] [--token TOKEN]");
     println!("  {bin} goal get --session <SESSION_ID>");
     println!("  {bin} goal set --session <SESSION_ID> <OBJECTIVE...>");
     println!("  {bin} goal clear --session <SESSION_ID>");
@@ -172,11 +172,24 @@ async fn ensure_server(workspace_root: &std::path::Path) -> Result<daemon::Daemo
 }
 
 struct McpServeArgs {
+    transport: McpTransport,
     base_url: Option<String>,
     token: Option<String>,
+    host: String,
+    port: u16,
+    path: String,
+    mcp_token: Option<String>,
+    allowed_origins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpTransport {
+    Stdio,
+    Http,
 }
 
 fn parse_mcp_serve_args(args: &[String]) -> Result<McpServeArgs> {
+    let mut transport = McpTransport::Stdio;
     let mut base_url = std::env::var("KILIAX_BASE_URL")
         .ok()
         .map(|v| v.trim().to_string())
@@ -185,10 +198,39 @@ fn parse_mcp_serve_args(args: &[String]) -> Result<McpServeArgs> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
+    let mut host = std::env::var("KILIAX_MCP_HOST")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let mut port = std::env::var("KILIAX_MCP_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(8124);
+    let mut path = std::env::var("KILIAX_MCP_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/mcp".to_string());
+    let mut mcp_token = std::env::var("KILIAX_MCP_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let mut allowed_origins = Vec::new();
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--transport" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--transport expects stdio or http");
+                };
+                transport = match value.as_str() {
+                    "stdio" => McpTransport::Stdio,
+                    "http" => McpTransport::Http,
+                    other => anyhow::bail!("unsupported MCP transport: {other}"),
+                };
+            }
             "--base-url" => {
                 let Some(value) = iter.next() else {
                     anyhow::bail!("--base-url expects a URL");
@@ -205,11 +247,66 @@ fn parse_mcp_serve_args(args: &[String]) -> Result<McpServeArgs> {
                 };
                 token = Some(value.trim().to_string());
             }
+            "--host" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--host expects a bind host");
+                };
+                host = value.trim().to_string();
+                if host.is_empty() {
+                    anyhow::bail!("--host must not be empty");
+                }
+            }
+            "--port" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--port expects a port");
+                };
+                port = value
+                    .parse::<u16>()
+                    .with_context(|| format!("invalid --port value: {value}"))?;
+            }
+            "--path" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--path expects an endpoint path");
+                };
+                path = value.trim().to_string();
+            }
+            "--mcp-token" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--mcp-token expects a token");
+                };
+                mcp_token = Some(value.trim().to_string());
+            }
+            "--allow-origin" => {
+                let Some(value) = iter.next() else {
+                    anyhow::bail!("--allow-origin expects an origin");
+                };
+                let value = value.trim();
+                if !value.is_empty() {
+                    allowed_origins.push(value.to_string());
+                }
+            }
             other => anyhow::bail!("unknown mcp serve option: {other}"),
         }
     }
 
-    Ok(McpServeArgs { base_url, token })
+    if transport == McpTransport::Http && !is_loopback_bind_host(&host) && mcp_token.is_none() {
+        anyhow::bail!("HTTP MCP on non-loopback host requires --mcp-token or KILIAX_MCP_TOKEN");
+    }
+
+    Ok(McpServeArgs {
+        transport,
+        base_url,
+        token,
+        host,
+        port,
+        path,
+        mcp_token,
+        allowed_origins,
+    })
+}
+
+fn is_loopback_bind_host(host: &str) -> bool {
+    matches!(host.trim(), "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
 #[tokio::main]
@@ -276,7 +373,23 @@ async fn main() -> Result<()> {
                         Some(state.token),
                     )
                 };
-                kiliax_mcp::serve_stdio(kiliax_mcp::McpServerOptions { base_url, token }).await?;
+                let upstream = kiliax_mcp::McpServerOptions { base_url, token };
+                match serve_args.transport {
+                    McpTransport::Stdio => {
+                        kiliax_mcp::serve_stdio(upstream).await?;
+                    }
+                    McpTransport::Http => {
+                        kiliax_mcp::serve_http(kiliax_mcp::HttpServerOptions {
+                            upstream,
+                            host: serve_args.host,
+                            port: serve_args.port,
+                            path: serve_args.path,
+                            auth_token: serve_args.mcp_token,
+                            allowed_origins: serve_args.allowed_origins,
+                        })
+                        .await?;
+                    }
+                }
             }
             _ => print_help(),
         }

@@ -1,3 +1,4 @@
+mod http_transport;
 mod protocol;
 
 use std::time::Duration;
@@ -8,8 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+pub use http_transport::{serve_http, HttpServerOptions};
 pub use protocol::tool_definitions;
 
+const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -31,12 +34,17 @@ pub async fn serve_stdio(options: McpServerOptions) -> Result<()> {
             continue;
         }
 
-        let response = match serde_json::from_str::<JsonRpcRequest>(line) {
-            Ok(req) => handle_request(&client, req).await,
-            Err(err) => Some(error_response(Value::Null, -32700, err.to_string())),
+        let outcome = match serde_json::from_str::<Value>(line) {
+            Ok(value) => handle_message(&client, value).await,
+            Err(err) => {
+                IncomingOutcome::Response(error_response(Value::Null, -32700, err.to_string()))
+            }
         };
 
-        if let Some(response) = response {
+        if let Some(response) = match outcome {
+            IncomingOutcome::Accepted => None,
+            IncomingOutcome::Response(response) => Some(response),
+        } {
             let encoded = serde_json::to_vec(&response)?;
             stdout.write_all(&encoded).await?;
             stdout.write_all(b"\n").await?;
@@ -47,17 +55,21 @@ pub async fn serve_stdio(options: McpServerOptions) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-struct JsonRpcRequest {
-    #[serde(default)]
+#[derive(Debug)]
+pub(crate) enum IncomingOutcome {
+    Accepted,
+    Response(JsonRpcResponse),
+}
+
+#[derive(Debug)]
+pub(crate) struct JsonRpcRequest {
     id: Option<Value>,
     method: String,
-    #[serde(default)]
     params: Value,
 }
 
 #[derive(Debug, Serialize)]
-struct JsonRpcResponse {
+pub(crate) struct JsonRpcResponse {
     jsonrpc: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<Value>,
@@ -68,9 +80,69 @@ struct JsonRpcResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct JsonRpcError {
+pub(crate) struct JsonRpcError {
     code: i64,
     message: String,
+}
+
+pub(crate) async fn handle_message(client: &KiliaxHttpClient, value: Value) -> IncomingOutcome {
+    match parse_incoming(value) {
+        ParsedIncoming::Request(req) => match handle_request(client, req).await {
+            Some(response) => IncomingOutcome::Response(response),
+            None => IncomingOutcome::Accepted,
+        },
+        ParsedIncoming::Accepted => IncomingOutcome::Accepted,
+        ParsedIncoming::Error(response) => IncomingOutcome::Response(response),
+    }
+}
+
+enum ParsedIncoming {
+    Request(JsonRpcRequest),
+    Accepted,
+    Error(JsonRpcResponse),
+}
+
+fn parse_incoming(value: Value) -> ParsedIncoming {
+    let Some(obj) = value.as_object() else {
+        return ParsedIncoming::Error(error_response(
+            Value::Null,
+            -32600,
+            "JSON-RPC message must be an object".to_string(),
+        ));
+    };
+    if obj.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return ParsedIncoming::Error(error_response(
+            obj.get("id").cloned().unwrap_or(Value::Null),
+            -32600,
+            "jsonrpc must be \"2.0\"".to_string(),
+        ));
+    }
+    let Some(method) = obj.get("method").and_then(Value::as_str) else {
+        if obj.contains_key("result") || obj.contains_key("error") {
+            return ParsedIncoming::Accepted;
+        }
+        return ParsedIncoming::Error(error_response(
+            obj.get("id").cloned().unwrap_or(Value::Null),
+            -32600,
+            "missing method".to_string(),
+        ));
+    };
+    let id = obj.get("id").cloned();
+    if id == Some(Value::Null) {
+        return ParsedIncoming::Error(error_response(
+            Value::Null,
+            -32600,
+            "MCP request id must not be null".to_string(),
+        ));
+    }
+    ParsedIncoming::Request(JsonRpcRequest {
+        id,
+        method: method.to_string(),
+        params: obj
+            .get("params")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default())),
+    })
 }
 
 async fn handle_request(client: &KiliaxHttpClient, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
@@ -82,7 +154,7 @@ async fn handle_request(client: &KiliaxHttpClient, req: JsonRpcRequest) -> Optio
 
     let result = match method {
         "initialize" => Ok(json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {
                 "tools": {},
                 "resources": {},
@@ -722,15 +794,15 @@ struct RunAttachment {
     data: String,
 }
 
-#[derive(Debug)]
-struct KiliaxHttpClient {
+#[derive(Debug, Clone)]
+pub(crate) struct KiliaxHttpClient {
     base_url: String,
     token: Option<String>,
     client: reqwest::Client,
 }
 
 impl KiliaxHttpClient {
-    fn new(options: McpServerOptions) -> Result<Self> {
+    pub(crate) fn new(options: McpServerOptions) -> Result<Self> {
         let base_url = options.base_url.trim_end_matches('/').to_string();
         if base_url.is_empty() {
             anyhow::bail!("base_url must not be empty");
@@ -811,7 +883,7 @@ impl KiliaxHttpClient {
 }
 
 #[derive(Debug)]
-struct McpError {
+pub(crate) struct McpError {
     code: i64,
     message: String,
 }
@@ -843,7 +915,7 @@ impl McpError {
     }
 }
 
-fn error_response(id: Value, code: i64, message: String) -> JsonRpcResponse {
+pub(crate) fn error_response(id: Value, code: i64, message: String) -> JsonRpcResponse {
     JsonRpcResponse {
         jsonrpc: "2.0",
         id: Some(id),

@@ -1223,6 +1223,7 @@ name = "kiliax-mcp"
 version = "0.7.1"
 dependencies = [
  "anyhow",
+ "axum",
  "reqwest",
  "serde",
  "serde_json",
