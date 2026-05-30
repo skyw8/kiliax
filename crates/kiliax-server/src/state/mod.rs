@@ -639,38 +639,6 @@ fn image_media_type_from_path(path: &str) -> Option<&'static str> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn user_content_attachments_preserves_image_preview_data() {
-        let attachments = user_content_attachments(&UserMessageContent::Parts(vec![
-            UserContentPart::Text {
-                text: "describe".to_string(),
-            },
-            UserContentPart::Image {
-                path: "data:image/png;base64,AA==".to_string(),
-                filename: Some("image.png".to_string()),
-                detail: None,
-            },
-            UserContentPart::File {
-                filename: "paper.pdf".to_string(),
-                media_type: "application/pdf".to_string(),
-                data: "JVBERi0=".to_string(),
-            },
-        ]));
-
-        assert_eq!(attachments.len(), 2);
-        assert_eq!(attachments[0].filename, "image.png");
-        assert_eq!(attachments[0].media_type, "image/png");
-        assert_eq!(attachments[0].data.as_deref(), Some("AA=="));
-        assert_eq!(attachments[1].filename, "paper.pdf");
-        assert_eq!(attachments[1].media_type, "application/pdf");
-        assert!(attachments[1].data.is_none());
-    }
-}
-
 fn map_core_message_to_domain(seq: u64, ts_ms: u64, msg: CoreMessage) -> Option<domain::Message> {
     let id = seq.to_string();
     let created_at = ts_ms_to_rfc3339(ts_ms);
@@ -983,5 +951,37 @@ fn runtime_error_hint(code: &str, agent: &str) -> Option<String> {
             "Tool execution failed: check workspace/permissions/tool args, and use `trace_id` to locate server logs.".to_string(),
         ),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_content_attachments_preserves_image_preview_data() {
+        let attachments = user_content_attachments(&UserMessageContent::Parts(vec![
+            UserContentPart::Text {
+                text: "describe".to_string(),
+            },
+            UserContentPart::Image {
+                path: "data:image/png;base64,AA==".to_string(),
+                filename: Some("image.png".to_string()),
+                detail: None,
+            },
+            UserContentPart::File {
+                filename: "paper.pdf".to_string(),
+                media_type: "application/pdf".to_string(),
+                data: "JVBERi0=".to_string(),
+            },
+        ]));
+
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments[0].filename, "image.png");
+        assert_eq!(attachments[0].media_type, "image/png");
+        assert_eq!(attachments[0].data.as_deref(), Some("AA=="));
+        assert_eq!(attachments[1].filename, "paper.pdf");
+        assert_eq!(attachments[1].media_type, "application/pdf");
+        assert!(attachments[1].data.is_none());
     }
 }

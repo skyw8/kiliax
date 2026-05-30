@@ -418,16 +418,28 @@ impl OpenAICompatibleProvider {
     }
 }
 
-async fn build_openai_chat_body(
-    model: &str,
-    internal_messages: &[crate::types::Message],
+struct OpenAIChatBodyRequest<'a> {
+    model: &'a str,
+    messages: &'a [crate::types::Message],
     tools: Vec<ToolDefinition>,
-    tool_choice: &ToolChoice,
+    tool_choice: &'a ToolChoice,
     parallel_tool_calls: Option<bool>,
     temperature: Option<f32>,
     reasoning_effort: Option<ReasoningEffort>,
     stream: bool,
-) -> Result<Value, LlmError> {
+}
+
+async fn build_openai_chat_body(request: OpenAIChatBodyRequest<'_>) -> Result<Value, LlmError> {
+    let OpenAIChatBodyRequest {
+        model,
+        messages: internal_messages,
+        tools,
+        tool_choice,
+        parallel_tool_calls,
+        temperature,
+        reasoning_effort,
+        stream,
+    } = request;
     let mut messages = Vec::with_capacity(internal_messages.len());
     for msg in internal_messages {
         messages.push(to_openai_message_value(msg).await?);
@@ -533,16 +545,16 @@ impl LlmProvider for OpenAICompatibleProvider {
         }
 
         let res: Result<ChatResponse, LlmError> = async {
-            let mut body = build_openai_chat_body(
-                &self.route.model,
-                &internal_messages,
+            let mut body = build_openai_chat_body(OpenAIChatBodyRequest {
+                model: &self.route.model,
+                messages: &internal_messages,
                 tools,
-                &tool_choice,
+                tool_choice: &tool_choice,
                 parallel_tool_calls,
                 temperature,
                 reasoning_effort,
-                false,
-            )
+                stream: false,
+            })
             .await?;
 
             if should_inject_reasoning_content(&self.route) {
@@ -626,16 +638,16 @@ impl LlmProvider for OpenAICompatibleProvider {
                         );
                     }
                 }
-                telemetry::metrics::record_llm_call(
-                    &self.route.provider,
-                    &self.route.model,
-                    false,
-                    "ok",
+                telemetry::metrics::record_llm_call(telemetry::LlmCallMetrics {
+                    provider: &self.route.provider,
+                    model: &self.route.model,
+                    stream: false,
+                    outcome: "ok",
                     latency,
-                    usage.map(|u| u.prompt_tokens as u64),
-                    usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
-                    usage.map(|u| u.completion_tokens as u64),
-                );
+                    prompt_tokens: usage.map(|u| u.prompt_tokens as u64),
+                    cached_tokens: usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
+                    completion_tokens: usage.map(|u| u.completion_tokens as u64),
+                });
 
                 if telemetry::capture_enabled() {
                     if let Ok(json) = serde_json::to_string(&ok.message) {
@@ -662,16 +674,16 @@ impl LlmProvider for OpenAICompatibleProvider {
                 }
             }
             Err(err) => {
-                telemetry::metrics::record_llm_call(
-                    &self.route.provider,
-                    &self.route.model,
-                    false,
-                    "error",
+                telemetry::metrics::record_llm_call(telemetry::LlmCallMetrics {
+                    provider: &self.route.provider,
+                    model: &self.route.model,
+                    stream: false,
+                    outcome: "error",
                     latency,
-                    None,
-                    None,
-                    None,
-                );
+                    prompt_tokens: None,
+                    cached_tokens: None,
+                    completion_tokens: None,
+                });
                 tracing::warn!(
                     target: "kiliax_core::telemetry",
                     parent: &span,
@@ -745,16 +757,16 @@ impl LlmProvider for OpenAICompatibleProvider {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<ChatStreamChunk, LlmError>>();
 
         let setup: Result<(), LlmError> = async {
-            let mut body = build_openai_chat_body(
-                &self.route.model,
-                &internal_messages,
+            let mut body = build_openai_chat_body(OpenAIChatBodyRequest {
+                model: &self.route.model,
+                messages: &internal_messages,
                 tools,
-                &tool_choice,
+                tool_choice: &tool_choice,
                 parallel_tool_calls,
                 temperature,
                 reasoning_effort,
-                true,
-            )
+                stream: true,
+            })
             .await?;
 
             if should_inject_reasoning_content(&self.route) {
@@ -920,18 +932,18 @@ impl LlmProvider for OpenAICompatibleProvider {
                     event_source.close();
 
                     let latency = started.elapsed();
-                    telemetry::metrics::record_llm_call(
-                        &provider,
-                        &model,
-                        true,
+                    telemetry::metrics::record_llm_call(telemetry::LlmCallMetrics {
+                        provider: &provider,
+                        model: &model,
+                        stream: true,
                         outcome,
                         latency,
-                        last_usage.as_ref().map(|u| u.prompt_tokens as u64),
-                        last_usage
+                        prompt_tokens: last_usage.as_ref().map(|u| u.prompt_tokens as u64),
+                        cached_tokens: last_usage
                             .as_ref()
                             .and_then(|u| u.cached_tokens.map(|v| v as u64)),
-                        last_usage.as_ref().map(|u| u.completion_tokens as u64),
-                    );
+                        completion_tokens: last_usage.as_ref().map(|u| u.completion_tokens as u64),
+                    });
 
                     let current_span = tracing::Span::current();
                     if let Some(ttft) = ttft {
@@ -1018,16 +1030,16 @@ impl LlmProvider for OpenAICompatibleProvider {
         .await;
 
         if let Err(err) = setup {
-            telemetry::metrics::record_llm_call(
-                &provider,
-                &model,
-                true,
-                "error",
-                started.elapsed(),
-                None,
-                None,
-                None,
-            );
+            telemetry::metrics::record_llm_call(telemetry::LlmCallMetrics {
+                provider: &provider,
+                model: &model,
+                stream: true,
+                outcome: "error",
+                latency: started.elapsed(),
+                prompt_tokens: None,
+                cached_tokens: None,
+                completion_tokens: None,
+            });
             tracing::warn!(
                 target: "kiliax_core::telemetry",
                 parent: &span,
@@ -1148,16 +1160,16 @@ mod tests {
             provider_metadata: None,
         }]);
 
-        let err = build_openai_chat_body(
-            "gpt-test",
-            &req.messages,
-            req.tools,
-            &req.tool_choice,
-            req.parallel_tool_calls,
-            req.temperature,
-            req.reasoning_effort,
-            false,
-        )
+        let err = build_openai_chat_body(OpenAIChatBodyRequest {
+            model: "gpt-test",
+            messages: &req.messages,
+            tools: req.tools,
+            tool_choice: &req.tool_choice,
+            parallel_tool_calls: req.parallel_tool_calls,
+            temperature: req.temperature,
+            reasoning_effort: req.reasoning_effort,
+            stream: false,
+        })
         .await
         .unwrap_err();
 
@@ -1199,16 +1211,16 @@ mod tests {
             hidden: false,
         }]);
 
-        let body = build_openai_chat_body(
-            "gpt-test",
-            &req.messages,
-            req.tools,
-            &req.tool_choice,
-            req.parallel_tool_calls,
-            req.temperature,
-            req.reasoning_effort,
-            false,
-        )
+        let body = build_openai_chat_body(OpenAIChatBodyRequest {
+            model: "gpt-test",
+            messages: &req.messages,
+            tools: req.tools,
+            tool_choice: &req.tool_choice,
+            parallel_tool_calls: req.parallel_tool_calls,
+            temperature: req.temperature,
+            reasoning_effort: req.reasoning_effort,
+            stream: false,
+        })
         .await
         .unwrap();
 
@@ -1233,16 +1245,16 @@ mod tests {
             }])
         };
 
-        let body = build_openai_chat_body(
-            "gpt-test",
-            &req.messages,
-            req.tools,
-            &req.tool_choice,
-            req.parallel_tool_calls,
-            req.temperature,
-            req.reasoning_effort,
-            false,
-        )
+        let body = build_openai_chat_body(OpenAIChatBodyRequest {
+            model: "gpt-test",
+            messages: &req.messages,
+            tools: req.tools,
+            tool_choice: &req.tool_choice,
+            parallel_tool_calls: req.parallel_tool_calls,
+            temperature: req.temperature,
+            reasoning_effort: req.reasoning_effort,
+            stream: false,
+        })
         .await
         .unwrap();
         assert_eq!(body["reasoning_effort"], json!("high"));

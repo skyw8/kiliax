@@ -93,16 +93,16 @@ impl LlmProvider for OpenAiResponsesProvider {
         {
             Ok(body) => body,
             Err(err) => {
-                crate::telemetry::metrics::record_llm_call(
-                    &self.route.provider,
-                    &self.route.model,
-                    false,
-                    "error",
-                    started.elapsed(),
-                    None,
-                    None,
-                    None,
-                );
+                crate::telemetry::metrics::record_llm_call(crate::telemetry::LlmCallMetrics {
+                    provider: &self.route.provider,
+                    model: &self.route.model,
+                    stream: false,
+                    outcome: "error",
+                    latency: started.elapsed(),
+                    prompt_tokens: None,
+                    cached_tokens: None,
+                    completion_tokens: None,
+                });
                 crate::telemetry::record_generation_error(&span, false, &err);
                 return Err(err);
             }
@@ -146,16 +146,16 @@ impl LlmProvider for OpenAiResponsesProvider {
         } else if let Err(err) = &response {
             crate::telemetry::record_generation_error(&span, false, err);
         }
-        crate::telemetry::metrics::record_llm_call(
-            &self.route.provider,
-            &self.route.model,
-            false,
+        crate::telemetry::metrics::record_llm_call(crate::telemetry::LlmCallMetrics {
+            provider: &self.route.provider,
+            model: &self.route.model,
+            stream: false,
             outcome,
             latency,
-            usage.map(|u| u.prompt_tokens as u64),
-            usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
-            usage.map(|u| u.completion_tokens as u64),
-        );
+            prompt_tokens: usage.map(|u| u.prompt_tokens as u64),
+            cached_tokens: usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
+            completion_tokens: usage.map(|u| u.completion_tokens as u64),
+        });
 
         response
     }
@@ -185,16 +185,16 @@ impl LlmProvider for OpenAiResponsesProvider {
         {
             Ok(body) => body,
             Err(err) => {
-                crate::telemetry::metrics::record_llm_call(
-                    &self.route.provider,
-                    &self.route.model,
-                    true,
-                    "error",
-                    started.elapsed(),
-                    None,
-                    None,
-                    None,
-                );
+                crate::telemetry::metrics::record_llm_call(crate::telemetry::LlmCallMetrics {
+                    provider: &self.route.provider,
+                    model: &self.route.model,
+                    stream: true,
+                    outcome: "error",
+                    latency: started.elapsed(),
+                    prompt_tokens: None,
+                    cached_tokens: None,
+                    completion_tokens: None,
+                });
                 crate::telemetry::record_generation_error(&span, true, &err);
                 return Err(err);
             }
@@ -211,16 +211,16 @@ impl LlmProvider for OpenAiResponsesProvider {
             Ok(event_source) => event_source,
             Err(err) => {
                 let err = LlmError::OpenAI(OpenAIError::StreamError(err.to_string()));
-                crate::telemetry::metrics::record_llm_call(
-                    &self.route.provider,
-                    &self.route.model,
-                    true,
-                    "error",
-                    started.elapsed(),
-                    None,
-                    None,
-                    None,
-                );
+                crate::telemetry::metrics::record_llm_call(crate::telemetry::LlmCallMetrics {
+                    provider: &self.route.provider,
+                    model: &self.route.model,
+                    stream: true,
+                    outcome: "error",
+                    latency: started.elapsed(),
+                    prompt_tokens: None,
+                    cached_tokens: None,
+                    completion_tokens: None,
+                });
                 crate::telemetry::record_generation_error(&span, true, &err);
                 return Err(err);
             }
@@ -297,26 +297,28 @@ impl LlmProvider for OpenAiResponsesProvider {
                 let current_span = tracing::Span::current();
                 crate::telemetry::record_stream_generation_finish(
                     &current_span,
-                    &provider,
-                    &state.model,
+                    crate::telemetry::StreamGenerationFinish {
+                        provider: &provider,
+                        model: &state.model,
+                        outcome,
+                        latency,
+                        ttft,
+                        completion_start_time,
+                        usage: state.usage,
+                        output_capture: output_capture.take(),
+                        error: stream_error.as_deref(),
+                    },
+                );
+                crate::telemetry::metrics::record_llm_call(crate::telemetry::LlmCallMetrics {
+                    provider: &provider,
+                    model: &state.model,
+                    stream: true,
                     outcome,
                     latency,
-                    ttft,
-                    completion_start_time,
-                    state.usage,
-                    output_capture.take(),
-                    stream_error.as_deref(),
-                );
-                crate::telemetry::metrics::record_llm_call(
-                    &provider,
-                    &state.model,
-                    true,
-                    outcome,
-                    latency,
-                    state.usage.map(|u| u.prompt_tokens as u64),
-                    state.usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
-                    state.usage.map(|u| u.completion_tokens as u64),
-                );
+                    prompt_tokens: state.usage.map(|u| u.prompt_tokens as u64),
+                    cached_tokens: state.usage.and_then(|u| u.cached_tokens.map(|v| v as u64)),
+                    completion_tokens: state.usage.map(|u| u.completion_tokens as u64),
+                });
             }
             .instrument(span),
         );

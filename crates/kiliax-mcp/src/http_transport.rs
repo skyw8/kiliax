@@ -60,7 +60,7 @@ async fn post_mcp(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(resp) = validate_request(&state, &headers, true) {
+    if let Some(resp) = request_validation_error(&state, &headers, true) {
         return resp;
     }
 
@@ -81,31 +81,31 @@ async fn post_mcp(
 }
 
 async fn get_mcp(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> Response {
-    if let Err(resp) = validate_request(&state, &headers, false) {
+    if let Some(resp) = request_validation_error(&state, &headers, false) {
         return resp;
     }
     method_not_allowed()
 }
 
 async fn delete_mcp(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> Response {
-    if let Err(resp) = validate_request(&state, &headers, false) {
+    if let Some(resp) = request_validation_error(&state, &headers, false) {
         return resp;
     }
     method_not_allowed()
 }
 
-fn validate_request(
+fn request_validation_error(
     state: &HttpState,
     headers: &HeaderMap,
     validate_accept: bool,
-) -> Result<(), Response> {
+) -> Option<Response> {
     if let Some(token) = state.auth_token.as_deref() {
         let ok = headers
             .get(AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .is_some_and(|value| value == format!("Bearer {token}"));
         if !ok {
-            return Err(json_error(
+            return Some(json_error(
                 StatusCode::UNAUTHORIZED,
                 -32001,
                 "missing or invalid bearer token",
@@ -116,7 +116,7 @@ fn validate_request(
     if let Some(origin) = headers.get(ORIGIN).and_then(|v| v.to_str().ok()) {
         let host = headers.get(HOST).and_then(|v| v.to_str().ok());
         if !origin_allowed(origin, host, &state.allowed_origins) {
-            return Err(json_error(
+            return Some(json_error(
                 StatusCode::FORBIDDEN,
                 -32002,
                 "origin is not allowed",
@@ -129,7 +129,7 @@ fn validate_request(
         if !accept.is_some_and(|value| {
             accepts(value, "application/json") && accepts(value, "text/event-stream")
         }) {
-            return Err(json_error(
+            return Some(json_error(
                 StatusCode::NOT_ACCEPTABLE,
                 -32003,
                 "Accept must include application/json and text/event-stream",
@@ -137,7 +137,7 @@ fn validate_request(
         }
     }
 
-    Ok(())
+    None
 }
 
 fn origin_allowed(origin: &str, host: Option<&str>, allowed_origins: &[String]) -> bool {
@@ -233,5 +233,35 @@ mod tests {
             "text/event-stream"
         ));
         assert!(!accepts("application/json", "text/event-stream"));
+    }
+
+    #[test]
+    fn request_validation_checks_auth_origin_and_accept_headers() {
+        let state = HttpState {
+            client: KiliaxHttpClient::new(McpServerOptions {
+                base_url: "http://127.0.0.1:1".to_string(),
+                token: None,
+            })
+            .unwrap(),
+            auth_token: Some("secret".to_string()),
+            allowed_origins: vec!["https://trusted.example".to_string()],
+        };
+
+        let headers = HeaderMap::new();
+        let err = request_validation_error(&state, &headers, true).unwrap();
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        headers.insert(ORIGIN, HeaderValue::from_static("https://trusted.example"));
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        let err = request_validation_error(&state, &headers, true).unwrap();
+        assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/json, text/event-stream"),
+        );
+        assert!(request_validation_error(&state, &headers, true).is_none());
     }
 }

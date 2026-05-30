@@ -288,8 +288,8 @@ fn block_anchor_candidates(content: &str, find: &str) -> Vec<String> {
         if original_lines[i].trim() != first {
             continue;
         }
-        for j in i + 2..original_lines.len() {
-            if original_lines[j].trim() == last {
+        for (j, line) in original_lines.iter().enumerate().skip(i + 2) {
+            if line.trim() == last {
                 candidates.push((i, j));
                 break;
             }

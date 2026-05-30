@@ -1106,7 +1106,7 @@ mod tests {
         sanitize_tool_call_history(&mut messages);
 
         assert_eq!(messages.len(), 2);
-        assert!(matches!(messages.get(0), Some(Message::User { .. })));
+        assert!(matches!(messages.first(), Some(Message::User { .. })));
         assert!(matches!(
             messages.get(1),
             Some(Message::Assistant {

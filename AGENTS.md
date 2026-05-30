@@ -31,7 +31,7 @@ minimal
 - Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
 - Protocol compatibility re-exports (messages/tool-calls/usage + base64 image/PDF content parts): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
-- LLM compatibility re-exports + core telemetry hook: `crates/kiliax-core/src/llm.rs`
+- LLM compatibility re-exports + structured core telemetry hook forwarding: `crates/kiliax-core/src/llm.rs`
 - Provider-neutral message history sanitization + request-safety helpers: `crates/kiliax-core/src/history.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
 - Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + available subagent descriptions + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
@@ -58,7 +58,7 @@ minimal
 
 ### crates/kiliax-llm (LLM facade + providers)
 
-- Provider-neutral LLM facade, provider API routing, shared LLM error classification/retry policy, and telemetry hook interface: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
+- Provider-neutral LLM facade, provider API routing, shared LLM error classification/retry policy, and structured telemetry hook/call metric payloads: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks + image/PDF user content parts) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
 - OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + thinking-provider `reasoning_content` compatibility + per-model temperature/reasoning_effort + Langfuse completion timing): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
 - OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/openai_responses.rs`
@@ -73,7 +73,7 @@ minimal
 ### crates/kiliax-mcp (MCP export adapter)
 
 - MCP server adapter that exposes kiliax as an agent service for other agents, forwarding tools/resources/prompts/completions to the running HTTP control plane over stdio and returning structured tool results: `crates/kiliax-mcp/src/lib.rs`
-- Streamable HTTP MCP transport (`/mcp` by default) with bearer auth, Origin validation, POST JSON-RPC handling, and GET/DELETE 405 fallback for clients that probe server-initiated SSE/session control: `crates/kiliax-mcp/src/http_transport.rs`
+- Streamable HTTP MCP transport (`/mcp` by default) with bearer auth, Origin/Accept validation, POST JSON-RPC handling, and GET/DELETE 405 fallback for clients that probe server-initiated SSE/session control: `crates/kiliax-mcp/src/http_transport.rs`
 - MCP schema definitions for tools/resources/resource templates/prompts covering capabilities, agent/session listing, session snapshots/messages, run creation/continuation/cancellation, single-skill invocation, and skills enablement: `crates/kiliax-mcp/src/protocol.rs`
 - Bundled `call-kiliax` skill template for agents that should invoke Kiliax through the exported MCP tools: `crates/kiliax-mcp/templates/skills/call-kiliax/SKILL.md`
 

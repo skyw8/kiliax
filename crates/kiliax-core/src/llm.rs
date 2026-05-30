@@ -62,26 +62,16 @@ impl kiliax_llm::telemetry::LlmTelemetry for CoreLlmTelemetry {
         crate::telemetry::spans::set_attributes(span, attributes);
     }
 
-    fn record_llm_call(
-        &self,
-        provider: &str,
-        model: &str,
-        stream: bool,
-        outcome: &str,
-        latency: std::time::Duration,
-        prompt_tokens: Option<u64>,
-        cached_tokens: Option<u64>,
-        completion_tokens: Option<u64>,
-    ) {
+    fn record_llm_call(&self, call: &kiliax_llm::telemetry::LlmCallMetrics<'_>) {
         crate::telemetry::metrics::record_llm_call(
-            provider,
-            model,
-            stream,
-            outcome,
-            latency,
-            prompt_tokens,
-            cached_tokens,
-            completion_tokens,
+            call.provider,
+            call.model,
+            call.stream,
+            call.outcome,
+            call.latency,
+            call.prompt_tokens,
+            call.cached_tokens,
+            call.completion_tokens,
         );
     }
 

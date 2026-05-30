@@ -23,6 +23,18 @@ impl CapturedText {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LlmCallMetrics<'a> {
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub stream: bool,
+    pub outcome: &'a str,
+    pub latency: Duration,
+    pub prompt_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+}
+
 pub trait LlmTelemetry: Send + Sync + 'static {
     fn capture_enabled(&self) -> bool {
         false
@@ -47,18 +59,7 @@ pub trait LlmTelemetry: Send + Sync + 'static {
 
     fn set_span_attributes(&self, _span: &tracing::Span, _attributes: Vec<KeyValue>) {}
 
-    fn record_llm_call(
-        &self,
-        _provider: &str,
-        _model: &str,
-        _stream: bool,
-        _outcome: &str,
-        _latency: Duration,
-        _prompt_tokens: Option<u64>,
-        _cached_tokens: Option<u64>,
-        _completion_tokens: Option<u64>,
-    ) {
-    }
+    fn record_llm_call(&self, _call: &LlmCallMetrics<'_>) {}
 
     fn record_llm_ttft(
         &self,
@@ -124,7 +125,7 @@ pub fn capture_max_bytes() -> usize {
 }
 
 pub fn capture_text(raw: &str) -> CapturedText {
-    with_hook(|hook| hook.capture_text(raw)).unwrap_or_else(|| CapturedText {
+    with_hook(|hook| hook.capture_text(raw)).unwrap_or(CapturedText {
         len: raw.len(),
         truncated: false,
         sha256: None,
@@ -309,16 +310,19 @@ pub(crate) fn record_generation_success(
 
 pub(crate) fn record_stream_generation_finish(
     span: &tracing::Span,
-    provider: &str,
-    model: &str,
-    outcome: &str,
-    latency: Duration,
-    ttft: Option<Duration>,
-    completion_start_time: Option<String>,
-    usage: Option<TokenUsage>,
-    output_capture: Option<StreamOutputCapture>,
-    error: Option<&str>,
+    finish: StreamGenerationFinish<'_>,
 ) {
+    let StreamGenerationFinish {
+        provider,
+        model,
+        outcome,
+        latency,
+        ttft,
+        completion_start_time,
+        usage,
+        output_capture,
+        error,
+    } = finish;
     record_generation_response_model(span, model);
     if let Some(ttft) = ttft {
         metrics::record_llm_ttft(provider, model, true, outcome, ttft);
@@ -353,6 +357,18 @@ pub(crate) fn record_stream_generation_finish(
     } else {
         spans::set_attribute(span, "langfuse.observation.level", "ERROR");
     }
+}
+
+pub(crate) struct StreamGenerationFinish<'a> {
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub outcome: &'a str,
+    pub latency: Duration,
+    pub ttft: Option<Duration>,
+    pub completion_start_time: Option<String>,
+    pub usage: Option<TokenUsage>,
+    pub output_capture: Option<StreamOutputCapture>,
+    pub error: Option<&'a str>,
 }
 
 fn record_generation_output_tps(
@@ -541,28 +557,8 @@ impl StreamOutputCapture {
 pub mod metrics {
     use super::*;
 
-    pub fn record_llm_call(
-        provider: &str,
-        model: &str,
-        stream: bool,
-        outcome: &str,
-        latency: Duration,
-        prompt_tokens: Option<u64>,
-        cached_tokens: Option<u64>,
-        completion_tokens: Option<u64>,
-    ) {
-        let _ = with_hook(|hook| {
-            hook.record_llm_call(
-                provider,
-                model,
-                stream,
-                outcome,
-                latency,
-                prompt_tokens,
-                cached_tokens,
-                completion_tokens,
-            )
-        });
+    pub fn record_llm_call(call: LlmCallMetrics<'_>) {
+        let _ = with_hook(|hook| hook.record_llm_call(&call));
     }
 
     pub fn record_llm_ttft(

@@ -167,9 +167,7 @@ fn parse_incoming(value: Value) -> ParsedIncoming {
 async fn handle_request(client: &KiliaxHttpClient, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
     let id = req.id;
     let method = req.method.as_str();
-    if id.is_none() {
-        return None;
-    }
+    id.as_ref()?;
 
     let result = match method {
         "initialize" => Ok(json!({

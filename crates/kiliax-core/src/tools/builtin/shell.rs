@@ -1,5 +1,6 @@
 #[cfg(windows)]
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -167,6 +168,7 @@ impl ShellSession {
 
 enum SessionStdin {
     Pipe(tokio::process::ChildStdin),
+    #[cfg(unix)]
     Blocking(Arc<StdMutex<Box<dyn Write + Send>>>),
 }
 
@@ -486,17 +488,27 @@ struct RenderedOutput {
     truncated: bool,
 }
 
+#[cfg(unix)]
 async fn spawn_shell_session(
     shell_argv: Vec<String>,
     cwd: PathBuf,
     timeout_ms: Option<u64>,
     requested_tty: bool,
 ) -> Result<Arc<ShellSession>, ToolError> {
-    #[cfg(unix)]
     if requested_tty {
         return spawn_pty_shell_session(shell_argv, cwd, timeout_ms).await;
     }
 
+    spawn_pipe_shell_session(shell_argv, cwd, timeout_ms, false).await
+}
+
+#[cfg(not(unix))]
+async fn spawn_shell_session(
+    shell_argv: Vec<String>,
+    cwd: PathBuf,
+    timeout_ms: Option<u64>,
+    _requested_tty: bool,
+) -> Result<Arc<ShellSession>, ToolError> {
     spawn_pipe_shell_session(shell_argv, cwd, timeout_ms, false).await
 }
 
@@ -603,6 +615,7 @@ where
     });
 }
 
+#[cfg(unix)]
 fn spawn_blocking_output_reader(mut reader: Box<dyn Read + Send>, session: Arc<ShellSession>) {
     std::thread::spawn(move || {
         let mut tmp = [0u8; 8192];
@@ -697,6 +710,7 @@ async fn write_session_stdin(stdin: &mut SessionStdin, bytes: &[u8]) -> Result<(
             stdin.write_all(bytes).await?;
             stdin.flush().await?;
         }
+        #[cfg(unix)]
         SessionStdin::Blocking(writer) => {
             let writer = writer.clone();
             let bytes = bytes.to_vec();
@@ -886,7 +900,7 @@ fn default_user_shell() -> UserShell {
         if let Some(path) = non_empty_env_path("COMSPEC") {
             return shell_from_path(path);
         }
-        return shell_from_path(PathBuf::from("cmd.exe"));
+        shell_from_path(PathBuf::from("cmd.exe"))
     }
 
     #[cfg(not(windows))]

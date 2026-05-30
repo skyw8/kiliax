@@ -213,12 +213,7 @@ fn windows_find_vscode_exe() -> Option<PathBuf> {
         );
     }
 
-    for p in candidates {
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    None
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 #[cfg(not(windows))]
