@@ -885,12 +885,11 @@ fi"#
 }
 
 fn default_user_shell() -> UserShell {
-    if let Some(path) = non_empty_env_path("SHELL") {
-        return shell_from_path(path);
-    }
-
     #[cfg(windows)]
     {
+        if let Some(path) = non_empty_env_path("SHELL").and_then(existing_shell_path) {
+            return shell_from_path(path);
+        }
         if let Some(path) = find_program_in_path("pwsh") {
             return shell_from_path(path);
         }
@@ -905,6 +904,9 @@ fn default_user_shell() -> UserShell {
 
     #[cfg(not(windows))]
     {
+        if let Some(path) = non_empty_env_path("SHELL") {
+            return shell_from_path(path);
+        }
         for path in ["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/bin/sh"] {
             let path = PathBuf::from(path);
             if path.is_file() {
@@ -922,6 +924,11 @@ fn non_empty_env_path(name: &str) -> Option<PathBuf> {
     } else {
         Some(PathBuf::from(value))
     }
+}
+
+#[cfg(windows)]
+fn existing_shell_path(path: PathBuf) -> Option<PathBuf> {
+    path.is_file().then_some(path)
 }
 
 fn shell_from_path(path: PathBuf) -> UserShell {
@@ -1236,6 +1243,12 @@ mod tests {
             shell_kind_from_path(Path::new(r"C:\Program Files\PowerShell\7\pwsh.EXE")),
             UserShellKind::PowerShell
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_env_must_point_to_existing_file() {
+        assert!(existing_shell_path(PathBuf::from(r"C:\definitely\missing\bash.exe")).is_none());
     }
 
     fn allow_all_permissions() -> Permissions {

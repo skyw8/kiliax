@@ -119,13 +119,29 @@ pub(crate) fn default_tmp_workspace_root() -> Result<PathBuf, ApiError> {
 }
 
 fn is_wsl() -> bool {
-    if std::env::var_os("WSL_INTEROP").is_some() || std::env::var_os("WSL_DISTRO_NAME").is_some() {
-        return true;
+    let proc_version = std::fs::read_to_string("/proc/version").ok();
+    is_wsl_runtime(
+        std::env::consts::OS,
+        std::env::var_os("WSL_INTEROP").is_some(),
+        std::env::var_os("WSL_DISTRO_NAME").is_some(),
+        proc_version.as_deref(),
+    )
+}
+
+fn is_wsl_runtime(
+    os: &str,
+    has_wsl_interop: bool,
+    has_wsl_distro_name: bool,
+    proc_version: Option<&str>,
+) -> bool {
+    if os != "linux" {
+        return false;
     }
-    std::fs::read_to_string("/proc/version")
-        .ok()
-        .map(|v| v.to_lowercase())
-        .is_some_and(|v| v.contains("microsoft") || v.contains("wsl"))
+    has_wsl_interop
+        || has_wsl_distro_name
+        || proc_version
+            .map(|v| v.to_lowercase())
+            .is_some_and(|v| v.contains("microsoft") || v.contains("wsl"))
 }
 
 async fn wslpath_to_windows_path(path: &Path) -> Option<String> {
@@ -466,9 +482,33 @@ pub(crate) async fn open_external(
 #[cfg(test)]
 mod tests {
     use super::{
-        linux_terminal_launchers, windows_cmd_start_in_dir_args, windows_terminal_args,
-        wsl_command_args,
+        is_wsl_runtime, linux_terminal_launchers, windows_cmd_start_in_dir_args,
+        windows_terminal_args, wsl_command_args,
     };
+
+    #[test]
+    fn wsl_detection_is_linux_only() {
+        assert!(!is_wsl_runtime("windows", true, true, Some("microsoft")));
+        assert!(!is_wsl_runtime("macos", true, true, Some("microsoft")));
+    }
+
+    #[test]
+    fn wsl_detection_accepts_linux_env_or_proc_markers() {
+        assert!(is_wsl_runtime("linux", true, false, None));
+        assert!(is_wsl_runtime("linux", false, true, None));
+        assert!(is_wsl_runtime(
+            "linux",
+            false,
+            false,
+            Some("Linux version 5.15.90.1-microsoft-standard-WSL2")
+        ));
+        assert!(!is_wsl_runtime(
+            "linux",
+            false,
+            false,
+            Some("Linux version 6.8")
+        ));
+    }
 
     #[test]
     fn linux_terminal_launchers_use_inherited_cwd_for_generic_launcher() {

@@ -28,7 +28,7 @@ minimal
 - Agents + explicit subagent availability + tool permissions + built-in master/explore + goal/multi-agent toolsets: `crates/kiliax-core/src/agents/`
 - Context compaction (auto + `/compact`, tool call/result normalization + tool output truncation): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
 - Config + model/agent defaults + provider-model max-output/auto-compact/temperature/reasoning-effort limits + multi-agent limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
-- Shared path validation (tilde/absolute/dir): `crates/kiliax-core/src/paths.rs`
+- Shared path validation (tilde expansion including Windows `~\` paths, absolute/dir checks): `crates/kiliax-core/src/paths.rs`
 - Protocol compatibility re-exports (messages/tool-calls/usage + base64 image/PDF content parts): `crates/kiliax-core/src/protocol.rs`
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + structured core telemetry hook forwarding: `crates/kiliax-core/src/llm.rs`
@@ -45,7 +45,7 @@ minimal
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
   - `grep_files`: search files for a regex pattern (ripgrep semantics; respects `.gitignore`/`.ignore` by default)
   - `view_image`: attach a local image from the filesystem (png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif)
-  - `shell_command`: run a command string in the workspace through the user's default or requested shell, inheriting the full process environment and using login/profile semantics by default; supports timeout, long-running `session_id` polling, bounded/truncated output, Unix PTY via `tty=true`, and Codex/opencode argument aliases (`command`/`workdir`/`timeout`/`description`)
+  - `shell_command`: run a command string in the workspace through the user's default or requested shell, inheriting the full process environment and using login/profile semantics by default; supports timeout, long-running `session_id` polling, bounded/truncated output, Unix PTY via `tty=true`, Windows default-shell fallback that ignores nonexistent POSIX `SHELL` values, and Codex/opencode argument aliases (`command`/`workdir`/`timeout`/`description`)
   - `write_stdin`: write to stdin of a running shell session, or poll its output; reports timeout/truncation/status metadata consistently with `shell_command`
   - `write_file`: write/overwrite a UTF-8 text file using `filePath` and `content`, creating parent directories and preserving UTF-8 BOM
   - `edit_file`: perform opencode-style text edits using `filePath`, `oldString`, `newString`, and `replaceAll`, preserving BOM/line endings and allowing empty `oldString` for whole-file create/overwrite
@@ -86,7 +86,7 @@ minimal
 - Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
 - Live session runtime integration (spawned child sessions, tool backend wiring, forked context, mailbox delivery, parent notifications, persisted user-message event emission): `crates/kiliax-server/src/state/live_session.rs`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input/client message ids): `crates/kiliax-server/src/state/domain.rs`
-- Infra (path validation/tmp workspace helpers/client path display normalization/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
+- Infra (path validation/tmp workspace helpers/client path display normalization/workspace hooks/external launchers + Linux-only WSL detection + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes capabilities builtin tool summaries, message `usage`, live stream snapshots, server-side folder listing, session default writes, run client message ids, run overrides, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 

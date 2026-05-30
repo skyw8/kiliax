@@ -37,8 +37,9 @@ function Main {
     $downloadUrl = "https://github.com/$Repo/releases/download/$version/${BinaryName}-${platform}.exe"
     Write-Host "[v] Downloading from: $downloadUrl" -ForegroundColor Cyan
 
-    $tmpDir = New-TemporaryFile | ForEach-Object { $_.DirectoryName }
-    $tmpFile = "$tmpDir\${BinaryName}.exe"
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "kiliax-install-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $tmpFile = Join-Path $tmpDir "${BinaryName}.exe"
 
     try {
         Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
@@ -85,7 +86,9 @@ function Main {
         Write-Host ""
     }
     finally {
-        Remove-Item -Path $tmpDir\* -Recurse -Force -ErrorAction SilentlyContinue
+        if ($tmpDir -and (Test-Path $tmpDir)) {
+            Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

@@ -29,11 +29,17 @@ pub fn expand_tilde(path: &str) -> Result<PathBuf, PathError> {
     if trimmed == "~" {
         return dirs::home_dir().ok_or(PathError::HomeDirUnavailable);
     }
-    let Some(rest) = trimmed.strip_prefix("~/") else {
-        return Ok(PathBuf::from(trimmed));
-    };
-    let home = dirs::home_dir().ok_or(PathError::HomeDirUnavailable)?;
-    Ok(home.join(rest))
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        let home = dirs::home_dir().ok_or(PathError::HomeDirUnavailable)?;
+        return Ok(home.join(rest));
+    }
+    #[cfg(windows)]
+    if let Some(rest) = trimmed.strip_prefix("~\\") {
+        let home = dirs::home_dir().ok_or(PathError::HomeDirUnavailable)?;
+        return Ok(home.join(rest));
+    }
+
+    Ok(PathBuf::from(trimmed))
 }
 
 pub fn validate_absolute_path(path: &str) -> Result<PathBuf, PathError> {
@@ -63,4 +69,31 @@ pub fn validate_existing_dir(path: &str) -> Result<PathBuf, PathError> {
     std::fs::canonicalize(&candidate).map_err(|_| PathError::NotAccessible {
         path: candidate.display().to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_tilde_accepts_posix_separator() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(expand_tilde("~/project").unwrap(), home.join("project"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn expand_tilde_accepts_windows_separator() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(expand_tilde("~\\project").unwrap(), home.join("project"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn expand_tilde_keeps_backslash_literal_on_unix() {
+        assert_eq!(
+            expand_tilde("~\\project").unwrap(),
+            PathBuf::from("~\\project")
+        );
+    }
 }
