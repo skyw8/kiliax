@@ -19,6 +19,16 @@ pub struct ResourceDefinition {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ResourceTemplateDefinition {
+    #[serde(rename = "uriTemplate")]
+    pub uri_template: &'static str,
+    pub name: &'static str,
+    #[serde(rename = "mimeType")]
+    pub mime_type: &'static str,
+    pub description: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PromptDefinition {
     pub name: &'static str,
     pub description: &'static str,
@@ -205,6 +215,35 @@ pub fn resource_definitions() -> Vec<ResourceDefinition> {
     ]
 }
 
+pub fn resource_template_definitions() -> Vec<ResourceTemplateDefinition> {
+    vec![
+        ResourceTemplateDefinition {
+            uri_template: "kiliax://sessions/{session_id}",
+            name: "Kiliax session",
+            mime_type: "application/json",
+            description: "One Kiliax session snapshot.",
+        },
+        ResourceTemplateDefinition {
+            uri_template: "kiliax://sessions/{session_id}/messages",
+            name: "Kiliax session messages",
+            mime_type: "application/json",
+            description: "Recent visible messages for a Kiliax session.",
+        },
+        ResourceTemplateDefinition {
+            uri_template: "kiliax://sessions/{session_id}/skills",
+            name: "Kiliax session skills",
+            mime_type: "application/json",
+            description: "Skills discovered for a Kiliax session workspace.",
+        },
+        ResourceTemplateDefinition {
+            uri_template: "kiliax://runs/{run_id}",
+            name: "Kiliax run",
+            mime_type: "application/json",
+            description: "One Kiliax run snapshot.",
+        },
+    ]
+}
+
 pub fn prompt_definitions() -> Vec<PromptDefinition> {
     vec![
         PromptDefinition {
@@ -312,6 +351,10 @@ mod tests {
     fn resources_and_prompts_are_exposed() {
         let resources = resource_definitions();
         assert!(resources.iter().any(|r| r.uri == "kiliax://capabilities"));
+        let templates = resource_template_definitions();
+        assert!(templates
+            .iter()
+            .any(|r| r.uri_template == "kiliax://sessions/{session_id}/messages"));
 
         let prompts = prompt_definitions();
         assert!(prompts.iter().any(|p| p.name == "run_agent"));

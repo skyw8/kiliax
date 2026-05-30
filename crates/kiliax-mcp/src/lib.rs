@@ -169,9 +169,13 @@ async fn handle_request(client: &KiliaxHttpClient, req: JsonRpcRequest) -> Optio
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
         "tools/call" => call_tool(client, req.params).await,
         "resources/list" => Ok(json!({ "resources": protocol::resource_definitions() })),
+        "resources/templates/list" => {
+            Ok(json!({ "resourceTemplates": protocol::resource_template_definitions() }))
+        }
         "resources/read" => read_resource(client, req.params).await,
         "prompts/list" => Ok(json!({ "prompts": protocol::prompt_definitions() })),
         "prompts/get" => get_prompt(req.params),
+        "completion/complete" => complete_argument(client, req.params).await,
         _ => Err(McpError::method_not_found(method)),
     };
 
@@ -331,12 +335,18 @@ async fn call_tool(
         _ => return Err(McpError::invalid_params(format!("unknown tool: {name}"))),
     };
 
-    Ok(json!({
+    Ok(tool_result(value))
+}
+
+fn tool_result(value: Value) -> Value {
+    json!({
         "content": [{
             "type": "text",
             "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
-        }]
-    }))
+        }],
+        "structuredContent": value,
+        "isError": false
+    })
 }
 
 async fn read_resource(
@@ -353,7 +363,7 @@ async fn read_resource(
         "kiliax://skills" => client.get_json("/v1/skills").await?,
         "kiliax://config/skills" => client.get_json("/v1/config/skills").await?,
         "kiliax://custom-tools" => client.get_json("/v1/custom-tools").await?,
-        _ => return Err(McpError::invalid_params(format!("unknown resource: {uri}"))),
+        _ => read_dynamic_resource(client, uri).await?,
     };
 
     Ok(json!({
@@ -363,6 +373,118 @@ async fn read_resource(
             "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
         }]
     }))
+}
+
+async fn read_dynamic_resource(
+    client: &KiliaxHttpClient,
+    uri: &str,
+) -> std::result::Result<Value, McpError> {
+    if let Some(rest) = uri.strip_prefix("kiliax://sessions/") {
+        if let Some(session_id) = rest.strip_suffix("/messages") {
+            return client
+                .get_json(&format!("/v1/sessions/{session_id}/messages?limit=50"))
+                .await;
+        }
+        if let Some(session_id) = rest.strip_suffix("/skills") {
+            return client
+                .get_json(&format!("/v1/sessions/{session_id}/skills"))
+                .await;
+        }
+        if !rest.is_empty() && !rest.contains('/') {
+            return client.get_json(&format!("/v1/sessions/{rest}")).await;
+        }
+    }
+    if let Some(run_id) = uri.strip_prefix("kiliax://runs/") {
+        if !run_id.is_empty() && !run_id.contains('/') {
+            return client.get_json(&format!("/v1/runs/{run_id}")).await;
+        }
+    }
+    Err(McpError::invalid_params(format!("unknown resource: {uri}")))
+}
+
+async fn complete_argument(
+    client: &KiliaxHttpClient,
+    params: Value,
+) -> std::result::Result<Value, McpError> {
+    let argument = params
+        .get("argument")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            McpError::invalid_params("completion/complete params.argument is required")
+        })?;
+    let name = argument
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpError::invalid_params("completion argument.name is required"))?;
+    let prefix = argument
+        .get("value")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+
+    let values = match name {
+        "session_id" => {
+            let sessions = client.get_json("/v1/sessions?limit=50").await?;
+            collect_string_items(&sessions, &["items"], "id", prefix)
+        }
+        "skill_id" => {
+            let skills = client.get_json("/v1/skills").await?;
+            collect_string_items(&skills, &["items"], "id", prefix)
+        }
+        "agent" => {
+            let caps = client.get_json("/v1/capabilities").await?;
+            collect_string_array(&caps, &["agents"], prefix)
+        }
+        "model_id" => {
+            let caps = client.get_json("/v1/capabilities").await?;
+            collect_string_array(&caps, &["models"], prefix)
+        }
+        _ => Vec::new(),
+    };
+    let total = values.len();
+
+    Ok(json!({
+        "completion": {
+            "values": values.into_iter().take(100).collect::<Vec<_>>(),
+            "total": total,
+            "hasMore": total > 100
+        }
+    }))
+}
+
+fn collect_string_array(value: &Value, path: &[&str], prefix: &str) -> Vec<String> {
+    get_path(value, path)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|item| item.starts_with(prefix))
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn collect_string_items(value: &Value, path: &[&str], field: &str, prefix: &str) -> Vec<String> {
+    get_path(value, path)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get(field).and_then(Value::as_str))
+                .filter(|item| item.starts_with(prefix))
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn get_path<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    for key in path {
+        value = value.get(*key)?;
+    }
+    Some(value)
 }
 
 fn get_prompt(params: Value) -> std::result::Result<Value, McpError> {

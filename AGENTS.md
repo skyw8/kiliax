@@ -72,9 +72,9 @@ minimal
 
 ### crates/kiliax-mcp (MCP export adapter)
 
-- MCP server adapter that exposes kiliax as an agent service for other agents, forwarding tools/resources/prompts to the running HTTP control plane over stdio: `crates/kiliax-mcp/src/lib.rs`
+- MCP server adapter that exposes kiliax as an agent service for other agents, forwarding tools/resources/prompts/completions to the running HTTP control plane over stdio and returning structured tool results: `crates/kiliax-mcp/src/lib.rs`
 - Streamable HTTP MCP transport (`/mcp` by default) with bearer auth, Origin validation, POST JSON-RPC handling, and GET/DELETE 405 fallback for clients that probe server-initiated SSE/session control: `crates/kiliax-mcp/src/http_transport.rs`
-- MCP schema definitions for tools/resources/prompts covering capabilities, agent/session listing, session snapshots/messages, run creation/continuation/cancellation, single-skill invocation, and skills enablement: `crates/kiliax-mcp/src/protocol.rs`
+- MCP schema definitions for tools/resources/resource templates/prompts covering capabilities, agent/session listing, session snapshots/messages, run creation/continuation/cancellation, single-skill invocation, and skills enablement: `crates/kiliax-mcp/src/protocol.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
