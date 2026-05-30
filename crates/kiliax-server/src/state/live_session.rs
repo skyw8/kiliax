@@ -22,7 +22,9 @@ use tokio_stream::StreamExt;
 use tracing::{Instrument, Span};
 
 use crate::error::{ApiError, ApiErrorCode};
-use crate::infra::{validate_client_extra_workspace_roots, validate_client_workspace_root};
+use crate::infra::{
+    client_display_path, validate_client_extra_workspace_roots, validate_client_workspace_root,
+};
 
 use super::multi_agent::{default_root_identity, MultiAgentIdentity, MultiAgentToolBackend};
 use super::preamble::{build_preamble, replace_preamble, replace_preamble_with_ids};
@@ -532,11 +534,11 @@ impl LiveSession {
             let mut session = live.session.lock().await;
             session.meta.agent = settings.agent.clone();
             session.meta.model_id = Some(settings.model_id.clone());
-            session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+            session.meta.workspace_root = Some(client_display_path(&settings.workspace_root));
             session.meta.extra_workspace_roots = settings
                 .extra_workspace_roots
                 .iter()
-                .map(|p| p.display().to_string())
+                .map(|p| client_display_path(p))
                 .collect();
             session.meta.mcp_servers = settings
                 .mcp
@@ -643,11 +645,11 @@ impl LiveSession {
             let mut session = live.session.lock().await;
             session.meta.agent = settings.agent.clone();
             session.meta.model_id = Some(settings.model_id.clone());
-            session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+            session.meta.workspace_root = Some(client_display_path(&settings.workspace_root));
             session.meta.extra_workspace_roots = settings
                 .extra_workspace_roots
                 .iter()
-                .map(|p| p.display().to_string())
+                .map(|p| client_display_path(p))
                 .collect();
             session.meta.mcp_servers = settings
                 .mcp
@@ -810,7 +812,7 @@ impl LiveSession {
             patch.extra_workspace_roots = Some(
                 validated
                     .into_iter()
-                    .map(|p| p.display().to_string())
+                    .map(|p| client_display_path(&p))
                     .collect(),
             );
         }
@@ -822,11 +824,11 @@ impl LiveSession {
             let mut session = self.session.lock().await;
             session.meta.agent = settings.agent.clone();
             session.meta.model_id = Some(settings.model_id.clone());
-            session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+            session.meta.workspace_root = Some(client_display_path(&settings.workspace_root));
             session.meta.extra_workspace_roots = settings
                 .extra_workspace_roots
                 .iter()
-                .map(|p| p.display().to_string())
+                .map(|p| client_display_path(p))
                 .collect();
             session.meta.mcp_servers = settings
                 .mcp
@@ -1440,11 +1442,11 @@ impl LiveSession {
                 child_profile.name.clone(),
                 Some(child_settings.model_id.clone()),
                 None,
-                Some(child_settings.workspace_root.display().to_string()),
+                Some(client_display_path(&child_settings.workspace_root)),
                 child_settings
                     .extra_workspace_roots
                     .iter()
-                    .map(|p| p.display().to_string())
+                    .map(|p| client_display_path(p))
                     .collect(),
                 initial_messages,
             )
@@ -2344,11 +2346,11 @@ impl LiveSession {
         session.meta.last_seq = last_seq;
         session.meta.agent = profile.name.to_string();
         session.meta.model_id = Some(settings.model_id.clone());
-        session.meta.workspace_root = Some(settings.workspace_root.display().to_string());
+        session.meta.workspace_root = Some(client_display_path(&settings.workspace_root));
         session.meta.extra_workspace_roots = settings
             .extra_workspace_roots
             .iter()
-            .map(|p| p.display().to_string())
+            .map(|p| client_display_path(p))
             .collect();
         session.meta.mcp_servers = settings
             .mcp

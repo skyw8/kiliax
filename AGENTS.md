@@ -74,12 +74,12 @@ minimal
 
 - Runner (`ki server run` when installed): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
-- HTTP <-> state domain mappers: `crates/kiliax-server/src/http/mapper.rs`
+- HTTP <-> state domain mappers + client-safe path display normalization: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue/goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
 - Live session runtime integration (spawned child sessions, tool backend wiring, forked context, mailbox delivery, parent notifications, persisted user-message event emission): `crates/kiliax-server/src/state/live_session.rs`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input/client message ids): `crates/kiliax-server/src/state/domain.rs`
-- Infra (path validation/tmp workspace helpers/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
+- Infra (path validation/tmp workspace helpers/client path display normalization/workspace hooks/external launchers + terminal cwd normalization): `crates/kiliax-server/src/infra.rs`
 - REST/OpenAPI schemas (includes capabilities builtin tool summaries, message `usage`, live stream snapshots, server-side folder listing, session default writes, run client message ids, and run/message attachments with image preview data): `crates/kiliax-server/src/api.rs`
 - OpenAPI metadata: `crates/kiliax-server/src/openapi.rs`
 
@@ -92,11 +92,11 @@ minimal
 - Main UI (responsive layout + virtualized/paged session history + centered composer dock/attached workspace launchers + WS streaming with buffered live snapshot restore/active tool-call reconciliation/persisted user-message reconciliation/retry alerts/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
 - Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Virtualized chat list + paged history windowing + pinned-bottom follow state for streaming row height changes: `web/src/components/virtualized-list.tsx`
-- Dialog components including provider/model settings for per-model compact/temperature/reasoning controls: `web/src/components/*-dialog.tsx`
+- Dialog components including server-side folder picker path normalization and provider/model settings for per-model compact/temperature/reasoning controls: `web/src/components/*-dialog.tsx`, `web/src/components/folder-picker.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (performant Dialog/Sheet overlays + Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
-- API client + typed provider-model config payloads + server-side folder listing + explicit session default persistence + goal APIs + display formatters: `web/src/lib/api.ts`, `web/src/lib/types.ts`, `web/src/lib/app-utils.ts`
+- API client + typed provider-model config payloads + server-side folder listing + explicit session default persistence + goal APIs + display/path formatters: `web/src/lib/api.ts`, `web/src/lib/types.ts`, `web/src/lib/app-utils.ts`, `web/src/lib/workspace-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
 - Types (includes message `usage`, retry status, live stream snapshots, session default writes, run client message ids, and base64 run attachments): `web/src/lib/types.ts`
 

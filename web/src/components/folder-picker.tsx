@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ArrowLeft, ChevronRight, RefreshCcw } from "lucide-react";
 
 import { api, ApiError } from "../lib/api";
+import { pathString } from "../lib/workspace-utils";
 import type { FsEntry } from "../lib/types";
 import { Button } from "./ui/button";
 import {
@@ -13,8 +14,8 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 
-function prefixQuery(input: string): { parentPath: string; prefix: string } | null {
-  const trimmed = input.trim();
+function prefixQuery(input: unknown): { parentPath: string; prefix: string } | null {
+  const trimmed = pathString(input).trim();
   if (!trimmed) return null;
 
   const slash = trimmed.lastIndexOf("/");
@@ -35,7 +36,7 @@ function prefixQuery(input: string): { parentPath: string; prefix: string } | nu
 
 function prefixMatches(entries: FsEntry[], prefix: string): FsEntry[] {
   const normalized = prefix.toLowerCase();
-  return entries.filter((entry) => entry.name.toLowerCase().startsWith(normalized));
+  return entries.filter((entry) => pathString(entry.name).toLowerCase().startsWith(normalized));
 }
 
 export function FolderPicker({
@@ -50,6 +51,7 @@ export function FolderPicker({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadSeq, setReloadSeq] = useState(0);
+  const currentPath = pathString(path);
   const initialLoading = loading && !entries.length && !error;
 
   useEffect(() => {
@@ -60,14 +62,15 @@ export function FolderPicker({
         setLoading(true);
         setError(null);
         try {
-          const res = await api.fsList(path.trim() ? path.trim() : undefined);
+          const trimmedPath = currentPath.trim();
+          const res = await api.fsList(trimmedPath ? trimmedPath : undefined);
           if (cancelled) return;
           setEntries(res.entries ?? []);
           setParent(res.parent ?? null);
           setLoading(false);
         } catch (err) {
           if (cancelled) return;
-          const query = prefixQuery(path);
+          const query = prefixQuery(currentPath);
           if (query) {
             try {
               const res = await api.fsList(query.parentPath);
@@ -100,7 +103,7 @@ export function FolderPicker({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [path, reloadSeq]);
+  }, [currentPath, reloadSeq]);
 
   return (
     <div className="space-y-2">
@@ -120,11 +123,11 @@ export function FolderPicker({
           <ArrowLeft className="h-4 w-4 text-zinc-600" />
         </Button>
         <Input
-          value={path}
+          value={currentPath}
           onChange={(e) => onPathChange(e.target.value)}
           placeholder="/path/to/folder"
           aria-label="Path"
-          title={path}
+          title={currentPath}
           className="h-8 min-w-0 flex-1 px-2 py-1 font-mono text-xs"
         />
         <Button
@@ -154,14 +157,14 @@ export function FolderPicker({
           <div className="divide-y divide-zinc-200">
             {entries.map((e) => (
               <button
-                key={e.path}
+                key={pathString(e.path) || pathString(e.name)}
                 type="button"
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-50"
-                onClick={() => onPathChange(e.path)}
+                onClick={() => onPathChange(pathString(e.path))}
               >
                 <ChevronRight className="h-4 w-4 shrink-0 text-zinc-500" />
                 <div className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-800">
-                  {e.name}
+                  {pathString(e.name)}
                 </div>
               </button>
             ))}

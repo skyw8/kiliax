@@ -30,6 +30,19 @@ pub(crate) fn is_tmp_workspace_root(root: &Path) -> Result<bool, ApiError> {
     Ok(name.starts_with("tmp_"))
 }
 
+pub(crate) fn client_display_path(path: &Path) -> String {
+    let raw = path.display().to_string();
+    if cfg!(windows) {
+        if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = raw.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+    }
+    raw
+}
+
 pub(crate) fn validate_client_workspace_root(input: &str) -> Result<PathBuf, ApiError> {
     match kiliax_core::paths::validate_absolute_path(input) {
         Ok(p) => Ok(p),

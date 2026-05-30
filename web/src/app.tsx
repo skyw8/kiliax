@@ -8,7 +8,7 @@ import { statusBadge, sortSessions } from "./lib/session-utils";
 import { useAlerts } from "./lib/use-alerts";
 import { useWsEvents } from "./lib/use-ws-events";
 import { cn } from "./lib/utils";
-import { isTmpWorkspaceRoot, workspaceBasename, workspaceDisplayName } from "./lib/workspace-utils";
+import { isTmpWorkspaceRoot, pathString, workspaceBasename, workspaceDisplayName } from "./lib/workspace-utils";
 import type {
   Capabilities,
   Message,
@@ -326,9 +326,7 @@ export default function App() {
   );
   const tmpSessions = useMemo(
     () =>
-      sortedSessions.filter((s) =>
-        isTmpWorkspaceRoot(s.settings.workspace_root ?? ""),
-      ),
+      sortedSessions.filter((s) => isTmpWorkspaceRoot(s.settings.workspace_root)),
     [sortedSessions],
   );
   const visibleSessions = useMemo(
@@ -338,7 +336,7 @@ export default function App() {
   const workspaceGroups = useMemo(() => {
     const byRoot = new Map<string, SessionSummary[]>();
     for (const s of sortedSessions) {
-      const root = s.settings.workspace_root ?? "";
+      const root = pathString(s.settings.workspace_root);
       if (!root.trim()) continue;
       const arr = byRoot.get(root) ?? [];
       arr.push(s);
@@ -369,7 +367,7 @@ export default function App() {
     [workspaceGroups, workspacesVisible],
   );
   const workspaceFolderItems = useMemo<WorkspaceFolderItem[]>(() => {
-    const root = (session?.settings.workspace_root ?? "").trim();
+    const root = pathString(session?.settings.workspace_root).trim();
     const seen = new Set<string>();
     const items: WorkspaceFolderItem[] = [];
     if (root) {
@@ -378,7 +376,7 @@ export default function App() {
     }
 
     for (const raw of session?.settings.extra_workspace_roots ?? []) {
-      const path = raw.trim();
+      const path = pathString(raw).trim();
       if (!path || seen.has(path)) continue;
       seen.add(path);
       items.push({ label: "Folder", path });
@@ -1111,12 +1109,13 @@ export default function App() {
 
   async function chooseWorkspaceFolder() {
     const initialPath =
-      (session?.settings.workspace_root ?? "").trim() ||
-      (selectedSummary?.settings.workspace_root ?? "").trim() ||
-      (workspaceGroups[0]?.root ?? "").trim() ||
-      (sortedSessions.find((s) => (s.settings.workspace_root ?? "").trim())?.settings
-        .workspace_root ??
-        "").trim();
+      pathString(session?.settings.workspace_root).trim() ||
+      pathString(selectedSummary?.settings.workspace_root).trim() ||
+      pathString(workspaceGroups[0]?.root).trim() ||
+      pathString(
+        sortedSessions.find((s) => pathString(s.settings.workspace_root).trim())?.settings
+          .workspace_root,
+      ).trim();
     setWorkspacePickerPath(initialPath);
     setWorkspaceCreateOpen(true);
   }
@@ -1552,14 +1551,16 @@ export default function App() {
     if (!session || !selectedId) return;
     const trimmed = path.trim();
     if (!trimmed) return;
-    const existing = session.settings.extra_workspace_roots ?? [];
+    const existing = (session.settings.extra_workspace_roots ?? [])
+      .map((root) => pathString(root).trim())
+      .filter(Boolean);
     const next = Array.from(new Set([...existing, trimmed]));
     await patchSession({ extra_workspace_roots: next });
   }
 
   async function chooseExtraFolder() {
     if (!session || !selectedId) return;
-    setExtraFolderPickerPath((session.settings.workspace_root ?? "").trim());
+    setExtraFolderPickerPath(pathString(session.settings.workspace_root).trim());
     setAddFolderOpen(true);
   }
 
@@ -2958,9 +2959,9 @@ export default function App() {
         confirmLabel="Create"
         confirmPending={workspaceCreateSaving}
         confirmPendingLabel="Creating..."
-        confirmDisabled={!workspacePickerPath.trim() || workspaceCreateSaving}
+        confirmDisabled={!pathString(workspacePickerPath).trim() || workspaceCreateSaving}
         onConfirm={async () => {
-          const path = workspacePickerPath.trim();
+          const path = pathString(workspacePickerPath).trim();
           if (!path) return;
           setWorkspaceCreateSaving(true);
           try {
@@ -2982,9 +2983,9 @@ export default function App() {
         confirmLabel="Add"
         confirmPending={extraFolderSaving}
         confirmPendingLabel="Adding..."
-        confirmDisabled={!extraFolderPickerPath.trim() || !session || extraFolderSaving}
+        confirmDisabled={!pathString(extraFolderPickerPath).trim() || !session || extraFolderSaving}
         onConfirm={async () => {
-          const path = extraFolderPickerPath.trim();
+          const path = pathString(extraFolderPickerPath).trim();
           if (!path) return;
           setExtraFolderSaving(true);
           try {

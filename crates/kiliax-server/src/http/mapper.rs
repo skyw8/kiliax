@@ -1,4 +1,5 @@
 use crate::api;
+use crate::infra::client_display_path;
 use crate::state::domain;
 
 impl From<domain::SessionRunState> for api::SessionRunState {
@@ -216,11 +217,11 @@ impl From<domain::SessionSettings> for api::SessionSettings {
             skills: value.skills.into(),
             custom_tools: value.custom_tools.into(),
             mcp: value.mcp.into(),
-            workspace_root: value.workspace_root.display().to_string(),
+            workspace_root: client_display_path(&value.workspace_root),
             extra_workspace_roots: value
                 .extra_workspace_roots
                 .into_iter()
-                .map(|p| p.display().to_string())
+                .map(|p| client_display_path(&p))
                 .collect(),
         }
     }

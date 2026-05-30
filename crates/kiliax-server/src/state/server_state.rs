@@ -13,8 +13,8 @@ use tokio::sync::{broadcast, Mutex, Notify};
 use crate::api;
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::{
-    is_tmp_workspace_root, open_external, validate_client_extra_workspace_roots,
-    validate_client_workspace_root,
+    client_display_path, is_tmp_workspace_root, open_external,
+    validate_client_extra_workspace_roots, validate_client_workspace_root,
 };
 
 use super::domain;
@@ -871,7 +871,8 @@ impl ServerState {
                 continue;
             }
             let name = ent.file_name().to_string_lossy().to_string();
-            let path = ent.path().display().to_string();
+            let entry_path = ent.path();
+            let path = client_display_path(&entry_path);
             entries.push(api::FsEntry {
                 name,
                 path,
@@ -881,8 +882,8 @@ impl ServerState {
         entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
         Ok(api::FsListResponse {
-            path: canonical.display().to_string(),
-            parent: canonical.parent().map(|p| p.display().to_string()),
+            path: client_display_path(&canonical),
+            parent: canonical.parent().map(client_display_path),
             entries,
         })
     }
@@ -1018,11 +1019,11 @@ impl ServerState {
                 settings.agent.clone(),
                 Some(settings.model_id.clone()),
                 Some(self.config_path.display().to_string()),
-                Some(settings.workspace_root.display().to_string()),
+                Some(client_display_path(&settings.workspace_root)),
                 settings
                     .extra_workspace_roots
                     .iter()
-                    .map(|p| p.display().to_string())
+                    .map(|p| client_display_path(p))
                     .collect(),
                 initial_messages,
             )
@@ -1135,11 +1136,11 @@ impl ServerState {
                 profile.name.to_string(),
                 Some(settings.model_id.clone()),
                 Some(self.config_path.display().to_string()),
-                Some(settings.workspace_root.display().to_string()),
+                Some(client_display_path(&settings.workspace_root)),
                 settings
                     .extra_workspace_roots
                     .iter()
-                    .map(|p| p.display().to_string())
+                    .map(|p| client_display_path(p))
                     .collect(),
                 messages.clone(),
             )
