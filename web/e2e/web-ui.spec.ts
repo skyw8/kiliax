@@ -19,6 +19,18 @@ async function openSidebarIfCollapsed(page: Page) {
   }
 }
 
+async function closeDialog(page: Page, name: string) {
+  await page.getByRole("dialog", { name }).getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("dialog", { name })).toBeHidden();
+}
+
+async function openTmpSessionActions(page: Page) {
+  await openSidebarIfCollapsed(page);
+  const sidebar = page.locator('aside, [role="dialog"]').filter({ hasText: "Workspaces" }).first();
+  await expect(sidebar.getByText("Scratch thread")).toBeVisible();
+  await sidebar.getByRole("button", { name: "Session actions" }).first().click();
+}
+
 test("renders sessions, selected history, workspace controls, and single-line status badges", async ({ page }) => {
   const mock = await installMockKiliax(page);
   const work = mock.sessions.get("s-work")!;
@@ -109,6 +121,48 @@ test("sends composer attachments in the run payload", async ({ page }) => {
   ]);
 });
 
+test("handles run retry, failure alerts, and interrupt cancellation", async ({ page }) => {
+  const mock = await installMockKiliax(page);
+  const work = mock.sessions.get("s-work")!;
+  work.status.run_state = "running";
+  work.status.active_run_id = "run-active";
+  work.status.active_run_started_at = "2026-05-30T09:00:00.000Z";
+  await page.goto("/sessions/s-work");
+
+  await page.getByRole("button", { name: "Interrupt" }).click();
+  expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path === "/v1/runs/run-active/cancel"))
+    .toBeTruthy();
+
+  await mock.emitWs({
+    type: "run_retry",
+    event_id: 13,
+    run_id: "run-active",
+    data: {
+      retry_status: {
+        kind: "rate_limit",
+        attempt: 1,
+        max_attempts: 3,
+        next_attempt_at: "2026-05-30T09:00:01.000Z",
+        delay_ms: 1000,
+        message: "Provider throttled the request.",
+      },
+    },
+  });
+  await expect(page.getByText("LLM request failed, retrying")).toBeVisible();
+
+  await mock.emitWs({
+    type: "run_error",
+    event_id: 14,
+    run_id: "run-active",
+    data: {
+      run: { id: "run-active", error: { code: "provider_error", message: "Provider failed." } },
+      diagnostics: { code: "provider_error", step: 2, trace_id: "trace-1" },
+    },
+  });
+  await expect(page.getByText("Run failed").first()).toBeVisible();
+  await expect(page.getByText("Provider failed.", { exact: true }).first()).toBeVisible();
+});
+
 test("sets and clears a goal, and adds an extra workspace folder through the server-side picker", async ({ page }) => {
   const mock = await installMockKiliax(page);
   await page.goto("/sessions/s-work");
@@ -130,6 +184,95 @@ test("sets and clears a goal, and adds an extra workspace folder through the ser
   await expect(addFolder).toBeHidden();
   const patch = lastRequest(mock.requests, (r) => r.method === "PATCH" && r.path === "/v1/sessions/s-work/settings");
   expect(patch?.body.extra_workspace_roots).toContain("D:\\fixtures");
+});
+
+test("forks, pins, and deletes sessions from session actions", async ({ page }) => {
+  const mock = await installMockKiliax(page);
+  await page.goto("/sessions/s-tmp");
+
+  await openTmpSessionActions(page);
+  await page.getByText("Pin", { exact: true }).click();
+  await openTmpSessionActions(page);
+  await expect(page.getByText("Unpin", { exact: true })).toBeVisible();
+  await page.getByText("Fork", { exact: true }).click();
+  await expect(page).toHaveURL(/\/sessions\/s-fork-/);
+  expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path === "/v1/sessions/s-tmp/fork"))
+    .toBeTruthy();
+
+  await page.goto("/sessions/s-tmp");
+  await openTmpSessionActions(page);
+  await page.getByText("Delete", { exact: true }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete session?" });
+  await expect(deleteDialog).toBeVisible();
+  await deleteDialog.getByRole("button", { name: "Delete" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(mock.sessions.has("s-tmp")).toBe(false);
+});
+
+test("edits and regenerates existing user history", async ({ page }) => {
+  const mock = await installMockKiliax(page);
+  await page.goto("/sessions/s-work");
+
+  await page.getByText("Summarize the repository.").hover();
+  await page.getByRole("button", { name: "Edit message" }).click();
+  const edit = page.getByRole("dialog", { name: "Edit message" });
+  await edit.getByPlaceholder(/Update the user message/).fill("Summarize the web UI.");
+  await edit.getByRole("button", { name: "Save & Send" }).click();
+  await expect(edit).toBeHidden();
+  expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path === "/v1/sessions/s-work/runs")?.body.input)
+    .toEqual({ type: "edit_user_message", user_message_id: 1, content: "Summarize the web UI." });
+
+  mock.messages.set("s-work", [
+    { role: "user", id: "1", created_at: "2026-05-30T09:00:00.000Z", content: "Summarize the web UI." },
+    { role: "assistant", id: "2", created_at: "2026-05-30T09:00:01.000Z", content: "The web UI is a React app." },
+  ]);
+  await mock.emitWs({ type: "run_done", event_id: 15, run_id: "run-20", data: { run: { id: "run-20" } } });
+  await expect(page.getByText("The web UI is a React app.")).toBeVisible();
+
+  await page.getByText("The web UI is a React app.").hover();
+  await page.getByRole("button", { name: "Regenerate" }).click();
+  expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path === "/v1/sessions/s-work/runs")?.body.input)
+    .toEqual({ type: "regenerate_after_user_message", user_message_id: 1 });
+});
+
+test("updates Skills, Tools, and MCP session overrides", async ({ page }) => {
+  const mock = await installMockKiliax(page);
+  await page.goto("/sessions/s-work");
+
+  await openSidebarIfCollapsed(page);
+  await page.getByRole("button", { name: "Skills" }).click();
+  const skills = page.getByRole("dialog", { name: "Skills" });
+  await expect(skills.getByText("imagegen").first()).toBeVisible();
+  await skills.locator("label").filter({ hasText: "imagegen" }).getByRole("checkbox").click();
+  expect(lastRequest(mock.requests, (r) => r.method === "PATCH" && r.path === "/v1/sessions/s-work/settings")?.body)
+    .toEqual({ skills: { overrides: [{ id: "imagegen", enable: false }] } });
+  await skills.getByRole("button", { name: "Save skills defaults" }).click();
+  expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path.endsWith("/settings/save-defaults"))?.body.skills)
+    .toBe(true);
+  await closeDialog(page, "Skills");
+
+  await openSidebarIfCollapsed(page);
+  await page.getByRole("button", { name: "Tools" }).click();
+  const tools = page.getByRole("dialog", { name: "Tools" });
+  await expect(tools.getByText("read_file").first()).toBeVisible();
+  await tools.locator("label").filter({ hasText: "lint_project" }).getByRole("checkbox").click();
+  expect(lastRequest(mock.requests, (r) => r.method === "PATCH" && r.path === "/v1/sessions/s-work/settings")?.body)
+    .toEqual({ custom_tools: { overrides: [{ id: "lint_project", enable: false }] } });
+  await tools.getByRole("button", { name: "Save custom tool defaults" }).click();
+  expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path.endsWith("/settings/save-defaults"))?.body.custom_tools)
+    .toBe(true);
+  await closeDialog(page, "Tools");
+
+  await openSidebarIfCollapsed(page);
+  await page.getByRole("button", { name: "MCP" }).click();
+  const mcp = page.getByRole("dialog", { name: "MCP" });
+  await expect(mcp.getByText("filesystem")).toBeVisible();
+  await mcp.locator("label").filter({ hasText: "filesystem" }).getByRole("checkbox").click();
+  expect(lastRequest(mock.requests, (r) => r.method === "PATCH" && r.path === "/v1/sessions/s-work/settings")?.body)
+    .toEqual({ mcp: { servers: [{ id: "filesystem", enable: false }] } });
+  await mcp.getByRole("button", { name: "Save MCP defaults" }).click();
+  expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path.endsWith("/settings/save-defaults"))?.body.mcp)
+    .toBe(true);
 });
 
 test("edits provider settings and raw yaml from Settings", async ({ page }) => {
@@ -164,4 +307,12 @@ test("edits provider settings and raw yaml from Settings", async ({ page }) => {
   await settings.getByRole("button", { name: "Save" }).click();
   expect(lastRequest(mock.requests, (r) => r.method === "PUT" && r.path === "/v1/config")?.body.yaml)
     .toBe("default_model: local/llama3.1\n");
+});
+
+test("shows unauthorized state and removes bootstrap token from the URL", async ({ page }) => {
+  await installMockKiliax(page, { unauthorized: true });
+  await page.goto("/?token=secret-token");
+
+  await expect(page.getByText("Unauthorized", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL((url) => !url.searchParams.has("token"));
 });

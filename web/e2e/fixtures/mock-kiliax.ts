@@ -54,6 +54,10 @@ type Provider = {
   >;
 };
 
+type MockOptions = {
+  unauthorized?: boolean;
+};
+
 const now = "2026-05-30T09:00:00.000Z";
 
 function settings(root: string): SessionSettings {
@@ -93,7 +97,15 @@ function summary(id: string, title: string, root: string, step = 1): SessionSumm
 function toSession(item: SessionSummary) {
   return {
     ...item,
-    mcp_status: [],
+    mcp_status: [
+      {
+        id: "filesystem",
+        enable: item.settings.mcp.servers.find((s: any) => s.id === "filesystem")?.enable ?? true,
+        state: "connected",
+        last_error: null,
+        tools: ["read_file"],
+      },
+    ],
     stream: null,
   };
 }
@@ -108,10 +120,10 @@ async function body(route: Route) {
   }
 }
 
-export async function installMockKiliax(page: Page) {
+export async function installMockKiliax(page: Page, options: MockOptions = {}) {
   const sessions = new Map<string, SessionSummary>([
     ["s-work", summary("s-work", "Workspace thread", "D:\\github_code\\kiliax", 12)],
-    ["s-tmp", summary("s-tmp", "Scratch thread", "D:\\tmp\\kiliax-session-s-tmp", 1)],
+    ["s-tmp", summary("s-tmp", "Scratch thread", "D:\\github_code\\kiliax\\.kiliax\\workspace\\tmp_s-tmp", 1)],
   ]);
   const messages = new Map<string, any[]>([
     [
@@ -144,6 +156,13 @@ export async function installMockKiliax(page: Page) {
     },
   ];
   const requests: MockRequest[] = [];
+  const skills = [
+    { id: "imagegen", name: "imagegen", description: "Generate images" },
+    { id: "github", name: "github", description: "GitHub workflow helpers" },
+  ];
+  const customTools = [
+    { id: "lint_project", name: "lint_project", description: "Run project lint", parallel: false },
+  ];
   let defaultModel = "openai/gpt-4.1-mini";
   let nextSession = 10;
   let nextRun = 20;
@@ -216,6 +235,14 @@ export async function installMockKiliax(page: Page) {
     const reqBody = await body(route);
     record(method, path, reqBody);
 
+    if (options.unauthorized && path !== "/v1/capabilities") {
+      return fulfill(
+        route,
+        { error: { code: "unauthorized", message: "Unauthorized" } },
+        401,
+      );
+    }
+
     if (method === "GET" && path === "/v1/capabilities") {
       return fulfill(route, {
         agents: ["master", "explore"],
@@ -224,7 +251,15 @@ export async function installMockKiliax(page: Page) {
           { id: "read_file", name: "read_file", description: "Read a file" },
           { id: "shell_command", name: "shell_command", description: "Run a command" },
         ],
-        mcp_servers: [],
+        mcp_servers: [
+          {
+            id: "filesystem",
+            enable: true,
+            state: "connected",
+            last_error: null,
+            tools: ["read_file"],
+          },
+        ],
       });
     }
 
@@ -252,6 +287,13 @@ export async function installMockKiliax(page: Page) {
       return item ? fulfill(route, toSession(item)) : fulfill(route, { error: "not found" }, 404);
     }
 
+    if (sessionMatch && method === "DELETE") {
+      const id = decodeURIComponent(sessionMatch[1]);
+      sessions.delete(id);
+      messages.delete(id);
+      return fulfill(route, undefined, 204);
+    }
+
     const messagesMatch = path.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
     if (messagesMatch && method === "GET") {
       const id = decodeURIComponent(messagesMatch[1]);
@@ -261,6 +303,11 @@ export async function installMockKiliax(page: Page) {
     const runMatch = path.match(/^\/v1\/sessions\/([^/]+)\/runs$/);
     if (runMatch && method === "POST") {
       return fulfill(route, { id: `run-${nextRun++}` });
+    }
+
+    const cancelMatch = path.match(/^\/v1\/runs\/([^/]+)\/cancel$/);
+    if (cancelMatch && method === "POST") {
+      return fulfill(route, { id: decodeURIComponent(cancelMatch[1]), cancelled: true });
     }
 
     const goalMatch = path.match(/^\/v1\/sessions\/([^/]+)\/goal$/);
@@ -287,8 +334,28 @@ export async function installMockKiliax(page: Page) {
     const settingsMatch = path.match(/^\/v1\/sessions\/([^/]+)\/settings$/);
     if (settingsMatch && method === "PATCH") {
       const item = sessions.get(decodeURIComponent(settingsMatch[1]))!;
-      item.settings = { ...item.settings, ...reqBody };
+      item.settings = {
+        ...item.settings,
+        ...reqBody,
+        skills: { ...item.settings.skills, ...(reqBody.skills ?? {}) },
+        custom_tools: { ...item.settings.custom_tools, ...(reqBody.custom_tools ?? {}) },
+        mcp: { ...item.settings.mcp, ...(reqBody.mcp ?? {}) },
+      };
       return fulfill(route, toSession(item));
+    }
+
+    if (
+      (method === "GET" && path === "/v1/skills") ||
+      (method === "GET" && path.match(/^\/v1\/sessions\/[^/]+\/skills$/))
+    ) {
+      return fulfill(route, { items: skills, errors: [] });
+    }
+
+    if (
+      (method === "GET" && path === "/v1/custom-tools") ||
+      (method === "GET" && path.match(/^\/v1\/sessions\/[^/]+\/custom-tools$/))
+    ) {
+      return fulfill(route, { items: customTools, errors: [] });
     }
 
     if (path.endsWith("/settings/save-defaults") && method === "POST") {

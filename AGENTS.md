@@ -96,7 +96,7 @@ minimal
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
 - UI primitives (performant Dialog/Sheet overlays + Button/Input/etc): `web/src/components/ui/`
 - Build + dev server (Vite config/proxy): `web/vite.config.ts`
-- Web UI E2E coverage (Playwright desktop/mobile projects + mocked HTTP/WS backend for session, run streaming, goal, folder picker, and settings flows): `web/playwright.config.ts`, `web/e2e/`
+- Web UI E2E coverage (Playwright desktop/mobile projects + mocked HTTP/WS backend for session, run streaming/retry/error/cancel, session actions, history edit/regenerate, attachments, goal, folder picker, skills/tools/MCP, auth, and settings flows): `web/playwright.config.ts`, `web/e2e/`
 - API client + typed provider-model config payloads + server-side folder listing + explicit session default persistence + goal APIs + display/path formatters: `web/src/lib/api.ts`, `web/src/lib/types.ts`, `web/src/lib/app-utils.ts`, `web/src/lib/workspace-utils.ts`
 - Alert/toast state: `web/src/lib/use-alerts.ts`
 - Types (includes message `usage`, retry status, live stream snapshots, session default writes, run client message ids, and base64 run attachments): `web/src/lib/types.ts`
