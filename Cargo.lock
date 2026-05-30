@@ -1158,6 +1158,7 @@ dependencies = [
  "dirs",
  "getrandom 0.2.17",
  "kiliax-core",
+ "kiliax-mcp",
  "kiliax-server",
  "libc",
  "reqwest",
@@ -1215,6 +1216,17 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "kiliax-mcp"
+version = "0.7.1"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

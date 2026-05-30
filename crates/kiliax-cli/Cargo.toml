@@ -5,6 +5,7 @@ version.workspace = true
 
 [dependencies]
 kiliax-core = { path = "../kiliax-core" }
+kiliax-mcp = { path = "../kiliax-mcp" }
 kiliax-server = { path = "../kiliax-server" }
 anyhow = "1"
 dirs.workspace = true

@@ -18,6 +18,7 @@ fn print_help() {
     println!("  {bin} server run [OPTIONS]");
     println!("  {bin} server stop");
     println!("  {bin} server restart");
+    println!("  {bin} mcp serve");
     println!("  {bin} goal get --session <SESSION_ID>");
     println!("  {bin} goal set --session <SESSION_ID> <OBJECTIVE...>");
     println!("  {bin} goal clear --session <SESSION_ID>");
@@ -165,6 +166,11 @@ async fn ensure_server_and_open(workspace_root: &std::path::Path) -> Result<()> 
     Ok(())
 }
 
+async fn ensure_server(workspace_root: &std::path::Path) -> Result<daemon::DaemonState> {
+    let loaded = load_or_init_config()?;
+    daemon::ensure_running(workspace_root, &loaded.path, &loaded.config.server).await
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -210,6 +216,22 @@ async fn main() -> Result<()> {
             Some("restart") => {
                 let _ = daemon::stop().await?;
                 ensure_server_and_open(&workspace_root).await?;
+            }
+            _ => print_help(),
+        }
+        return Ok(());
+    }
+
+    if args.first().is_some_and(|a| a == "mcp") {
+        match args.get(1).map(String::as_str) {
+            Some("serve") => {
+                let state = ensure_server(&workspace_root).await?;
+                let base_url = format!("http://{}:{}", state.host, state.port);
+                kiliax_mcp::serve_stdio(kiliax_mcp::McpServerOptions {
+                    base_url,
+                    token: Some(state.token),
+                })
+                .await?;
             }
             _ => print_help(),
         }

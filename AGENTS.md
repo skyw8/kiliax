@@ -66,9 +66,14 @@ minimal
 
 ### crates/kiliax-cli (CLI)
 
-- CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + local session goal commands: `crates/kiliax-cli/src/main.rs`
+- CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + stdio MCP export (`ki mcp serve`) + local session goal commands: `crates/kiliax-cli/src/main.rs`
 - Server daemon control + idempotent start via bearer API/admin identity checks: `crates/kiliax-cli/src/daemon.rs`
 - Foreground server run argument parsing: `crates/kiliax-cli/src/server_run_args.rs`
+
+### crates/kiliax-mcp (MCP export adapter)
+
+- Stdio MCP server adapter that exposes kiliax as an agent service for other agents, forwarding tool calls to the running HTTP control plane: `crates/kiliax-mcp/src/lib.rs`
+- MCP tool schema definitions for capabilities, agent/session listing, session snapshots/messages, run creation/continuation, and cancellation: `crates/kiliax-mcp/src/protocol.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 

@@ -3,6 +3,7 @@ members = [
   "crates/kiliax-llm",
   "crates/kiliax-core",
   "crates/kiliax-otel",
+  "crates/kiliax-mcp",
   "crates/kiliax-cli",
   "crates/kiliax-server",
 ]
