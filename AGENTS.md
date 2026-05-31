@@ -40,6 +40,7 @@ minimal
 - Session store + snapshots + append-only events + reverse paged visible-message reads + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin registry/patch application/MCP dispatch + Cargo-version client identity/skills discovery/custom tool discovery from `~/.kiliax/tools` + JSON-RPC process runtime/goal toolset backend dispatch + multi-agent backend dispatch + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
+- Project skill for external agents to drive Kiliax through the installed `ki` CLI plus authenticated HTTP control plane: `skills/kiliax-cli/SKILL.md`
 - Builtin tools (`crates/kiliax-core/src/tools/builtin/`):
   - `read_file`: read a line-numbered UTF-8 text file from the workspace (or allowed skills roots) using `filePath`, `offset`, and `limit`
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
