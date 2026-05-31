@@ -16,3 +16,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs"] 
 
 libc = "0.2"
 getrandom = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -4,6 +4,8 @@ mod server_run_args;
 use anyhow::{Context, Result};
 use kiliax_core::{config, session::FileSessionStore, session::SessionId};
 
+const CALL_KILIAX_SKILL_ID: &str = "call-kiliax";
+const CALL_KILIAX_SKILL_MD: &str = include_str!("../../../skills/call-kiliax/SKILL.md");
 const EXAMPLE_CONFIG_YAML: &str = include_str!("../../../kiliax.example.yaml");
 
 fn print_help() {
@@ -342,6 +344,25 @@ fn default_kiliax_skills_root() -> std::path::PathBuf {
         .join("skills")
 }
 
+fn install_call_kiliax_skill(
+    skills_root: &std::path::Path,
+    force: bool,
+) -> Result<std::path::PathBuf> {
+    let dir = skills_root.join(CALL_KILIAX_SKILL_ID);
+    let target = dir.join("SKILL.md");
+    if target.exists() && !force {
+        anyhow::bail!(
+            "skill already exists at {}; pass --force to overwrite",
+            target.display()
+        );
+    }
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create skill dir: {}", dir.display()))?;
+    std::fs::write(&target, CALL_KILIAX_SKILL_MD)
+        .with_context(|| format!("failed to write skill file: {}", target.display()))?;
+    Ok(dir)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -427,10 +448,7 @@ async fn main() -> Result<()> {
             Some("skill") => match args.get(2).map(String::as_str) {
                 Some("install") => {
                     let install_args = parse_mcp_skill_install_args(&args[3..])?;
-                    let dir = kiliax_mcp::install_call_kiliax_skill(
-                        &install_args.path,
-                        install_args.force,
-                    )?;
+                    let dir = install_call_kiliax_skill(&install_args.path, install_args.force)?;
                     println!("{}", dir.display());
                 }
                 _ => print_help(),
@@ -451,4 +469,28 @@ async fn main() -> Result<()> {
 
     print_help();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_call_kiliax_skill_has_required_frontmatter() {
+        assert!(CALL_KILIAX_SKILL_MD.starts_with("---\n"));
+        assert!(CALL_KILIAX_SKILL_MD.contains("name: call-kiliax"));
+        assert!(CALL_KILIAX_SKILL_MD.contains("description:"));
+        assert!(CALL_KILIAX_SKILL_MD.contains("run_agent"));
+        assert!(CALL_KILIAX_SKILL_MD.contains("run_skill"));
+    }
+
+    #[test]
+    fn install_call_kiliax_skill_writes_skill_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let installed = install_call_kiliax_skill(dir.path(), false).expect("install");
+        let skill = std::fs::read_to_string(installed.join("SKILL.md")).expect("skill");
+        assert!(skill.contains("name: call-kiliax"));
+        assert!(install_call_kiliax_skill(dir.path(), false).is_err());
+        install_call_kiliax_skill(dir.path(), true).expect("force");
+    }
 }

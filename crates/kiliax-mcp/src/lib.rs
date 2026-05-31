@@ -1,7 +1,6 @@
 mod http_transport;
 mod protocol;
 
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -13,8 +12,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub use http_transport::{serve_http, HttpServerOptions};
 pub use protocol::tool_definitions;
 
-pub const CALL_KILIAX_SKILL_ID: &str = "call-kiliax";
-const CALL_KILIAX_SKILL_MD: &str = include_str!("../templates/skills/call-kiliax/SKILL.md");
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -23,22 +20,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub struct McpServerOptions {
     pub base_url: String,
     pub token: Option<String>,
-}
-
-pub fn install_call_kiliax_skill(skills_root: &Path, force: bool) -> Result<PathBuf> {
-    let dir = skills_root.join(CALL_KILIAX_SKILL_ID);
-    let target = dir.join("SKILL.md");
-    if target.exists() && !force {
-        anyhow::bail!(
-            "skill already exists at {}; pass --force to overwrite",
-            target.display()
-        );
-    }
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create skill dir: {}", dir.display()))?;
-    std::fs::write(&target, CALL_KILIAX_SKILL_MD)
-        .with_context(|| format!("failed to write skill file: {}", target.display()))?;
-    Ok(dir)
 }
 
 pub async fn serve_stdio(options: McpServerOptions) -> Result<()> {
@@ -1060,29 +1041,5 @@ pub(crate) fn error_response(id: Value, code: i64, message: String) -> JsonRpcRe
         id: Some(id),
         result: None,
         error: Some(JsonRpcError { code, message }),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_call_kiliax_skill_has_required_frontmatter() {
-        assert!(CALL_KILIAX_SKILL_MD.starts_with("---\n"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("name: call-kiliax"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("description:"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("run_agent"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("run_skill"));
-    }
-
-    #[test]
-    fn install_call_kiliax_skill_writes_skill_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let installed = install_call_kiliax_skill(dir.path(), false).expect("install");
-        let skill = std::fs::read_to_string(installed.join("SKILL.md")).expect("skill");
-        assert!(skill.contains("name: call-kiliax"));
-        assert!(install_call_kiliax_skill(dir.path(), false).is_err());
-        install_call_kiliax_skill(dir.path(), true).expect("force");
     }
 }
