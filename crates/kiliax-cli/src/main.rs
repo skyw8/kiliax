@@ -4,8 +4,6 @@ mod server_run_args;
 use anyhow::{Context, Result};
 use kiliax_core::{config, session::FileSessionStore, session::SessionId};
 
-const CALL_KILIAX_SKILL_ID: &str = "call-kiliax";
-const CALL_KILIAX_SKILL_MD: &str = include_str!("../../../skills/call-kiliax/SKILL.md");
 const EXAMPLE_CONFIG_YAML: &str = include_str!("../../../kiliax.example.yaml");
 
 fn print_help() {
@@ -20,8 +18,6 @@ fn print_help() {
     println!("  {bin} server run [OPTIONS]");
     println!("  {bin} server stop");
     println!("  {bin} server restart");
-    println!("  {bin} mcp serve [--transport stdio|http] [--base-url URL] [--token TOKEN]");
-    println!("  {bin} mcp skill install [--path DIR] [--force]");
     println!("  {bin} goal get --session <SESSION_ID>");
     println!("  {bin} goal set --session <SESSION_ID> <OBJECTIVE...>");
     println!("  {bin} goal clear --session <SESSION_ID>");
@@ -169,200 +165,6 @@ async fn ensure_server_and_open(workspace_root: &std::path::Path) -> Result<()> 
     Ok(())
 }
 
-async fn ensure_server(workspace_root: &std::path::Path) -> Result<daemon::DaemonState> {
-    let loaded = load_or_init_config()?;
-    daemon::ensure_running(workspace_root, &loaded.path, &loaded.config.server).await
-}
-
-struct McpServeArgs {
-    transport: McpTransport,
-    base_url: Option<String>,
-    token: Option<String>,
-    host: String,
-    port: u16,
-    path: String,
-    mcp_token: Option<String>,
-    allowed_origins: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum McpTransport {
-    Stdio,
-    Http,
-}
-
-fn parse_mcp_serve_args(args: &[String]) -> Result<McpServeArgs> {
-    let mut transport = McpTransport::Stdio;
-    let mut base_url = std::env::var("KILIAX_BASE_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    let mut token = std::env::var("KILIAX_TOKEN")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    let mut host = std::env::var("KILIAX_MCP_HOST")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let mut port = std::env::var("KILIAX_MCP_PORT")
-        .ok()
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(8124);
-    let mut path = std::env::var("KILIAX_MCP_PATH")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "/mcp".to_string());
-    let mut mcp_token = std::env::var("KILIAX_MCP_TOKEN")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    let mut allowed_origins = Vec::new();
-
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--transport" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--transport expects stdio or http");
-                };
-                transport = match value.as_str() {
-                    "stdio" => McpTransport::Stdio,
-                    "http" => McpTransport::Http,
-                    other => anyhow::bail!("unsupported MCP transport: {other}"),
-                };
-            }
-            "--base-url" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--base-url expects a URL");
-                };
-                let value = value.trim();
-                if value.is_empty() {
-                    anyhow::bail!("--base-url must not be empty");
-                }
-                base_url = Some(value.to_string());
-            }
-            "--token" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--token expects a token");
-                };
-                token = Some(value.trim().to_string());
-            }
-            "--host" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--host expects a bind host");
-                };
-                host = value.trim().to_string();
-                if host.is_empty() {
-                    anyhow::bail!("--host must not be empty");
-                }
-            }
-            "--port" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--port expects a port");
-                };
-                port = value
-                    .parse::<u16>()
-                    .with_context(|| format!("invalid --port value: {value}"))?;
-            }
-            "--path" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--path expects an endpoint path");
-                };
-                path = value.trim().to_string();
-            }
-            "--mcp-token" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--mcp-token expects a token");
-                };
-                mcp_token = Some(value.trim().to_string());
-            }
-            "--allow-origin" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--allow-origin expects an origin");
-                };
-                let value = value.trim();
-                if !value.is_empty() {
-                    allowed_origins.push(value.to_string());
-                }
-            }
-            other => anyhow::bail!("unknown mcp serve option: {other}"),
-        }
-    }
-
-    if transport == McpTransport::Http && !is_loopback_bind_host(&host) && mcp_token.is_none() {
-        anyhow::bail!("HTTP MCP on non-loopback host requires --mcp-token or KILIAX_MCP_TOKEN");
-    }
-
-    Ok(McpServeArgs {
-        transport,
-        base_url,
-        token,
-        host,
-        port,
-        path,
-        mcp_token,
-        allowed_origins,
-    })
-}
-
-fn is_loopback_bind_host(host: &str) -> bool {
-    matches!(host.trim(), "127.0.0.1" | "localhost" | "::1" | "[::1]")
-}
-
-struct McpSkillInstallArgs {
-    path: std::path::PathBuf,
-    force: bool,
-}
-
-fn parse_mcp_skill_install_args(args: &[String]) -> Result<McpSkillInstallArgs> {
-    let mut path: Option<std::path::PathBuf> = None;
-    let mut force = false;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--path" => {
-                let Some(value) = iter.next() else {
-                    anyhow::bail!("--path expects a directory");
-                };
-                path = Some(std::path::PathBuf::from(value));
-            }
-            "--force" => force = true,
-            other => anyhow::bail!("unknown mcp skill install option: {other}"),
-        }
-    }
-    let path = path.unwrap_or_else(default_kiliax_skills_root);
-    Ok(McpSkillInstallArgs { path, force })
-}
-
-fn default_kiliax_skills_root() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".kiliax")
-        .join("skills")
-}
-
-fn install_call_kiliax_skill(
-    skills_root: &std::path::Path,
-    force: bool,
-) -> Result<std::path::PathBuf> {
-    let dir = skills_root.join(CALL_KILIAX_SKILL_ID);
-    let target = dir.join("SKILL.md");
-    if target.exists() && !force {
-        anyhow::bail!(
-            "skill already exists at {}; pass --force to overwrite",
-            target.display()
-        );
-    }
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create skill dir: {}", dir.display()))?;
-    std::fs::write(&target, CALL_KILIAX_SKILL_MD)
-        .with_context(|| format!("failed to write skill file: {}", target.display()))?;
-    Ok(dir)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -414,50 +216,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if args.first().is_some_and(|a| a == "mcp") {
-        match args.get(1).map(String::as_str) {
-            Some("serve") => {
-                let serve_args = parse_mcp_serve_args(&args[2..])?;
-                let (base_url, token) = if let Some(base_url) = serve_args.base_url {
-                    (base_url, serve_args.token)
-                } else {
-                    let state = ensure_server(&workspace_root).await?;
-                    (
-                        format!("http://{}:{}", state.host, state.port),
-                        Some(state.token),
-                    )
-                };
-                let upstream = kiliax_mcp::McpServerOptions { base_url, token };
-                match serve_args.transport {
-                    McpTransport::Stdio => {
-                        kiliax_mcp::serve_stdio(upstream).await?;
-                    }
-                    McpTransport::Http => {
-                        kiliax_mcp::serve_http(kiliax_mcp::HttpServerOptions {
-                            upstream,
-                            host: serve_args.host,
-                            port: serve_args.port,
-                            path: serve_args.path,
-                            auth_token: serve_args.mcp_token,
-                            allowed_origins: serve_args.allowed_origins,
-                        })
-                        .await?;
-                    }
-                }
-            }
-            Some("skill") => match args.get(2).map(String::as_str) {
-                Some("install") => {
-                    let install_args = parse_mcp_skill_install_args(&args[3..])?;
-                    let dir = install_call_kiliax_skill(&install_args.path, install_args.force)?;
-                    println!("{}", dir.display());
-                }
-                _ => print_help(),
-            },
-            _ => print_help(),
-        }
-        return Ok(());
-    }
-
     if args.first().is_some_and(|a| a == "goal") {
         handle_goal_command(&args[1..]).await?;
         return Ok(());
@@ -469,28 +227,4 @@ async fn main() -> Result<()> {
 
     print_help();
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_call_kiliax_skill_has_required_frontmatter() {
-        assert!(CALL_KILIAX_SKILL_MD.starts_with("---\n"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("name: call-kiliax"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("description:"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("run_agent"));
-        assert!(CALL_KILIAX_SKILL_MD.contains("run_skill"));
-    }
-
-    #[test]
-    fn install_call_kiliax_skill_writes_skill_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let installed = install_call_kiliax_skill(dir.path(), false).expect("install");
-        let skill = std::fs::read_to_string(installed.join("SKILL.md")).expect("skill");
-        assert!(skill.contains("name: call-kiliax"));
-        assert!(install_call_kiliax_skill(dir.path(), false).is_err());
-        install_call_kiliax_skill(dir.path(), true).expect("force");
-    }
 }

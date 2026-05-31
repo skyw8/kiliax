@@ -5,7 +5,6 @@ version.workspace = true
 
 [dependencies]
 kiliax-core = { path = "../kiliax-core" }
-kiliax-mcp = { path = "../kiliax-mcp" }
 kiliax-server = { path = "../kiliax-server" }
 anyhow = "1"
 dirs.workspace = true
@@ -16,6 +15,3 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs"] 
 
 libc = "0.2"
 getrandom = "0.2"
-
-[dev-dependencies]
-tempfile.workspace = true

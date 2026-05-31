@@ -66,15 +66,9 @@ minimal
 
 ### crates/kiliax-cli (CLI)
 
-- CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + local/remote MCP export over stdio or Streamable HTTP (`ki mcp serve [--transport stdio|http]`) + installable Kiliax-calling skill from `skills/call-kiliax/SKILL.md` (`ki mcp skill install`) + local session goal commands: `crates/kiliax-cli/src/main.rs`
+- CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + local session goal commands: `crates/kiliax-cli/src/main.rs`
 - Server daemon control + idempotent start via bearer API/admin identity checks: `crates/kiliax-cli/src/daemon.rs`
 - Foreground server run argument parsing: `crates/kiliax-cli/src/server_run_args.rs`
-
-### crates/kiliax-mcp (MCP export adapter)
-
-- MCP server adapter that exposes kiliax as an agent service for other agents, forwarding tools/resources/prompts/completions to the running HTTP control plane over stdio and returning structured tool results: `crates/kiliax-mcp/src/lib.rs`
-- Streamable HTTP MCP transport (`/mcp` by default) with bearer auth, Origin/Accept validation, POST JSON-RPC handling, and GET/DELETE 405 fallback for clients that probe server-initiated SSE/session control: `crates/kiliax-mcp/src/http_transport.rs`
-- MCP schema definitions for tools/resources/resource templates/prompts covering capabilities, agent/session listing, session snapshots/messages, run creation/continuation/cancellation, single-skill invocation, and skills enablement: `crates/kiliax-mcp/src/protocol.rs`
 
 ### crates/kiliax-server (HTTP control plane)
 
