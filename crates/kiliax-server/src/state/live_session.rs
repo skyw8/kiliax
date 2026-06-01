@@ -2084,6 +2084,14 @@ impl LiveSession {
                     }));
                 }
             }
+            tracing::info!(
+                event = "run.auto_compact.config",
+                session_id = %self.session_id,
+                run_id = %run.id,
+                model_id = %effective.model_id,
+                auto_compact_token_limit = ?options.auto_compact_token_limit,
+                handler = options.auto_compact_handler.is_some(),
+            );
 
             if persist_user {
                 if let Some(limit) = options.auto_compact_token_limit {
