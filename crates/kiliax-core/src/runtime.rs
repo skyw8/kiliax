@@ -2,6 +2,7 @@ use tracing::Instrument;
 
 use crate::agents::{AgentKind, AgentProfile};
 
+use crate::compact::{self, AutoCompactTokenCount};
 use crate::history::{assistant_message_is_empty, sanitize_history_for_next_request};
 use crate::llm::{llm_retry_decision, LlmClient, LlmError, LlmRetryKind, LlmRetryMode};
 use crate::protocol::{
@@ -45,7 +46,18 @@ pub enum ToolErrorMode {
     FailFast,
 }
 
-#[derive(Debug, Clone)]
+#[async_trait::async_trait]
+pub trait AutoCompactHandler: Send + Sync {
+    async fn compact(
+        &self,
+        step: usize,
+        token_count: AutoCompactTokenCount,
+        limit: usize,
+        messages: &[Message],
+    ) -> Option<Vec<Message>>;
+}
+
+#[derive(Clone)]
 pub struct AgentRuntimeOptions {
     pub max_steps: usize,
     pub tool_choice: ToolChoice,
@@ -54,8 +66,29 @@ pub struct AgentRuntimeOptions {
     pub temperature: Option<f32>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub auto_compact_token_limit: Option<usize>,
+    pub auto_compact_handler: Option<std::sync::Arc<dyn AutoCompactHandler>>,
     pub retry_mode: LlmRetryMode,
     pub cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+}
+
+impl std::fmt::Debug for AgentRuntimeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentRuntimeOptions")
+            .field("max_steps", &self.max_steps)
+            .field("tool_choice", &self.tool_choice)
+            .field("parallel_tool_calls", &self.parallel_tool_calls)
+            .field("tool_error_mode", &self.tool_error_mode)
+            .field("temperature", &self.temperature)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("auto_compact_token_limit", &self.auto_compact_token_limit)
+            .field(
+                "auto_compact_handler",
+                &self.auto_compact_handler.as_ref().map(|_| "<handler>"),
+            )
+            .field("retry_mode", &self.retry_mode)
+            .field("cancel_rx", &self.cancel_rx.as_ref().map(|_| "<cancel_rx>"))
+            .finish()
+    }
 }
 
 impl Default for AgentRuntimeOptions {
@@ -68,6 +101,7 @@ impl Default for AgentRuntimeOptions {
             temperature: None,
             reasoning_effort: None,
             auto_compact_token_limit: None,
+            auto_compact_handler: None,
             retry_mode: LlmRetryMode::Run,
             cancel_rx: None,
         }
@@ -174,6 +208,7 @@ impl AgentRuntime {
         let perms = std::sync::Arc::new(profile.permissions.clone());
 
         for step in 0..options.max_steps {
+            maybe_auto_compact_before_step(&mut messages, &options, step + 1).await;
             let sanitize_report = sanitize_history_for_next_request(&mut messages);
             if sanitize_report.changed() {
                 tracing::warn!(
@@ -400,6 +435,7 @@ impl AgentRuntime {
                     );
 
                     let control: LoopControl = async {
+                        maybe_auto_compact_before_step(&mut messages, &options, step_no).await;
                         let sanitize_report = sanitize_history_for_next_request(&mut messages);
                         if sanitize_report.changed() {
                             tracing::warn!(
@@ -829,6 +865,40 @@ impl AgentRuntime {
     }
 }
 
+async fn maybe_auto_compact_before_step(
+    messages: &mut Vec<Message>,
+    options: &AgentRuntimeOptions,
+    step: usize,
+) {
+    let Some(limit) = options.auto_compact_token_limit else {
+        return;
+    };
+
+    let token_count = compact::context_tokens_for_auto_compact(messages);
+    if token_count.tokens < limit {
+        return;
+    }
+
+    let Some(handler) = options.auto_compact_handler.as_ref() else {
+        tracing::info!(
+            event = "runtime.auto_compact.threshold",
+            step = step as u64,
+            context_tokens = token_count.tokens as u64,
+            token_source = token_count.source.as_str(),
+            limit = limit as u64,
+            handler = false,
+        );
+        return;
+    };
+
+    if let Some(compacted_messages) = handler
+        .compact(step, token_count, limit, messages.as_slice())
+        .await
+    {
+        *messages = compacted_messages;
+    }
+}
+
 async fn tool_definitions_for(
     profile: &AgentProfile,
     tools: &ToolEngine,
@@ -931,8 +1001,11 @@ async fn retry_or_return(
 mod tests {
     use super::*;
     use crate::history::sanitize_history_for_next_request as sanitize_tool_call_history;
+    use crate::protocol::TokenUsage;
     use crate::protocol::UserMessageContent;
     use crate::protocol::{ChatStreamChunk, ProviderMessageMetadata, ToolCallDelta};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn sanitize_tool_call_history_reorders_tool_messages() {
@@ -1171,6 +1244,76 @@ agents:
         let options = AgentRuntimeOptions::from_config_for_model(&profile, &config, Some("test/m"));
 
         assert_eq!(options.auto_compact_token_limit, Some(4000));
+    }
+
+    struct TestCompactHandler {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl AutoCompactHandler for TestCompactHandler {
+        async fn compact(
+            &self,
+            step: usize,
+            token_count: AutoCompactTokenCount,
+            limit: usize,
+            messages: &[Message],
+        ) -> Option<Vec<Message>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(step, 2);
+            assert_eq!(token_count.tokens, 20);
+            assert_eq!(limit, 10);
+            assert_eq!(messages.len(), 2);
+            Some(vec![Message::User {
+                content: UserMessageContent::Text("compacted".to_string()),
+                hidden: false,
+            }])
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn auto_compact_before_step_replaces_messages_from_handler() {
+        let handler = Arc::new(TestCompactHandler {
+            calls: AtomicUsize::new(0),
+        });
+        let mut options = AgentRuntimeOptions {
+            auto_compact_token_limit: Some(10),
+            auto_compact_handler: Some(handler.clone()),
+            ..AgentRuntimeOptions::default()
+        };
+        let mut messages = vec![
+            Message::User {
+                content: UserMessageContent::Text("hi".to_string()),
+                hidden: false,
+            },
+            Message::Assistant {
+                content: Some("hello".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: Some(TokenUsage {
+                    prompt_tokens: 20,
+                    completion_tokens: 1,
+                    total_tokens: 21,
+                    cached_tokens: None,
+                }),
+                provider_metadata: None,
+            },
+        ];
+
+        maybe_auto_compact_before_step(&mut messages, &options, 2).await;
+
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(messages.len(), 1);
+        match &messages[0] {
+            Message::User { content, .. } => {
+                assert_eq!(content, &UserMessageContent::Text("compacted".to_string()));
+            }
+            other => panic!("expected compacted user message, got {other:?}"),
+        }
+
+        options.auto_compact_token_limit = Some(100);
+        maybe_auto_compact_before_step(&mut messages, &options, 3).await;
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]

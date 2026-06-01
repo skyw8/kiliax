@@ -11,7 +11,9 @@ use kiliax_core::agents::{AgentProfile, AgentToolset};
 use kiliax_core::compact;
 use kiliax_core::config::Config;
 use kiliax_core::protocol::{Message as CoreMessage, UserContentPart, UserMessageContent};
-use kiliax_core::runtime::{AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions};
+use kiliax_core::runtime::{
+    AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions, AutoCompactHandler,
+};
 use kiliax_core::session::{FileSessionStore, SessionId, SessionMcpServerSetting, SessionState};
 use kiliax_core::session::{SessionGoal, SessionGoalStatus};
 use kiliax_core::tools::builtin::multi_agents as core_ma;
@@ -83,6 +85,74 @@ struct QueuedRun {
 enum EventPersistence {
     Durable,
     Ephemeral,
+}
+
+struct RunAutoCompactHandler {
+    live: std::sync::Weak<LiveSession>,
+    run_id: String,
+    base_settings: domain::SessionSettings,
+    effective: domain::SessionSettings,
+    profile: AgentProfile,
+    tools_for_run: ToolEngine,
+    llm: kiliax_core::llm::LlmClient,
+}
+
+#[async_trait::async_trait]
+impl AutoCompactHandler for RunAutoCompactHandler {
+    async fn compact(
+        &self,
+        step: usize,
+        token_count: compact::AutoCompactTokenCount,
+        limit: usize,
+        _messages: &[CoreMessage],
+    ) -> Option<Vec<CoreMessage>> {
+        let live = self.live.upgrade()?;
+        tracing::info!(
+            event = "run.auto_compact.triggered",
+            session_id = %live.session_id,
+            run_id = %self.run_id,
+            step = step as u64,
+            context_tokens = token_count.tokens as u64,
+            token_source = token_count.source.as_str(),
+            limit = limit as u64,
+        );
+
+        if let Err(err) = live
+            .compact_session_history(
+                &self.base_settings,
+                &self.effective,
+                &self.profile,
+                &self.tools_for_run,
+                &self.llm,
+            )
+            .await
+        {
+            tracing::warn!(
+                event = "run.auto_compact.failed",
+                session_id = %live.session_id,
+                run_id = %self.run_id,
+                step = step as u64,
+                error = %err,
+            );
+            return None;
+        }
+
+        if let Err(err) = live
+            .emit_compaction_reset_event(&self.run_id, Some(step), token_count, limit)
+            .await
+        {
+            tracing::warn!(
+                event = "run.auto_compact.reset_event_failed",
+                session_id = %live.session_id,
+                run_id = %self.run_id,
+                step = step as u64,
+                error = %err,
+            );
+        }
+
+        let messages = live.session.lock().await.messages.clone();
+        Some(messages)
+    }
 }
 
 fn user_content_has_input(content: &UserMessageContent) -> bool {
@@ -1162,6 +1232,31 @@ impl LiveSession {
         Ok(())
     }
 
+    async fn emit_compaction_reset_event(
+        &self,
+        run_id: &str,
+        step: Option<usize>,
+        token_count: compact::AutoCompactTokenCount,
+        limit: usize,
+    ) -> Result<(), ApiError> {
+        *self.stream_snapshot.lock().await = None;
+        self.emit_event(domain::Event {
+            event_id: self.alloc_event_id(),
+            ts: now_rfc3339(),
+            session_id: self.session_id.to_string(),
+            run_id: Some(run_id.to_string()),
+            event_type: "session_messages_reset".to_string(),
+            data: serde_json::json!({
+                "reason": "auto_compact",
+                "step": step,
+                "context_tokens": token_count.tokens,
+                "token_source": token_count.source.as_str(),
+                "limit": limit,
+            }),
+        })
+        .await
+    }
+
     pub async fn enqueue_run(
         &self,
         runs_dir: &Path,
@@ -1976,6 +2071,20 @@ impl LiveSession {
             };
             let llm = llm.with_prompt_cache_key(prompt_cache_key);
 
+            if options.auto_compact_token_limit.is_some() {
+                if let Some(live) = self.self_weak.get().and_then(std::sync::Weak::upgrade) {
+                    options.auto_compact_handler = Some(Arc::new(RunAutoCompactHandler {
+                        live: Arc::downgrade(&live),
+                        run_id: run.id.clone(),
+                        base_settings: base_settings.clone(),
+                        effective: effective.clone(),
+                        profile: profile.clone(),
+                        tools_for_run: tools_for_run.clone(),
+                        llm: llm.clone(),
+                    }));
+                }
+            }
+
             if persist_user {
                 if let Some(limit) = options.auto_compact_token_limit {
                     let token_count = {
@@ -2003,6 +2112,16 @@ impl LiveSession {
                         {
                             tracing::warn!(
                                 event = "run.auto_compact.failed",
+                                session_id = %self.session_id,
+                                run_id = %run.id,
+                                error = %err,
+                            );
+                        } else if let Err(err) = self
+                            .emit_compaction_reset_event(&run.id, None, token_count, limit)
+                            .await
+                        {
+                            tracing::warn!(
+                                event = "run.auto_compact.reset_event_failed",
                                 session_id = %self.session_id,
                                 run_id = %run.id,
                                 error = %err,
