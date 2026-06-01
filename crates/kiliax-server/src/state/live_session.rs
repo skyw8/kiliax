@@ -1978,16 +1978,17 @@ impl LiveSession {
 
             if persist_user {
                 if let Some(limit) = options.auto_compact_token_limit {
-                    let estimated = {
+                    let token_count = {
                         let session = self.session.lock().await;
-                        compact::estimate_context_tokens(&session.messages)
+                        compact::context_tokens_for_auto_compact(&session.messages)
                     };
-                    if estimated >= limit {
+                    if token_count.tokens >= limit {
                         tracing::info!(
                             event = "run.auto_compact.triggered",
                             session_id = %self.session_id,
                             run_id = %run.id,
-                            estimated_tokens = estimated as u64,
+                            context_tokens = token_count.tokens as u64,
+                            token_source = token_count.source.as_str(),
                             limit = limit as u64,
                         );
                         if let Err(err) = self

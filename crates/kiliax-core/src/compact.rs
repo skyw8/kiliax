@@ -15,6 +15,27 @@ const APPROX_BYTES_PER_TOKEN: usize = 4;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 const COMPACT_TOOL_OUTPUT_MAX_TOKENS: usize = 4_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoCompactTokenSource {
+    ProviderUsage,
+    Estimate,
+}
+
+impl AutoCompactTokenSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderUsage => "provider_usage",
+            Self::Estimate => "estimate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoCompactTokenCount {
+    pub tokens: usize,
+    pub source: AutoCompactTokenSource,
+}
+
 pub fn approx_token_count(text: &str) -> usize {
     let len = text.len();
     len.saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1)) / APPROX_BYTES_PER_TOKEN
@@ -81,6 +102,25 @@ pub fn estimate_context_tokens(messages: &[Message]) -> usize {
         }
     }
     total
+}
+
+pub fn context_tokens_for_auto_compact(messages: &[Message]) -> AutoCompactTokenCount {
+    for msg in messages.iter().rev() {
+        if let Message::Assistant {
+            usage: Some(usage), ..
+        } = msg
+        {
+            return AutoCompactTokenCount {
+                tokens: usage.prompt_tokens as usize,
+                source: AutoCompactTokenSource::ProviderUsage,
+            };
+        }
+    }
+
+    AutoCompactTokenCount {
+        tokens: estimate_context_tokens(messages),
+        source: AutoCompactTokenSource::Estimate,
+    }
 }
 
 pub fn is_summary_message(text: &str) -> bool {
@@ -354,7 +394,7 @@ fn remove_matching_assistant_tool_call(messages: &mut Vec<Message>, tool_call_id
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::ToolCall;
+    use crate::protocol::{TokenUsage, ToolCall};
 
     #[test]
     fn detects_summary_messages() {
@@ -389,11 +429,82 @@ mod tests {
         }
     }
 
+    fn assistant_with_usage(prompt_tokens: u32, cached_tokens: Option<u32>) -> Message {
+        Message::Assistant {
+            content: Some("done".to_string()),
+            reasoning_content: None,
+            tool_calls: Vec::new(),
+            usage: Some(TokenUsage {
+                prompt_tokens,
+                completion_tokens: 7,
+                total_tokens: prompt_tokens + 7,
+                cached_tokens,
+            }),
+            provider_metadata: None,
+        }
+    }
+
     fn tool(id: &str, content: &str) -> Message {
         Message::Tool {
             tool_call_id: id.to_string(),
             content: content.to_string(),
         }
+    }
+
+    #[test]
+    fn auto_compact_tokens_prefer_provider_prompt_tokens() {
+        let messages = vec![
+            Message::User {
+                content: UserMessageContent::Text("short".to_string()),
+                hidden: false,
+            },
+            assistant_with_usage(410_426, Some(410_368)),
+        ];
+
+        let count = context_tokens_for_auto_compact(&messages);
+
+        assert_eq!(
+            count,
+            AutoCompactTokenCount {
+                tokens: 410_426,
+                source: AutoCompactTokenSource::ProviderUsage,
+            }
+        );
+    }
+
+    #[test]
+    fn auto_compact_tokens_use_most_recent_provider_usage() {
+        let messages = vec![
+            assistant_with_usage(10, None),
+            Message::User {
+                content: UserMessageContent::Text("next".to_string()),
+                hidden: false,
+            },
+            assistant_with_usage(20, None),
+        ];
+
+        let count = context_tokens_for_auto_compact(&messages);
+
+        assert_eq!(count.tokens, 20);
+        assert_eq!(count.source, AutoCompactTokenSource::ProviderUsage);
+    }
+
+    #[test]
+    fn auto_compact_tokens_fall_back_to_estimate_without_usage() {
+        let messages = vec![Message::User {
+            content: UserMessageContent::Text("12345".to_string()),
+            hidden: false,
+        }];
+
+        let count = context_tokens_for_auto_compact(&messages);
+
+        assert_eq!(
+            count,
+            AutoCompactTokenCount {
+                tokens: estimate_context_tokens(&messages),
+                source: AutoCompactTokenSource::Estimate,
+            }
+        );
     }
 
     #[test]

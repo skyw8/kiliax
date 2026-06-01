@@ -26,7 +26,7 @@ minimal
 ### crates/kiliax-core (core library)
 
 - Agents + explicit subagent availability + tool permissions + built-in master/explore + goal/multi-agent toolsets: `crates/kiliax-core/src/agents/`
-- Context compaction (auto + `/compact`, tool call/result normalization + tool output truncation): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
+- Context compaction (auto + `/compact`, provider-usage-first auto token threshold with estimate fallback, tool call/result normalization + tool output truncation): `crates/kiliax-core/src/compact.rs` (prompts: `crates/kiliax-core/prompts/compact/`)
 - Config + model/agent defaults + provider-model max-output/auto-compact/temperature/reasoning-effort limits + multi-agent limits + invalid default_model fallback + provider API routing: `crates/kiliax-core/src/config.rs`
 - Shared path validation (tilde expansion including Windows `~\` paths, absolute/dir checks): `crates/kiliax-core/src/paths.rs`
 - Protocol compatibility re-exports (messages/tool-calls/usage + base64 image/PDF content parts): `crates/kiliax-core/src/protocol.rs`
