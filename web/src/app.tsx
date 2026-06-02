@@ -1006,6 +1006,11 @@ export default function App() {
       return;
     }
 
+    if (type === "session_context_compacted") {
+      await refreshSessionsIfStale(0);
+      return;
+    }
+
     if (type === "session_messages_reset") {
       if (selectedId) {
         await fetchSession(selectedId);

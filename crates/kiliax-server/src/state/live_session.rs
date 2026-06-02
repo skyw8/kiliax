@@ -14,7 +14,9 @@ use kiliax_core::protocol::{Message as CoreMessage, UserContentPart, UserMessage
 use kiliax_core::runtime::{
     AgentEvent, AgentRuntime, AgentRuntimeError, AgentRuntimeOptions, AutoCompactHandler,
 };
-use kiliax_core::session::{FileSessionStore, SessionId, SessionMcpServerSetting, SessionState};
+use kiliax_core::session::{
+    ContextCheckpoint, FileSessionStore, SessionId, SessionMcpServerSetting, SessionState,
+};
 use kiliax_core::session::{SessionGoal, SessionGoalStatus};
 use kiliax_core::tools::builtin::multi_agents as core_ma;
 use kiliax_core::tools::{Permissions, ShellPermissions};
@@ -90,7 +92,6 @@ enum EventPersistence {
 struct RunAutoCompactHandler {
     live: std::sync::Weak<LiveSession>,
     run_id: String,
-    base_settings: domain::SessionSettings,
     effective: domain::SessionSettings,
     profile: AgentProfile,
     tools_for_run: ToolEngine,
@@ -104,7 +105,7 @@ impl AutoCompactHandler for RunAutoCompactHandler {
         step: usize,
         token_count: compact::AutoCompactTokenCount,
         limit: usize,
-        _messages: &[CoreMessage],
+        messages: &[CoreMessage],
     ) -> Option<Vec<CoreMessage>> {
         let live = self.live.upgrade()?;
         tracing::info!(
@@ -117,32 +118,36 @@ impl AutoCompactHandler for RunAutoCompactHandler {
             limit = limit as u64,
         );
 
-        if let Err(err) = live
-            .compact_session_history(
-                &self.base_settings,
+        let compacted_messages = match live
+            .compact_session_context(
                 &self.effective,
                 &self.profile,
                 &self.tools_for_run,
                 &self.llm,
+                messages,
+                "auto_compact",
             )
             .await
         {
-            tracing::warn!(
-                event = "run.auto_compact.failed",
-                session_id = %live.session_id,
-                run_id = %self.run_id,
-                step = step as u64,
-                error = %err,
-            );
-            return None;
-        }
+            Ok(messages) => messages,
+            Err(err) => {
+                tracing::warn!(
+                    event = "run.auto_compact.failed",
+                    session_id = %live.session_id,
+                    run_id = %self.run_id,
+                    step = step as u64,
+                    error = %err,
+                );
+                return None;
+            }
+        };
 
         if let Err(err) = live
-            .emit_compaction_reset_event(&self.run_id, Some(step), token_count, limit)
+            .emit_context_compacted_event(&self.run_id, Some(step), token_count, limit)
             .await
         {
             tracing::warn!(
-                event = "run.auto_compact.reset_event_failed",
+                event = "run.auto_compact.context_event_failed",
                 session_id = %live.session_id,
                 run_id = %self.run_id,
                 step = step as u64,
@@ -150,8 +155,7 @@ impl AutoCompactHandler for RunAutoCompactHandler {
             );
         }
 
-        let messages = live.session.lock().await.messages.clone();
-        Some(messages)
+        Some(compacted_messages)
     }
 }
 
@@ -172,6 +176,57 @@ fn user_content_trace_text(content: &UserMessageContent) -> String {
     } else {
         content.display_text()
     }
+}
+
+fn is_preamble_message(message: &CoreMessage) -> bool {
+    matches!(
+        message,
+        CoreMessage::System { .. } | CoreMessage::Developer { .. }
+    )
+}
+
+fn current_preamble(messages: &[CoreMessage]) -> Vec<CoreMessage> {
+    messages
+        .iter()
+        .take_while(|message| is_preamble_message(message))
+        .cloned()
+        .collect()
+}
+
+fn build_model_context_messages(
+    transcript_messages: &[CoreMessage],
+    message_ids: &[u64],
+    checkpoint: Option<&ContextCheckpoint>,
+) -> Vec<CoreMessage> {
+    build_model_context_messages_with_preamble(transcript_messages, message_ids, checkpoint, None)
+}
+
+fn build_model_context_messages_with_preamble(
+    transcript_messages: &[CoreMessage],
+    message_ids: &[u64],
+    checkpoint: Option<&ContextCheckpoint>,
+    override_preamble: Option<Vec<CoreMessage>>,
+) -> Vec<CoreMessage> {
+    let Some(checkpoint) = checkpoint else {
+        let mut messages = transcript_messages.to_vec();
+        if let Some(preamble) = override_preamble {
+            replace_preamble(&mut messages, preamble);
+        }
+        return messages;
+    };
+
+    let mut messages = override_preamble.unwrap_or_else(|| current_preamble(transcript_messages));
+    messages.extend(checkpoint.messages.clone());
+    messages.extend(
+        transcript_messages
+            .iter()
+            .zip(message_ids.iter())
+            .filter(|(message, message_id)| {
+                **message_id > checkpoint.base_message_id && !is_preamble_message(message)
+            })
+            .map(|(message, _)| message.clone()),
+    );
+    messages
 }
 
 fn append_text_to_user_content(content: UserMessageContent, text: String) -> UserMessageContent {
@@ -1155,31 +1210,23 @@ impl LiveSession {
         Ok(())
     }
 
-    async fn compact_session_history(
+    async fn compact_session_context(
         &self,
-        base_settings: &domain::SessionSettings,
         effective: &domain::SessionSettings,
         profile: &AgentProfile,
         tools_for_run: &ToolEngine,
         llm: &kiliax_core::llm::LlmClient,
-    ) -> Result<(), ApiError> {
-        let (messages_snapshot, message_ids_snapshot) = {
-            let session = self.session.lock().await;
-            (session.messages.clone(), session.message_ids.clone())
-        };
-
-        let summary_suffix = compact::run_compaction(llm, &messages_snapshot)
+        source_messages: &[CoreMessage],
+        reason: &str,
+    ) -> Result<Vec<CoreMessage>, ApiError> {
+        let summary_suffix = compact::run_compaction(llm, source_messages)
             .await
             .map_err(ApiError::internal_error)?;
-        let user_messages = compact::collect_real_user_texts(&messages_snapshot);
+        let user_messages = compact::collect_real_user_texts(source_messages);
         let compacted_history =
             compact::build_compacted_user_history(&user_messages, &summary_suffix);
 
-        let cutoff_id = compact::find_preamble_cutoff_id(&messages_snapshot, &message_ids_snapshot)
-            .or_else(|| message_ids_snapshot.first().copied())
-            .unwrap_or(0);
-
-        let skills_config = skills_config_from_settings(&base_settings.skills);
+        let skills_config = skills_config_from_settings(&effective.skills);
         let project_prompt =
             kiliax_core::prompt::capture_project_prompt(Some(effective.workspace_root.as_path()))
                 .or_else(|| Some(String::new()));
@@ -1193,35 +1240,44 @@ impl LiveSession {
         )
         .await;
 
-        {
+        let context_messages = {
             let mut session = self.session.lock().await;
-            if cutoff_id > 0 {
-                self.store
-                    .truncate_after(&mut session, cutoff_id)
-                    .await
-                    .map_err(map_session_err)?;
-            }
-
             let mut last_seq = session.meta.last_seq;
             let mut messages = std::mem::take(&mut session.messages);
             let mut message_ids = std::mem::take(&mut session.message_ids);
-            replace_preamble_with_ids(&mut messages, &mut message_ids, &mut last_seq, new_preamble);
+            replace_preamble_with_ids(
+                &mut messages,
+                &mut message_ids,
+                &mut last_seq,
+                new_preamble.clone(),
+            );
             session.messages = messages;
             session.message_ids = message_ids;
             session.meta.project_prompt = project_prompt;
             session.meta.last_seq = last_seq;
-            for msg in compacted_history {
-                self.store
-                    .record_message(&mut session, msg)
-                    .await
-                    .map_err(map_session_err)?;
-            }
 
+            let base_message_id = session.message_ids.last().copied().unwrap_or(0);
+            let checkpoint = ContextCheckpoint {
+                base_message_id,
+                messages: compacted_history,
+                reason: reason.to_string(),
+            };
+            self.store
+                .record_context_checkpoint(&mut session, checkpoint)
+                .await
+                .map_err(map_session_err)?;
             self.store
                 .checkpoint(&mut session)
                 .await
                 .map_err(map_session_err)?;
-        }
+
+            build_model_context_messages_with_preamble(
+                &session.messages,
+                &session.message_ids,
+                session.context_checkpoint.as_ref(),
+                Some(new_preamble),
+            )
+        };
 
         tracing::info!(
             event = "session.compacted",
@@ -1229,23 +1285,22 @@ impl LiveSession {
             model_id = %effective.model_id,
         );
 
-        Ok(())
+        Ok(context_messages)
     }
 
-    async fn emit_compaction_reset_event(
+    async fn emit_context_compacted_event(
         &self,
         run_id: &str,
         step: Option<usize>,
         token_count: compact::AutoCompactTokenCount,
         limit: usize,
     ) -> Result<(), ApiError> {
-        *self.stream_snapshot.lock().await = None;
         self.emit_event(domain::Event {
             event_id: self.alloc_event_id(),
             ts: now_rfc3339(),
             session_id: self.session_id.to_string(),
             run_id: Some(run_id.to_string()),
-            event_type: "session_messages_reset".to_string(),
+            event_type: "session_context_compacted".to_string(),
             data: serde_json::json!({
                 "reason": "auto_compact",
                 "step": step,
@@ -2076,7 +2131,6 @@ impl LiveSession {
                     options.auto_compact_handler = Some(Arc::new(RunAutoCompactHandler {
                         live: Arc::downgrade(&live),
                         run_id: run.id.clone(),
-                        base_settings: base_settings.clone(),
                         effective: effective.clone(),
                         profile: profile.clone(),
                         tools_for_run: tools_for_run.clone(),
@@ -2095,10 +2149,15 @@ impl LiveSession {
 
             if persist_user {
                 if let Some(limit) = options.auto_compact_token_limit {
-                    let token_count = {
+                    let context_messages = {
                         let session = self.session.lock().await;
-                        compact::context_tokens_for_auto_compact(&session.messages)
+                        build_model_context_messages(
+                            &session.messages,
+                            &session.message_ids,
+                            session.context_checkpoint.as_ref(),
+                        )
                     };
+                    let token_count = compact::context_tokens_for_auto_compact(&context_messages);
                     if token_count.tokens >= limit {
                         tracing::info!(
                             event = "run.auto_compact.triggered",
@@ -2109,12 +2168,13 @@ impl LiveSession {
                             limit = limit as u64,
                         );
                         if let Err(err) = self
-                            .compact_session_history(
-                                &base_settings,
+                            .compact_session_context(
                                 &effective,
                                 &profile,
                                 &tools_for_run,
                                 &llm,
+                                &context_messages,
+                                "auto_compact",
                             )
                             .await
                         {
@@ -2125,11 +2185,11 @@ impl LiveSession {
                                 error = %err,
                             );
                         } else if let Err(err) = self
-                            .emit_compaction_reset_event(&run.id, None, token_count, limit)
+                            .emit_context_compacted_event(&run.id, None, token_count, limit)
                             .await
                         {
                             tracing::warn!(
-                                event = "run.auto_compact.reset_event_failed",
+                                event = "run.auto_compact.context_event_failed",
                                 session_id = %self.session_id,
                                 run_id = %run.id,
                                 error = %err,
@@ -2165,9 +2225,8 @@ impl LiveSession {
 
             let runtime = AgentRuntime::new(llm, tools_for_run.clone());
 
-            let mut messages = { self.session.lock().await.messages.clone() };
             let goal_time_started = std::time::Instant::now();
-            if effective.agent != base_settings.agent
+            let override_preamble = if effective.agent != base_settings.agent
                 || effective.model_id != base_settings.model_id
                 || effective.skills.default_enable != base_settings.skills.default_enable
                 || effective.skills.overrides != base_settings.skills.overrides
@@ -2177,20 +2236,33 @@ impl LiveSession {
                 || effective.custom_tools.overrides != base_settings.custom_tools.overrides
             {
                 let skills_config = skills_config_from_settings(&effective.skills);
-                let preamble = build_preamble(
-                    &profile,
-                    &effective.model_id,
-                    &workspace_root,
-                    {
-                        let session = self.session.lock().await;
-                        session.meta.project_prompt.clone()
-                    },
-                    &tools_for_run,
-                    &skills_config,
+                let project_prompt = {
+                    let session = self.session.lock().await;
+                    session.meta.project_prompt.clone()
+                };
+                Some(
+                    build_preamble(
+                        &profile,
+                        &effective.model_id,
+                        &workspace_root,
+                        project_prompt,
+                        &tools_for_run,
+                        &skills_config,
+                    )
+                    .await,
                 )
-                .await;
-                replace_preamble(&mut messages, preamble);
-            }
+            } else {
+                None
+            };
+            let messages = {
+                let session = self.session.lock().await;
+                build_model_context_messages_with_preamble(
+                    &session.messages,
+                    &session.message_ids,
+                    session.context_checkpoint.as_ref(),
+                    override_preamble,
+                )
+            };
 
             let stream = runtime
                 .run_stream(&profile, messages, options)
@@ -3013,6 +3085,62 @@ mod tests {
                 enable: false
             }]
         );
+    }
+
+    #[test]
+    fn checkpoint_context_keeps_current_preamble_and_tail_messages() {
+        let transcript = vec![
+            CoreMessage::System {
+                content: "old preamble".to_string(),
+            },
+            CoreMessage::User {
+                content: UserMessageContent::Text("old user".to_string()),
+                hidden: false,
+            },
+            CoreMessage::Assistant {
+                content: Some("old assistant".to_string()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            },
+            CoreMessage::User {
+                content: UserMessageContent::Text("new user".to_string()),
+                hidden: false,
+            },
+        ];
+        let checkpoint = ContextCheckpoint {
+            base_message_id: 3,
+            messages: vec![CoreMessage::User {
+                content: UserMessageContent::Text(kiliax_core::compact::summary_text("summary")),
+                hidden: false,
+            }],
+            reason: "auto_compact".to_string(),
+        };
+
+        let context = build_model_context_messages_with_preamble(
+            &transcript,
+            &[1, 2, 3, 4],
+            Some(&checkpoint),
+            Some(vec![CoreMessage::System {
+                content: "current preamble".to_string(),
+            }]),
+        );
+
+        assert_eq!(context.len(), 3);
+        assert!(matches!(
+            &context[0],
+            CoreMessage::System { content } if content == "current preamble"
+        ));
+        assert!(matches!(
+            &context[1],
+            CoreMessage::User { content: UserMessageContent::Text(text), .. }
+                if kiliax_core::compact::is_summary_message(text)
+        ));
+        assert!(matches!(
+            &context[2],
+            CoreMessage::User { content: UserMessageContent::Text(text), .. } if text == "new user"
+        ));
     }
 
     #[tokio::test]

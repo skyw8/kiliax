@@ -192,12 +192,21 @@ pub struct SessionMcpServerSetting {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextCheckpoint {
+    pub base_message_id: u64,
+    pub messages: Vec<Message>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionSnapshot {
     pub schema_version: u32,
     pub meta: SessionMeta,
     pub messages: Vec<Message>,
     #[serde(default)]
     pub message_ids: Vec<u64>,
+    #[serde(default)]
+    pub context_checkpoint: Option<ContextCheckpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -221,6 +230,9 @@ pub enum SessionEvent {
     },
     TruncateAfter {
         message_id: u64,
+    },
+    ContextCheckpoint {
+        checkpoint: ContextCheckpoint,
     },
     Finish {
         finish_reason: Option<String>,
@@ -246,6 +258,7 @@ pub struct SessionState {
     pub meta: SessionMeta,
     pub messages: Vec<Message>,
     pub message_ids: Vec<u64>,
+    pub context_checkpoint: Option<ContextCheckpoint>,
 }
 
 impl SessionState {
@@ -410,11 +423,17 @@ impl FileSessionStore {
             meta: meta.clone(),
             messages: initial_messages,
             message_ids,
+            context_checkpoint: None,
         };
 
         self.write_meta(&meta).await?;
-        self.write_snapshot(&meta, &state.messages, &state.message_ids)
-            .await?;
+        self.write_snapshot(
+            &meta,
+            &state.messages,
+            &state.message_ids,
+            state.context_checkpoint.as_ref(),
+        )
+        .await?;
 
         Ok(state)
     }
@@ -427,6 +446,7 @@ impl FileSessionStore {
             meta: snapshot.meta,
             messages: snapshot.messages,
             message_ids: snapshot.message_ids,
+            context_checkpoint: snapshot.context_checkpoint,
         };
         state.meta.schema_version = SESSION_SCHEMA_VERSION;
         if state.message_ids.len() != state.messages.len() {
@@ -438,6 +458,7 @@ impl FileSessionStore {
                 meta: state.meta.clone(),
                 messages: Vec::new(),
                 message_ids: Vec::new(),
+                context_checkpoint: None,
             };
             rebuilt.meta.schema_version = SESSION_SCHEMA_VERSION;
             rebuilt.meta.last_seq = 0;
@@ -662,6 +683,15 @@ impl FileSessionStore {
             .await
     }
 
+    pub async fn record_context_checkpoint(
+        &self,
+        state: &mut SessionState,
+        checkpoint: ContextCheckpoint,
+    ) -> Result<(), SessionError> {
+        self.record_event(state, SessionEvent::ContextCheckpoint { checkpoint })
+            .await
+    }
+
     pub async fn record_finish(
         &self,
         state: &mut SessionState,
@@ -751,8 +781,13 @@ impl FileSessionStore {
     pub async fn checkpoint(&self, state: &mut SessionState) -> Result<(), SessionError> {
         state.meta.last_snapshot_seq = state.meta.last_seq;
         state.meta.schema_version = SESSION_SCHEMA_VERSION;
-        self.write_snapshot(&state.meta, &state.messages, &state.message_ids)
-            .await?;
+        self.write_snapshot(
+            &state.meta,
+            &state.messages,
+            &state.message_ids,
+            state.context_checkpoint.as_ref(),
+        )
+        .await?;
         self.write_meta(&state.meta).await?;
         Ok(())
     }
@@ -873,6 +908,7 @@ impl FileSessionStore {
         meta: &SessionMeta,
         messages: &[Message],
         message_ids: &[u64],
+        context_checkpoint: Option<&ContextCheckpoint>,
     ) -> Result<(), SessionError> {
         let path = self.snapshot_path(&meta.id);
         let snapshot = SessionSnapshot {
@@ -880,6 +916,7 @@ impl FileSessionStore {
             meta: meta.clone(),
             messages: messages.to_vec(),
             message_ids: message_ids.to_vec(),
+            context_checkpoint: context_checkpoint.cloned(),
         };
         write_json_atomic(&path, &snapshot).await
     }
@@ -928,6 +965,7 @@ fn handle_message_page_line(
                     .unwrap_or(message_id),
             );
         }
+        SessionEvent::ContextCheckpoint { .. } => {}
         SessionEvent::MessageEdit {
             message_id,
             message,
@@ -1040,7 +1078,17 @@ fn apply_event(state: &mut SessionState, event: SessionEvent, ts_ms: u64, seq: u
                 state.meta.message_count = state.messages.len();
                 state.meta.last_finish_reason = None;
                 state.meta.last_error = None;
+                if state
+                    .context_checkpoint
+                    .as_ref()
+                    .is_some_and(|checkpoint| checkpoint.base_message_id >= message_id)
+                {
+                    state.context_checkpoint = None;
+                }
             }
+        }
+        SessionEvent::ContextCheckpoint { checkpoint } => {
+            state.context_checkpoint = Some(checkpoint);
         }
         SessionEvent::Finish { finish_reason } => {
             state.meta.last_finish_reason = finish_reason;
@@ -1336,6 +1384,82 @@ mod tests {
             Message::User { content, hidden: false }
                 if content.first_text() == Some("one edited")
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn context_checkpoint_persists_without_hiding_visible_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(tmp.path()).with_checkpoint_every(1000);
+
+        let mut state = store
+            .create(
+                "general",
+                Some("p/m".to_string()),
+                None,
+                None,
+                Vec::new(),
+                vec![Message::User {
+                    content: crate::protocol::UserMessageContent::Text("one".to_string()),
+                    hidden: false,
+                }],
+            )
+            .await
+            .unwrap();
+        store
+            .record_message(
+                &mut state,
+                Message::Assistant {
+                    content: Some("two".to_string()),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        store
+            .record_context_checkpoint(
+                &mut state,
+                ContextCheckpoint {
+                    base_message_id: 2,
+                    messages: vec![Message::User {
+                        content: crate::protocol::UserMessageContent::Text(
+                            crate::compact::summary_text("summary"),
+                        ),
+                        hidden: false,
+                    }],
+                    reason: "auto_compact".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        store.checkpoint(&mut state).await.unwrap();
+
+        let loaded = store.load(state.id()).await.unwrap();
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.message_ids, vec![1, 2]);
+        assert_eq!(
+            loaded
+                .context_checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.base_message_id),
+            Some(2)
+        );
+
+        let page = store.read_message_page(state.id(), 10, None).await.unwrap();
+        assert_eq!(
+            page.items.iter().map(|entry| entry.seq).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let mut loaded = loaded;
+        store.truncate_after(&mut loaded, 1).await.unwrap();
+        store.checkpoint(&mut loaded).await.unwrap();
+        let truncated = store.load(loaded.id()).await.unwrap();
+        assert_eq!(truncated.message_ids, vec![1]);
+        assert!(truncated.context_checkpoint.is_none());
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -5,8 +5,7 @@ use axum::http::{header, Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
 use kiliax_core::config::{Config, ModelConfig, ProviderApi, ProviderConfig};
 use kiliax_core::protocol::{Message, TokenUsage, UserMessageContent};
-use kiliax_core::session::FileSessionStore;
-use kiliax_core::session::SessionId;
+use kiliax_core::session::{ContextCheckpoint, FileSessionStore, SessionId};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 
@@ -615,6 +614,23 @@ async fn fork_session_inherits_prompt_cache_key() {
         .await
         .expect("record assistant");
     let assistant_message_id = source.meta.last_seq.to_string();
+    let base_message_id = source.meta.last_seq;
+    store
+        .record_context_checkpoint(
+            &mut source,
+            ContextCheckpoint {
+                base_message_id,
+                messages: vec![Message::User {
+                    content: UserMessageContent::Text(kiliax_core::compact::summary_text(
+                        "summary",
+                    )),
+                    hidden: false,
+                }],
+                reason: "auto_compact".to_string(),
+            },
+        )
+        .await
+        .expect("record checkpoint");
 
     let out = state
         .fork_session(
@@ -630,10 +646,12 @@ async fn fork_session_inherits_prompt_cache_key() {
     let forked_id = SessionId::parse(&out.session.summary.id).expect("forked id");
     let forked = store.load(&forked_id).await.expect("load forked");
     assert_eq!(forked.meta.prompt_cache_key, expected);
+    assert!(forked.context_checkpoint.is_none());
 
     // Ensure the original key didn't change.
     source = store.load(source.id()).await.expect("reload source");
     assert_eq!(source.meta.prompt_cache_key, expected);
+    assert!(source.context_checkpoint.is_some());
 }
 
 #[tokio::test]
