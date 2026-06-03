@@ -35,8 +35,8 @@ minimal
 - Provider-neutral message history sanitization + request-safety helpers: `crates/kiliax-core/src/history.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
 - Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + available subagent descriptions + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
-- Agent runtime loop + LLM retry/backoff event emission + tool scheduling barriers + per-step auto-compact hook + thinking/body normalization + empty assistant guard: `crates/kiliax-core/src/runtime.rs`
-- Streaming step assembly (thinking/body/tool calls): `crates/kiliax-core/src/runtime/streaming.rs`
+- Agent runtime loop + LLM retry/backoff event emission + tool scheduling barriers + per-step auto-compact hook + thinking/body normalization + diagnostic empty assistant guard: `crates/kiliax-core/src/runtime.rs`
+- Streaming step assembly (thinking/body/tool calls + empty-output diagnostics): `crates/kiliax-core/src/runtime/streaming.rs`
 - Session store + snapshots + append-only events + context checkpoint persistence for compacted model context + reverse paged visible-message reads + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin registry/patch application/MCP dispatch + Cargo-version client identity/skills discovery/custom tool discovery from `~/.kiliax/tools` + JSON-RPC process runtime/goal toolset backend dispatch + multi-agent backend dispatch + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
@@ -61,7 +61,7 @@ minimal
 
 - Provider-neutral LLM facade, provider API routing, shared LLM error classification/retry policy, and structured telemetry hook/call metric payloads: `crates/kiliax-llm/src/lib.rs`, `crates/kiliax-llm/src/telemetry.rs`
 - Protocol types (messages/tool-calls/usage/stream chunks + image/PDF user content parts) + provider-safe tool-name aliasing: `crates/kiliax-llm/src/types.rs`, `crates/kiliax-llm/src/tool_names.rs`
-- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + base64 image/PDF request parts + thinking-provider `reasoning_content` compatibility + per-model temperature/reasoning_effort + Langfuse completion timing): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`
+- OpenAI-compatible Chat Completions client + BYOT compatibility (streaming/tool-calls/usage + SSE error-payload mapping + base64 image/PDF request parts + thinking-provider `reasoning_content` preservation/compatibility + per-model temperature/reasoning_effort + Langfuse completion timing): `crates/kiliax-llm/src/openai_*.rs`, `crates/kiliax-llm/src/byot.rs`, `crates/kiliax-llm/src/patches.rs`, `crates/kiliax-llm/src/api_errors.rs`
 - OpenAI Responses API provider (request conversion, base64 image/PDF input parts, SSE events, prompt cache key forwarding, DashScope session-cache header + usage fallback, function-call/reasoning item replay + function-tool aliasing + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/openai_responses.rs`
 - Anthropic Messages API provider (non-streaming + SSE/tool-use mapping + Claude/configured model max-token resolution + effort/adaptive thinking config + thinking block preservation/replay + base64 image/PDF blocks + grouped tool_result request blocks + parallel tool-use controls + Langfuse wire-request generation input/output/usage capture): `crates/kiliax-llm/src/anthropic.rs`
 

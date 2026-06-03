@@ -17,6 +17,94 @@ pub(crate) mod tool_calls;
 use streaming::{drive_stream_step, normalize_stream_step_tool_calls};
 use tool_calls::{group_tool_calls, normalize_tool_call_ids, ToolCallGroup};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssistantOutputSource {
+    Chat,
+    Stream,
+}
+
+impl std::fmt::Display for AssistantOutputSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Chat => f.write_str("chat"),
+            Self::Stream => f.write_str("stream"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantOutputDiagnostics {
+    pub source: AssistantOutputSource,
+    pub finish_reason: Option<FinishReason>,
+    pub saw_stream_chunk: bool,
+    pub content_chars: usize,
+    pub reasoning_chars: usize,
+    pub tool_call_count: usize,
+    pub tool_call_delta_count: usize,
+    pub usage_seen: bool,
+    pub provider_metadata_seen: bool,
+}
+
+impl AssistantOutputDiagnostics {
+    fn from_message(
+        source: AssistantOutputSource,
+        finish_reason: Option<FinishReason>,
+        message: &Message,
+    ) -> Self {
+        match message {
+            Message::Assistant {
+                content,
+                reasoning_content,
+                tool_calls,
+                usage,
+                provider_metadata,
+            } => Self {
+                source,
+                finish_reason,
+                saw_stream_chunk: source == AssistantOutputSource::Stream,
+                content_chars: content.as_deref().map(|s| s.chars().count()).unwrap_or(0),
+                reasoning_chars: reasoning_content
+                    .as_deref()
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0),
+                tool_call_count: tool_calls.len(),
+                tool_call_delta_count: 0,
+                usage_seen: usage.is_some(),
+                provider_metadata_seen: provider_metadata.is_some(),
+            },
+            _ => Self {
+                source,
+                finish_reason,
+                saw_stream_chunk: source == AssistantOutputSource::Stream,
+                content_chars: 0,
+                reasoning_chars: 0,
+                tool_call_count: 0,
+                tool_call_delta_count: 0,
+                usage_seen: false,
+                provider_metadata_seen: false,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for AssistantOutputDiagnostics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "source={}, finish_reason={:?}, saw_stream_chunk={}, content_chars={}, reasoning_chars={}, tool_call_count={}, tool_call_delta_count={}, usage_seen={}, provider_metadata_seen={}",
+            self.source,
+            self.finish_reason,
+            self.saw_stream_chunk,
+            self.content_chars,
+            self.reasoning_chars,
+            self.tool_call_count,
+            self.tool_call_delta_count,
+            self.usage_seen,
+            self.provider_metadata_seen
+        )
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentRuntimeError {
     #[error(transparent)]
@@ -34,8 +122,11 @@ pub enum AgentRuntimeError {
     #[error("max steps exceeded: {max_steps}")]
     MaxSteps { max_steps: usize },
 
-    #[error("empty assistant message from model at step {step}")]
-    EmptyAssistantMessage { step: usize },
+    #[error("empty assistant message from model at step {step}: {diagnostics}")]
+    EmptyAssistantMessage {
+        step: usize,
+        diagnostics: AssistantOutputDiagnostics,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,7 +328,14 @@ impl AgentRuntime {
                 _ => Vec::new(),
             };
             if assistant_message_is_empty(&assistant) {
-                return Err(AgentRuntimeError::EmptyAssistantMessage { step: step + 1 });
+                return Err(AgentRuntimeError::EmptyAssistantMessage {
+                    step: step + 1,
+                    diagnostics: AssistantOutputDiagnostics::from_message(
+                        AssistantOutputSource::Chat,
+                        resp.finish_reason.clone(),
+                        &assistant,
+                    ),
+                });
             }
             messages.push(assistant);
 
@@ -486,6 +584,7 @@ impl AgentRuntime {
                                     let _ = tx
                                         .send(Err(AgentRuntimeError::EmptyAssistantMessage {
                                             step: step_no,
+                                            diagnostics: step_out.diagnostics.clone(),
                                         }))
                                         .await;
                                     return LoopControl::Return;
@@ -1339,6 +1438,20 @@ agents:
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_empty_stream_is_llm_before_output() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+        let stream = tokio_stream::empty::<Result<ChatStreamChunk, LlmError>>();
+
+        let err = drive_stream_step(0, stream, &tx).await.unwrap_err();
+
+        assert!(matches!(
+            err,
+            AgentRuntimeError::LlmBeforeOutput(LlmError::Stream(message))
+                if message.contains("before any response chunks")
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn drive_stream_step_merges_tool_call_deltas() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
 
@@ -1495,6 +1608,56 @@ agents:
             panic!("expected assistant message");
         };
         assert_eq!(provider_metadata, Some(metadata));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_preserves_reasoning_only_output_for_diagnostics() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+
+        let chunks = vec![Ok(ChatStreamChunk {
+            id: "chat_1".to_string(),
+            created: 0,
+            model: "m".to_string(),
+            content_delta: None,
+            thinking_delta: Some("thinking only".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            provider_metadata: None,
+        })];
+
+        let stream = tokio_stream::iter(chunks);
+        let out = drive_stream_step(0, stream, &tx).await.unwrap();
+        drop(tx);
+
+        let event = rx.recv().await.unwrap().unwrap();
+        assert!(matches!(
+            event,
+            AgentEvent::AssistantThinkingDelta { delta } if delta == "thinking only"
+        ));
+        assert!(crate::history::assistant_message_is_empty(&out.assistant));
+        assert_eq!(out.diagnostics.source, AssistantOutputSource::Stream);
+        assert_eq!(out.diagnostics.finish_reason, Some(FinishReason::Stop));
+        assert!(out.diagnostics.saw_stream_chunk);
+        assert_eq!(out.diagnostics.content_chars, 0);
+        assert_eq!(
+            out.diagnostics.reasoning_chars,
+            "thinking only".chars().count()
+        );
+        assert_eq!(out.diagnostics.tool_call_count, 0);
+
+        let Message::Assistant {
+            content,
+            reasoning_content,
+            tool_calls,
+            ..
+        } = out.assistant
+        else {
+            panic!("expected assistant message");
+        };
+        assert!(content.is_none());
+        assert_eq!(reasoning_content.as_deref(), Some("thinking only"));
+        assert!(tool_calls.is_empty());
     }
 
     #[tokio::test(flavor = "current_thread")]

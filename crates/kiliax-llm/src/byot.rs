@@ -118,11 +118,7 @@ pub(super) fn chat_response_from_byot(
         Vec::new()
     };
 
-    let reasoning_content = if tool_calls.is_empty() {
-        None
-    } else {
-        reasoning_content.or(thinking).or(reasoning)
-    };
+    let reasoning_content = reasoning_content.or(thinking).or(reasoning);
 
     let usage = usage.as_ref().map(token_usage_from_openai);
     Ok(ChatResponse {

@@ -26,7 +26,7 @@ mod tool_names;
 pub mod types;
 
 use anthropic::AnthropicProvider;
-use api_errors::{map_api_error_response, map_eventsource_error};
+use api_errors::{map_api_error_response, map_eventsource_error, map_stream_error_payload};
 use byot::{
     chat_response_from_byot, chat_stream_chunk_from_byot, ByotCreateChatCompletionResponse,
     ByotCreateChatCompletionStreamResponse,
@@ -874,7 +874,11 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         Ok(chunk)
                                     }
                                     Err(err) => {
-                                        Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(err)))
+                                        if let Some(mapped) = map_stream_error_payload(data) {
+                                            Err(LlmError::OpenAI(mapped))
+                                        } else {
+                                            Err(LlmError::OpenAI(OpenAIError::JSONDeserialize(err)))
+                                        }
                                     }
                                 };
 
@@ -1282,6 +1286,54 @@ mod tests {
         let chunk = chat_stream_chunk_from_byot(resp);
         assert_eq!(chunk.thinking_delta.as_deref(), Some("step 1\nstep 2\n"));
         assert_eq!(chunk.content_delta.as_deref(), Some("final"));
+    }
+
+    #[test]
+    fn chat_response_preserves_reasoning_without_tool_calls() {
+        let raw = serde_json::json!({
+            "id": "chat_1",
+            "created": 0,
+            "model": "m",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "reasoning_content": "thinking only"
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        });
+
+        let resp: ByotCreateChatCompletionResponse = serde_json::from_value(raw).unwrap();
+        let response = chat_response_from_byot(resp).unwrap();
+        let Message::Assistant {
+            content,
+            reasoning_content,
+            tool_calls,
+            ..
+        } = response.message
+        else {
+            panic!("expected assistant message");
+        };
+        assert!(content.is_none());
+        assert_eq!(reasoning_content.as_deref(), Some("thinking only"));
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn stream_error_payload_maps_to_api_error() {
+        let err = map_stream_error_payload(
+            r#"{"error":{"message":"provider rejected tool calls","type":"invalid_request_error","code":"bad_tool_call"}}"#,
+        )
+        .expect("error payload");
+
+        let OpenAIError::ApiError(api) = err else {
+            panic!("expected api error");
+        };
+        assert_eq!(api.message, "stream error: provider rejected tool calls");
+        assert_eq!(api.r#type.as_deref(), Some("invalid_request_error"));
+        assert_eq!(api.code.as_deref(), Some("bad_tool_call"));
     }
 
     #[test]

@@ -5,13 +5,17 @@ use tokio_stream::{Stream, StreamExt};
 use crate::llm::LlmError;
 use crate::protocol::{ChatStreamChunk, FinishReason, Message, ToolCall, ToolCallDelta};
 
-use super::{tool_calls::normalize_tool_call_ids, AgentEvent, AgentRuntimeError};
+use super::{
+    tool_calls::normalize_tool_call_ids, AgentEvent, AgentRuntimeError, AssistantOutputDiagnostics,
+    AssistantOutputSource,
+};
 
 #[derive(Debug)]
 pub(super) struct StreamStepOutput {
     pub(super) assistant: Message,
     pub(super) tool_calls: Vec<ToolCall>,
     pub(super) finish_reason: Option<FinishReason>,
+    pub(super) diagnostics: AssistantOutputDiagnostics,
 }
 
 #[derive(Debug, Default)]
@@ -53,6 +57,7 @@ pub(super) async fn drive_stream_step(
     let mut provider_metadata = None;
     let mut assistant_body_started = false;
     let mut saw_chunk = false;
+    let mut tool_call_delta_count = 0;
 
     loop {
         let item = tokio::select! {
@@ -105,6 +110,7 @@ pub(super) async fn drive_stream_step(
         }
 
         for tc in tool_call_deltas {
+            tool_call_delta_count += 1;
             tool_calls.entry(tc.index).or_default();
             if let Some(buf) = tool_calls.get_mut(&tc.index) {
                 merge_tool_call_delta(buf, tc);
@@ -124,6 +130,12 @@ pub(super) async fn drive_stream_step(
         }
     }
 
+    if !saw_chunk {
+        return Err(AgentRuntimeError::LlmBeforeOutput(LlmError::Stream(
+            "stream ended before any response chunks".to_string(),
+        )));
+    }
+
     let mut resolved_calls = Vec::new();
     for (idx, buf) in tool_calls {
         let name = buf.name.unwrap_or_else(|| "unknown".to_string());
@@ -137,13 +149,27 @@ pub(super) async fn drive_stream_step(
         });
     }
 
+    let usage_seen = last_usage.is_some();
+    let provider_metadata_seen = provider_metadata.is_some();
+    let diagnostics = AssistantOutputDiagnostics {
+        source: AssistantOutputSource::Stream,
+        finish_reason: finish_reason.clone(),
+        saw_stream_chunk: saw_chunk,
+        content_chars: assistant_content.chars().count(),
+        reasoning_chars: assistant_reasoning.chars().count(),
+        tool_call_count: resolved_calls.len(),
+        tool_call_delta_count,
+        usage_seen,
+        provider_metadata_seen,
+    };
+
     let assistant = Message::Assistant {
         content: if assistant_content.is_empty() {
             None
         } else {
             Some(assistant_content)
         },
-        reasoning_content: if resolved_calls.is_empty() || assistant_reasoning.is_empty() {
+        reasoning_content: if assistant_reasoning.is_empty() {
             None
         } else {
             Some(assistant_reasoning)
@@ -157,5 +183,6 @@ pub(super) async fn drive_stream_step(
         assistant,
         tool_calls: resolved_calls,
         finish_reason,
+        diagnostics,
     })
 }

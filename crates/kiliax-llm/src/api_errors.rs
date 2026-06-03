@@ -1,5 +1,6 @@
 use async_openai::error::OpenAIError;
 use serde::Deserialize;
+use serde_json::Value;
 
 pub(super) async fn map_eventsource_error(err: reqwest_eventsource::Error) -> OpenAIError {
     match err {
@@ -55,4 +56,67 @@ pub(super) async fn map_api_error_response(
         param: None,
         code: None,
     })
+}
+
+pub(super) fn map_stream_error_payload(data: &str) -> Option<OpenAIError> {
+    #[derive(Debug, Deserialize)]
+    struct ErrorWrapper {
+        error: Value,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ApiErrorLike {
+        message: String,
+        #[serde(default)]
+        r#type: Option<String>,
+        #[serde(default)]
+        param: Option<String>,
+        #[serde(default)]
+        code: Option<String>,
+    }
+
+    let wrapped = serde_json::from_str::<ErrorWrapper>(data).ok()?;
+    let mut error = match wrapped.error {
+        Value::Object(obj) => {
+            let raw = Value::Object(obj.clone());
+            if let Ok(mut api) =
+                serde_json::from_value::<async_openai::error::ApiError>(raw.clone())
+            {
+                api.message = format!("stream error: {}", api.message);
+                return Some(OpenAIError::ApiError(api));
+            }
+            if let Ok(api) = serde_json::from_value::<ApiErrorLike>(raw.clone()) {
+                async_openai::error::ApiError {
+                    message: format!("stream error: {}", api.message),
+                    r#type: api.r#type,
+                    param: api.param,
+                    code: api.code,
+                }
+            } else {
+                async_openai::error::ApiError {
+                    message: format!("stream error: {raw}"),
+                    r#type: None,
+                    param: None,
+                    code: None,
+                }
+            }
+        }
+        Value::String(message) => async_openai::error::ApiError {
+            message: format!("stream error: {message}"),
+            r#type: None,
+            param: None,
+            code: None,
+        },
+        other => async_openai::error::ApiError {
+            message: format!("stream error: {other}"),
+            r#type: None,
+            param: None,
+            code: None,
+        },
+    };
+
+    if error.message.trim().is_empty() {
+        error.message = "stream error".to_string();
+    }
+    Some(OpenAIError::ApiError(error))
 }
