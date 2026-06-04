@@ -24,13 +24,8 @@ pub struct ApiErrorBody {
 pub enum ApiErrorCode {
     InvalidArgument,
     Unauthorized,
-    #[allow(dead_code)]
-    Forbidden,
     NotFound,
-    #[allow(dead_code)]
     Conflict,
-    #[allow(dead_code)]
-    RateLimited,
     Internal,
     SessionNotLive,
     ModelNotSupported,
@@ -74,12 +69,6 @@ impl ApiError {
             message: message.into(),
             details: None,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn with_details(mut self, details: serde_json::Value) -> Self {
-        self.details = Some(details);
-        self
     }
 
     pub fn with_detail_field(mut self, key: &str, value: serde_json::Value) -> Self {

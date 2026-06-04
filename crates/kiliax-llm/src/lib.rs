@@ -1289,6 +1289,35 @@ mod tests {
     }
 
     #[test]
+    fn chat_stream_maps_legacy_function_call() {
+        let raw = serde_json::json!({
+            "id": "chat_1",
+            "created": 0,
+            "model": "m",
+            "choices": [{
+                "delta": {
+                    "function_call": {
+                        "name": "kiliax_web_search",
+                        "arguments": "{\"query\":\"x\"}"
+                    }
+                },
+                "finish_reason": "function_call"
+            }]
+        });
+
+        let resp: ByotCreateChatCompletionStreamResponse = serde_json::from_value(raw).unwrap();
+        let chunk = chat_stream_chunk_from_byot(resp);
+
+        assert_eq!(chunk.tool_calls.len(), 1);
+        assert_eq!(chunk.tool_calls[0].index, 0);
+        assert_eq!(chunk.tool_calls[0].name.as_deref(), Some("web_search"));
+        assert_eq!(
+            chunk.tool_calls[0].arguments.as_deref(),
+            Some("{\"query\":\"x\"}")
+        );
+    }
+
+    #[test]
     fn chat_response_preserves_reasoning_without_tool_calls() {
         let raw = serde_json::json!({
             "id": "chat_1",

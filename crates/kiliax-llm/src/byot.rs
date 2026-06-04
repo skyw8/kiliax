@@ -7,7 +7,7 @@ use crate::types::{
 
 use super::{tool_names::to_internal_tool_name, LlmError};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(super) struct ByotCreateChatCompletionResponse {
     id: String,
     created: u32,
@@ -18,48 +18,72 @@ pub(super) struct ByotCreateChatCompletionResponse {
     usage: Option<CompletionUsage>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct ByotChatChoice {
-    pub message: ByotChatCompletionMessage,
+    message: ByotChatCompletionMessage,
     #[serde(default)]
-    pub finish_reason: Option<FinishReason>,
+    finish_reason: Option<FinishReason>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ByotChatCompletionMessage {
     #[serde(default)]
-    pub content: Option<String>,
+    content: Option<String>,
 
     #[serde(default, rename = "reasoning_content")]
-    pub reasoning_content: Option<String>,
+    reasoning_content: Option<String>,
 
     #[serde(default)]
-    pub thinking: Option<String>,
+    thinking: Option<String>,
 
     #[serde(default)]
-    pub reasoning: Option<String>,
+    reasoning: Option<String>,
 
     #[serde(default)]
-    pub tool_calls: Option<Vec<ByotToolCall>>,
+    tool_calls: Option<Vec<ByotToolCall>>,
 
     #[serde(default)]
-    pub function_call: Option<ByotFunctionCall>,
+    function_call: Option<ByotFunctionCall>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ByotToolCall {
     #[serde(default)]
-    pub id: Option<String>,
+    id: Option<String>,
     #[serde(default)]
-    pub function: Option<ByotFunctionCall>,
+    function: Option<ByotFunctionCall>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ByotFunctionCall {
     #[serde(default)]
-    pub name: Option<String>,
+    name: Option<String>,
     #[serde(default)]
-    pub arguments: Option<String>,
+    arguments: Option<String>,
+}
+
+impl ByotFunctionCall {
+    fn into_tool_call(self, id: String) -> ToolCall {
+        ToolCall {
+            id,
+            name: self
+                .name
+                .map(|name| to_internal_tool_name(&name).to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            arguments: self.arguments.unwrap_or_default(),
+        }
+    }
+
+    fn into_delta(self, index: u32, id: Option<String>) -> ToolCallDelta {
+        ToolCallDelta {
+            index,
+            id,
+            name: self
+                .name
+                .map(|name| to_internal_tool_name(&name).to_string()),
+            arguments: self.arguments,
+        }
+    }
 }
 
 pub(super) fn chat_response_from_byot(
@@ -90,32 +114,16 @@ pub(super) fn chat_response_from_byot(
     let tool_calls = if let Some(calls) = tool_calls {
         calls
             .into_iter()
-            .map(|c| ToolCall {
-                id: c.id.unwrap_or_default(),
-                name: c
-                    .function
-                    .as_ref()
-                    .and_then(|f| f.name.clone())
-                    .map(|name| to_internal_tool_name(&name).to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                arguments: c
-                    .function
-                    .as_ref()
-                    .and_then(|f| f.arguments.clone())
-                    .unwrap_or_default(),
+            .map(|call| {
+                call.function
+                    .unwrap_or_default()
+                    .into_tool_call(call.id.unwrap_or_default())
             })
             .collect()
-    } else if let Some(call) = function_call {
-        vec![ToolCall {
-            id: String::new(),
-            name: call
-                .name
-                .map(|name| to_internal_tool_name(&name).to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            arguments: call.arguments.unwrap_or_default(),
-        }]
     } else {
-        Vec::new()
+        function_call
+            .map(|call| vec![call.into_tool_call(String::new())])
+            .unwrap_or_default()
     };
 
     let reasoning_content = reasoning_content.or(thinking).or(reasoning);
@@ -137,7 +145,7 @@ pub(super) fn chat_response_from_byot(
     })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(super) struct ByotCreateChatCompletionStreamResponse {
     id: String,
     created: u32,
@@ -148,94 +156,78 @@ pub(super) struct ByotCreateChatCompletionStreamResponse {
     usage: Option<CompletionUsage>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct ByotChatChoiceStream {
     #[serde(default)]
-    pub delta: ByotChatCompletionStreamDelta,
+    delta: ByotChatCompletionStreamDelta,
     #[serde(default)]
-    pub finish_reason: Option<FinishReason>,
+    finish_reason: Option<FinishReason>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ByotChatCompletionStreamDelta {
     #[serde(default)]
-    pub content: Option<String>,
+    content: Option<String>,
 
     #[serde(default, rename = "reasoning_content")]
-    pub reasoning_content: Option<String>,
+    reasoning_content: Option<String>,
 
     #[serde(default)]
-    pub thinking: Option<String>,
+    thinking: Option<String>,
 
     #[serde(default)]
-    pub reasoning: Option<String>,
+    reasoning: Option<String>,
 
     #[serde(default)]
-    pub tool_calls: Option<Vec<ByotToolCallChunk>>,
+    tool_calls: Option<Vec<ByotToolCallChunk>>,
 
     #[serde(default)]
-    pub function_call: Option<ByotFunctionCallStream>,
+    function_call: Option<ByotFunctionCall>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct ByotToolCallChunk {
-    pub index: u32,
+    index: u32,
     #[serde(default)]
-    pub id: Option<String>,
+    id: Option<String>,
     #[serde(default)]
-    pub function: Option<ByotFunctionCallStream>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ByotFunctionCallStream {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub arguments: Option<String>,
+    function: Option<ByotFunctionCall>,
 }
 
 pub(super) fn chat_stream_chunk_from_byot(
     resp: ByotCreateChatCompletionStreamResponse,
 ) -> ChatStreamChunk {
-    let mut content_delta = None;
-    let mut thinking_delta = None;
-    let mut tool_calls = Vec::new();
-    let mut finish_reason = None;
+    let (content_delta, thinking_delta, tool_calls, finish_reason) =
+        if let Some(choice) = resp.choices.into_iter().next() {
+            let delta = choice.delta;
+            let tool_calls = if let Some(calls) = delta.tool_calls {
+                calls
+                    .into_iter()
+                    .map(|call| {
+                        call.function
+                            .unwrap_or_default()
+                            .into_delta(call.index, call.id)
+                    })
+                    .collect()
+            } else {
+                delta
+                    .function_call
+                    .map(|call| vec![call.into_delta(0, None)])
+                    .unwrap_or_default()
+            };
 
-    if let Some(choice) = resp.choices.into_iter().next() {
-        content_delta = choice.delta.content;
-        thinking_delta = choice
-            .delta
-            .reasoning_content
-            .or(choice.delta.thinking)
-            .or(choice.delta.reasoning);
-        finish_reason = choice.finish_reason;
-
-        if let Some(calls) = choice.delta.tool_calls {
-            tool_calls = calls
-                .into_iter()
-                .map(|c| ToolCallDelta {
-                    index: c.index,
-                    id: c.id,
-                    name: c
-                        .function
-                        .as_ref()
-                        .and_then(|f| f.name.clone())
-                        .map(|name| to_internal_tool_name(&name).to_string()),
-                    arguments: c.function.as_ref().and_then(|f| f.arguments.clone()),
-                })
-                .collect();
-        } else if let Some(function_call) = choice.delta.function_call {
-            tool_calls = vec![ToolCallDelta {
-                index: 0,
-                id: None,
-                name: function_call
-                    .name
-                    .map(|name| to_internal_tool_name(&name).to_string()),
-                arguments: function_call.arguments,
-            }];
-        }
-    }
+            (
+                delta.content,
+                delta
+                    .reasoning_content
+                    .or(delta.thinking)
+                    .or(delta.reasoning),
+                tool_calls,
+                choice.finish_reason,
+            )
+        } else {
+            (None, None, Vec::new(), None)
+        };
 
     ChatStreamChunk {
         id: resp.id,
