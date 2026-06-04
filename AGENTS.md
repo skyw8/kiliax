@@ -74,7 +74,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`ki server run` when installed): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/auth/local access logs/WS/SSE/OpenAPI/web asset selection/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
+- HTTP router/handlers/Bearer-only API auth + first-message WebSocket auth/local access logs/WS/SSE/OpenAPI/public web asset selection + CSP/security headers/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers + client-safe path display normalization: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue with per-run model/agent/MCP/skills/custom-tools overrides + pre-run and mid-run auto-compaction through model-context checkpoints that preserve visible transcript history + goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
@@ -90,8 +90,8 @@ minimal
 
 ### web (React UI)
 
-- Main UI (responsive layout + virtualized/paged session history + centered composer dock/attached workspace launchers + WS streaming with buffered live snapshot restore/active tool-call reconciliation/persisted user-message reconciliation/retry alerts/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
-- Message rendering with persisted assistant thinking/tool calls before answer content + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
+- Main UI (responsive layout + per-Origin/tab sessionStorage token bootstrap + Bearer API/first-message WebSocket auth + virtualized/paged session history + centered composer dock/attached workspace launchers + WS streaming with buffered live snapshot restore/active tool-call reconciliation/persisted user-message reconciliation/retry alerts/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
+- Message rendering with persisted assistant thinking/tool calls before answer content + locally bundled Mermaid with sanitized SVG output + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Virtualized chat list + paged history windowing + pinned-bottom follow state for streaming row height changes: `web/src/components/virtualized-list.tsx`
 - Dialog components including server-side folder picker path normalization and provider/model settings for per-model compact/temperature/reasoning controls: `web/src/components/*-dialog.tsx`, `web/src/components/folder-picker.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`

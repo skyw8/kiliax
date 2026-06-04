@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderValue, StatusCode};
 use axum::middleware;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::Response;
 
 use crate::error::{ApiError, ApiErrorCode};
 use crate::state::ServerState;
@@ -66,83 +66,26 @@ pub(crate) async fn auth_middleware(
 
     let path = req.uri().path();
     let is_api = path == "/v1" || path.starts_with("/v1/");
+    let is_events_ws = path.starts_with("/v1/sessions/") && path.ends_with("/events/ws");
 
-    let auth = req
+    if !is_api || is_events_ws {
+        return Ok(next.run(req).await);
+    }
+
+    let bearer = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let bearer = auth.strip_prefix("Bearer ").unwrap_or("").trim();
-    let bearer_ok = bearer == expected;
-    let cookie_token_ok = cookie_token(req.headers()).as_deref() == Some(expected);
-
-    if is_api {
-        if !bearer_ok && !cookie_token_ok {
-            return Err(ApiError::new(
-                StatusCode::UNAUTHORIZED,
-                ApiErrorCode::Unauthorized,
-                "unauthorized",
-            ));
-        }
-        return Ok(next.run(req).await);
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim);
+    if bearer != Some(expected) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            ApiErrorCode::Unauthorized,
+            "unauthorized",
+        ));
     }
-
-    // Web UI: use cookie auth, with a one-time `?token=` → Set-Cookie + redirect handshake.
-    if cookie_token_ok {
-        return Ok(next.run(req).await);
-    }
-
-    let query_token_ok = token_from_query(req.uri()).as_deref() == Some(expected);
-    if query_token_ok && matches!(req.method(), &Method::GET | &Method::HEAD) {
-        let dest = strip_token_query(req.uri());
-        let resp = Response::builder()
-            .status(StatusCode::FOUND)
-            .header(axum::http::header::LOCATION, dest)
-            .header(axum::http::header::SET_COOKIE, build_auth_cookie(expected))
-            .body(axum::body::Body::empty())
-            .unwrap_or_else(|_| StatusCode::FOUND.into_response());
-        return Ok(resp);
-    }
-
-    let unauthorized = r#"<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>kiliax-web</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; padding: 24px; background: #fff; color: #111; }
-      code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      pre { background: #f6f6f6; padding: 12px; border-radius: 8px; overflow: auto; }
-    </style>
-  </head>
-  <body>
-    <h2>Unauthorized</h2>
-    <p>This UI requires a token.</p>
-    <p>Start the server with <code>kiliax server start</code> and open the printed URL:</p>
-    <pre>http://127.0.0.1:8123/?token=...</pre>
-    <p>After the first visit, your browser will store a cookie and you can use <code>/</code>.</p>
-  </body>
-</html>
-"#;
-    Ok((StatusCode::UNAUTHORIZED, Html(unauthorized)).into_response())
-}
-
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
-    let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-    for part in cookie.split(';') {
-        let part = part.trim();
-        let (k, v) = part.split_once('=')?;
-        if k.trim() == "kiliax_token" {
-            return Some(v.trim().to_string());
-        }
-    }
-    None
-}
-
-fn build_auth_cookie(token: &str) -> String {
-    // Intentionally kept simple: same-origin, local UI.
-    format!("kiliax_token={token}; Path=/; HttpOnly; SameSite=Strict")
+    Ok(next.run(req).await)
 }
 
 pub(crate) fn strip_token_query(uri: &axum::http::Uri) -> String {
@@ -170,43 +113,44 @@ pub(crate) fn strip_token_query(uri: &axum::http::Uri) -> String {
     }
 }
 
-fn token_from_query(uri: &axum::http::Uri) -> Option<String> {
-    let query = uri.query()?;
-    for part in query.split('&') {
-        let (k, v) = part.split_once('=')?;
-        if k == "token" {
-            return percent_decode(v);
-        }
+pub(crate) async fn security_headers_middleware(
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| valid_csp_host(v))
+        .map(str::to_string);
+    let mut resp = next.run(req).await;
+    let headers = resp.headers_mut();
+    headers.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        axum::http::header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    let connect_src = host
+        .as_deref()
+        .map(|v| format!("'self' ws://{v} wss://{v}"))
+        .unwrap_or_else(|| "'self'".to_string());
+    let csp = format!(
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: blob:; font-src 'self' data:; connect-src {connect_src}; \
+         object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+    );
+    if let Ok(value) = HeaderValue::from_str(&csp) {
+        headers.insert(axum::http::header::CONTENT_SECURITY_POLICY, value);
     }
-    None
+    resp
 }
 
-fn percent_decode(input: &str) -> Option<String> {
-    let bytes = input.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hi = from_hex(bytes[i + 1])?;
-                let lo = from_hex(bytes[i + 2])?;
-                out.push((hi << 4) | lo);
-                i += 3;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8(out).ok()
-}
-
-fn from_hex(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+fn valid_csp_host(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']'))
 }

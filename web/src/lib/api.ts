@@ -22,6 +22,7 @@ import type {
   SkillEnableSetting,
   SkillListResponse,
 } from "./types";
+import { getAuthToken } from "./auth";
 
 export class ApiError extends Error {
   status: number;
@@ -52,6 +53,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (!headers.has("Content-Type") && init?.body) {
     headers.set("Content-Type", "application/json");
   }
+  const token = getAuthToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
 
   const resp = await fetch(path, { ...init, headers });
   if (resp.status === 204) {

@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 
 import { wsUrl } from "./api";
+import { getAuthToken } from "./auth";
 
 export function useWsEvents(opts: {
   onEvent: (ev: any) => void;
   isSessionCurrent: (sessionId: string) => boolean;
   getAfterEventId: () => number;
+  onUnauthorized: () => void;
 }) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
@@ -14,6 +16,7 @@ export function useWsEvents(opts: {
   const onEventRef = useRef(opts.onEvent);
   const isSessionCurrentRef = useRef(opts.isSessionCurrent);
   const getAfterEventIdRef = useRef(opts.getAfterEventId);
+  const onUnauthorizedRef = useRef(opts.onUnauthorized);
 
   useEffect(() => {
     onEventRef.current = opts.onEvent;
@@ -24,6 +27,9 @@ export function useWsEvents(opts: {
   useEffect(() => {
     getAfterEventIdRef.current = opts.getAfterEventId;
   }, [opts.getAfterEventId]);
+  useEffect(() => {
+    onUnauthorizedRef.current = opts.onUnauthorized;
+  }, [opts.onUnauthorized]);
 
   function clearReconnectTimer() {
     if (reconnectTimerRef.current != null) {
@@ -71,6 +77,12 @@ export function useWsEvents(opts: {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      const token = getAuthToken();
+      if (!token) {
+        ws.close(1008, "unauthorized");
+        return;
+      }
+      ws.send(JSON.stringify({ type: "auth", token }));
       reconnectAttemptRef.current = 0;
     };
     ws.onmessage = (ev) => {
@@ -86,9 +98,14 @@ export function useWsEvents(opts: {
       // eslint-disable-next-line no-console
       console.error("ws error");
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       wsRef.current = null;
+      if (event.code === 1008) {
+        clearReconnectTimer();
+        onUnauthorizedRef.current();
+        return;
+      }
       scheduleReconnect(sessionId);
     };
   }
@@ -100,4 +117,3 @@ export function useWsEvents(opts: {
 
   return { connect, close, resetReconnectAttempt };
 }
-

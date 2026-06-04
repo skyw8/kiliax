@@ -73,5 +73,8 @@ pub fn build_app(state: Arc<ServerState>) -> Router {
             middleware::auth_middleware,
         ))
         .layer(DefaultBodyLimit::max(72 * 1024 * 1024))
+        .layer(axum_middleware::from_fn(
+            middleware::security_headers_middleware,
+        ))
         .layer(axum_middleware::from_fn(middleware::access_log_middleware))
 }

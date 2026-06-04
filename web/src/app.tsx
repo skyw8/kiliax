@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, Copy, FileText, Flag, FolderOpen, FolderPlus, GitFork, Hammer, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Plug, Settings, Sparkles, Square, Star, Terminal, X } from "lucide-react";
 import { api, ApiError } from "./lib/api";
+import { bootstrapAuthTokenFromUrl, clearAuthToken, getAuthToken } from "./lib/auth";
 import { hrefToSession, navigate, useRoute } from "./lib/router";
 import { copyToClipboard, fmtDurationCompact, hasMermaidFence, messageIdToSafeNumber, modelLabel, monotonicNowMs, newAlertId, parseMessageId, splitModelId, useOverlaySidebarViewport } from "./lib/app-utils";
 import { loadPinnedSessionIds, loadPinnedWorkspaceRoots, loadSidebarOpen, loadSessionsPaneOpen, loadWorkspacesPaneOpen, savePinnedSessionIds, savePinnedWorkspaceRoots, saveSidebarOpen, saveSessionsPaneOpen, saveWorkspacesPaneOpen } from "./lib/preferences";
@@ -318,6 +319,7 @@ export default function App() {
     onEvent: handleEvent,
     isSessionCurrent: (id) => selectedIdRef.current === id,
     getAfterEventId: () => lastEventIdRef.current,
+    onUnauthorized: handleUnauthorized,
   });
 
   const sortedSessions = useMemo(
@@ -392,10 +394,16 @@ export default function App() {
   const canLoadMoreWorkspaces =
     visibleWorkspaceGroups.length < workspaceGroups.length;
 
+  function handleUnauthorized() {
+    clearAuthToken();
+    wsEvents.close();
+    setAuthError("Unauthorized. Re-open the URL printed by `kiliax server start`.");
+    clearAlerts();
+  }
+
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
-      setAuthError("Unauthorized. Re-open the URL printed by `kiliax server start`.");
-      clearAlerts();
+      handleUnauthorized();
       return;
     }
     if (err instanceof ApiError) {
@@ -1607,20 +1615,11 @@ export default function App() {
   }
 
   useEffect(() => {
-    let cancelled = false;
     async function init() {
-      const params = new URLSearchParams(window.location.search);
-      const token = params.get("token")?.trim() ?? "";
-      if (token) {
-        try {
-          await fetch(`/v1/capabilities?token=${encodeURIComponent(token)}`);
-        } catch (err) {
-          handleApiError(err);
-        }
-        if (cancelled) return;
-        const url = new URL(window.location.href);
-        url.searchParams.delete("token");
-        window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+      const token = bootstrapAuthTokenFromUrl();
+      if (!token) {
+        handleUnauthorized();
+        return;
       }
 
       refreshCapabilities();
@@ -1629,10 +1628,9 @@ export default function App() {
 
     init();
     const t = window.setInterval(() => {
-      refreshSessions();
+      if (getAuthToken()) refreshSessions();
     }, 10_000);
     return () => {
-      cancelled = true;
       window.clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

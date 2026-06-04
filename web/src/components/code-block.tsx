@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Copy } from "lucide-react";
+import DOMPurify from "dompurify";
+import mermaid from "mermaid";
 import { cn } from "../lib/utils";
 
 type TokenKind =
@@ -13,17 +15,6 @@ type TokenKind =
   | "punct";
 
 type Token = { kind: TokenKind; value: string };
-
-type MermaidApi = {
-  initialize: (config: any) => void;
-  render: (id: string, code: string) => any;
-};
-
-declare global {
-  interface Window {
-    mermaid?: MermaidApi;
-  }
-}
 
 function normalizeLang(lang?: string | null): string | null {
   const v = (lang ?? "").trim().toLowerCase();
@@ -61,41 +52,6 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-let mermaidLoadPromise: Promise<MermaidApi> | null = null;
-
-function loadMermaid(): Promise<MermaidApi> {
-  if (typeof window === "undefined") {
-    return Promise.reject(new Error("mermaid: window is undefined"));
-  }
-  if (window.mermaid) return Promise.resolve(window.mermaid);
-  if (mermaidLoadPromise) return mermaidLoadPromise;
-
-  mermaidLoadPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>("script[data-kiliax-mermaid]");
-    if (existing) {
-      existing.addEventListener("load", () => {
-        if (window.mermaid) resolve(window.mermaid);
-        else reject(new Error("mermaid: loaded but missing global"));
-      });
-      existing.addEventListener("error", () => reject(new Error("mermaid: failed to load")));
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.async = true;
-    script.src = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js";
-    script.dataset.kiliaxMermaid = "1";
-    script.onload = () => {
-      if (window.mermaid) resolve(window.mermaid);
-      else reject(new Error("mermaid: loaded but missing global"));
-    };
-    script.onerror = () => reject(new Error("mermaid: failed to load"));
-    document.head.appendChild(script);
-  });
-
-  return mermaidLoadPromise;
-}
-
 function normalizeMermaidSvg(raw: string): string {
   const svgIdx = raw.indexOf("<svg");
   if (svgIdx === -1) return raw;
@@ -127,6 +83,25 @@ function normalizeMermaidSvg(raw: string): string {
 
   if (nextTag === openTag) return raw;
   return raw.slice(0, svgIdx) + nextTag + raw.slice(endIdx + 1);
+}
+
+function sanitizeMermaidSvg(raw: string): string {
+  const sanitized = DOMPurify.sanitize(normalizeMermaidSvg(raw), {
+    USE_PROFILES: { svg: true, svgFilters: true },
+    FORBID_TAGS: ["script", "foreignObject"],
+  });
+  const doc = new DOMParser().parseFromString(sanitized, "image/svg+xml");
+  if (doc.querySelector("parsererror")) return "";
+  for (const element of doc.querySelectorAll("*")) {
+    for (const attr of Array.from(element.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith("on")) element.removeAttribute(attr.name);
+      if ((name === "href" || name === "xlink:href") && !attr.value.trim().startsWith("#")) {
+        element.removeAttribute(attr.name);
+      }
+    }
+  }
+  return new XMLSerializer().serializeToString(doc.documentElement);
 }
 
 function safeJsonParse(raw: string): any | null {
@@ -569,8 +544,8 @@ export function CodeBlock({
         cancelled = true;
       };
     }
-    loadMermaid()
-      .then(async (mermaid) => {
+    Promise.resolve()
+      .then(async () => {
         if (cancelled) return;
         mermaid.initialize({
           startOnLoad: false,
@@ -581,7 +556,7 @@ export function CodeBlock({
         const out = await mermaid.render(id, content);
         const svg = typeof out === "string" ? out : String(out?.svg ?? "");
         if (cancelled) return;
-        setMermaidSvg(svg ? normalizeMermaidSvg(svg) : null);
+        setMermaidSvg(svg ? sanitizeMermaidSvg(svg) : null);
       })
       .catch((err) => {
         if (cancelled) return;

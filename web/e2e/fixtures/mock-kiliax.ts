@@ -6,6 +6,7 @@ export type MockRequest = {
   method: HttpMethod;
   path: string;
   body: any;
+  authorization: string | null;
 };
 
 type SessionSettings = {
@@ -121,6 +122,9 @@ async function body(route: Route) {
 }
 
 export async function installMockKiliax(page: Page, options: MockOptions = {}) {
+  if (!options.unauthorized) {
+    await page.addInitScript(() => sessionStorage.setItem("kiliax_token", "secret-token"));
+  }
   const sessions = new Map<string, SessionSummary>([
     ["s-work", summary("s-work", "Workspace thread", "D:\\github_code\\kiliax", 12)],
     ["s-tmp", summary("s-tmp", "Scratch thread", "D:\\github_code\\kiliax\\.kiliax\\workspace\\tmp_s-tmp", 1)],
@@ -196,7 +200,10 @@ export async function installMockKiliax(page: Page, options: MockOptions = {}) {
         }, 0);
       }
 
-      send() {}
+      send(data: string) {
+        (window as any).__kiliaxWsMessages = (window as any).__kiliaxWsMessages ?? [];
+        (window as any).__kiliaxWsMessages.push(data);
+      }
 
       close() {
         this.readyState = MockWebSocket.CLOSED;
@@ -215,8 +222,8 @@ export async function installMockKiliax(page: Page, options: MockOptions = {}) {
     };
   });
 
-  function record(method: HttpMethod, path: string, reqBody: any) {
-    requests.push({ method, path, body: reqBody });
+  function record(method: HttpMethod, path: string, reqBody: any, authorization: string | null) {
+    requests.push({ method, path, body: reqBody, authorization });
   }
 
   async function fulfill(route: Route, value: any, status = 200) {
@@ -233,7 +240,7 @@ export async function installMockKiliax(page: Page, options: MockOptions = {}) {
     const method = req.method().toUpperCase() as HttpMethod;
     const path = url.pathname;
     const reqBody = await body(route);
-    record(method, path, reqBody);
+    record(method, path, reqBody, req.headers()["authorization"] ?? null);
 
     if (options.unauthorized && path !== "/v1/capabilities") {
       return fulfill(

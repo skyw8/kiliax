@@ -5,6 +5,7 @@ use axum::http::HeaderMap;
 use axum::response::sse::Event as SseEvent;
 use axum::response::{IntoResponse, Sse};
 use futures_util::stream::{self, StreamExt as _};
+use futures_util::SinkExt as _;
 use kiliax_core::session::SessionId;
 use tokio::sync::broadcast;
 use utoipa_axum::router::UtoipaMethodRouter;
@@ -63,6 +64,19 @@ async fn list_events(
 struct StreamQuery {
     #[serde(default)]
     after_event_id: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WsAuthMessage {
+    #[serde(rename = "type")]
+    kind: String,
+    token: String,
+}
+
+fn valid_ws_auth_message(text: &str, expected: &str) -> bool {
+    serde_json::from_str::<WsAuthMessage>(text)
+        .is_ok_and(|message| message.kind == "auth" && message.token == expected)
 }
 
 #[utoipa::path(
@@ -146,6 +160,7 @@ async fn stream_events_sse(
     get,
     path = "/sessions/{session_id}/events/ws",
     tags = ["Events"],
+    description = "WebSocket event stream. The first client message must be {\"type\":\"auth\",\"token\":\"<server token>\"}.",
     params(
         ("session_id" = String, Path, description = "Session id."),
         ("after_event_id" = Option<u64>, Query, description = "Start streaming after this event id (exclusive).")
@@ -164,13 +179,46 @@ async fn stream_events_ws(
     let id =
         SessionId::parse(&session_id).map_err(|e| ApiError::invalid_argument(e.to_string()))?;
     let after = q.after_event_id.unwrap_or(0);
-    let live = state.ensure_live(&id).await?;
-    let backlog = state.events_backlog_after(&id, after, usize::MAX).await?;
-    let mut rx = live.subscribe_events();
-    let session_id = id.to_string();
-    let shutdown = state.shutdown.clone();
-
     Ok(ws.on_upgrade(move |mut socket| async move {
+        let authenticated = match state.token.as_deref() {
+            None => true,
+            Some(expected) => {
+                tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(Result::ok)
+                    .is_some_and(|message| match message {
+                        axum::extract::ws::Message::Text(text) => {
+                            valid_ws_auth_message(&text, expected)
+                        }
+                        _ => false,
+                    })
+            }
+        };
+        if !authenticated {
+            let _ = socket
+                .send(axum::extract::ws::Message::Close(Some(
+                    axum::extract::ws::CloseFrame {
+                        code: 1008,
+                        reason: "unauthorized".into(),
+                    },
+                )))
+                .await;
+            return;
+        }
+
+        let Ok(live) = state.ensure_live(&id).await else {
+            let _ = socket.close().await;
+            return;
+        };
+        let Ok(backlog) = state.events_backlog_after(&id, after, usize::MAX).await else {
+            let _ = socket.close().await;
+            return;
+        };
+        let mut rx = live.subscribe_events();
+        let session_id = id.to_string();
+        let shutdown = state.shutdown.clone();
         for ev in backlog {
             let ev: crate::api::Event = ev.into();
             if let Ok(text) = serde_json::to_string(&ev) {
@@ -211,6 +259,28 @@ async fn stream_events_ws(
             };
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_ws_auth_message;
+
+    #[test]
+    fn websocket_auth_requires_exact_first_message_shape_and_token() {
+        assert!(valid_ws_auth_message(
+            r#"{"type":"auth","token":"secret"}"#,
+            "secret"
+        ));
+        assert!(!valid_ws_auth_message(
+            r#"{"type":"auth","token":"wrong"}"#,
+            "secret"
+        ));
+        assert!(!valid_ws_auth_message(
+            r#"{"type":"event","token":"secret"}"#,
+            "secret"
+        ));
+        assert!(!valid_ws_auth_message("not json", "secret"));
+    }
 }
 
 struct LiveSseState {

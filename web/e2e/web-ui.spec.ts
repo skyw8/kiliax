@@ -340,4 +340,43 @@ test("shows unauthorized state and removes bootstrap token from the URL", async 
 
   await expect(page.getByText("Unauthorized", { exact: true })).toBeVisible();
   await expect(page).toHaveURL((url) => !url.searchParams.has("token"));
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("kiliax_token"))).toBeNull();
+});
+
+test("uses session token for HTTP and WebSocket authentication", async ({ page }) => {
+  const mock = await installMockKiliax(page);
+  await page.goto("/sessions/s-work?token=origin-token");
+
+  await expect(page).toHaveURL((url) => !url.searchParams.has("token"));
+  await expect
+    .poll(() => page.evaluate(() => sessionStorage.getItem("kiliax_token")))
+    .toBe("origin-token");
+  await expect.poll(() => mock.requests.some((r) => r.authorization === "Bearer origin-token")).toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        ((window as any).__kiliaxWsMessages ?? []).some(
+          (raw: string) => JSON.parse(raw)?.type === "auth" && JSON.parse(raw)?.token === "origin-token",
+        ),
+      ),
+    )
+    .toBe(true);
+});
+
+test("sanitizes rendered Mermaid SVG", async ({ page }) => {
+  const mock = await installMockKiliax(page);
+  mock.messages.set("s-work", [
+    {
+      role: "assistant",
+      id: "mermaid-security",
+      created_at: "2026-05-30T09:00:00.000Z",
+      content: "```mermaid\ngraph TD\nA[Safe] --> B[Diagram]\n```",
+    },
+  ]);
+  await page.goto("/sessions/s-work");
+
+  const diagram = page.locator("svg").first();
+  await expect(diagram).toBeVisible();
+  await expect(diagram.locator("script, foreignObject, [onload], [onerror]")).toHaveCount(0);
+  await expect(diagram.locator('[href^="http"], [href^="https"], [xlink\\:href^="http"]')).toHaveCount(0);
 });

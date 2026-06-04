@@ -119,7 +119,7 @@ fn assert_error_code(body: &serde_json::Value, code: &str) {
 }
 
 #[tokio::test]
-async fn web_requires_auth_and_sets_cookie() {
+async fn web_is_public_and_sets_security_headers() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, Some("secret".to_string())).await;
 
@@ -128,42 +128,38 @@ async fn web_requires_auth_and_sets_cookie() {
         .oneshot(req_empty(Method::GET, "/"))
         .await
         .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get(header::SET_COOKIE).is_none());
+    assert_eq!(
+        resp.headers()
+            .get(header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|v| v.to_str().ok()),
+        Some("nosniff")
+    );
+    assert_eq!(
+        resp.headers()
+            .get(header::REFERRER_POLICY)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-referrer")
+    );
+    let csp = resp
+        .headers()
+        .get(header::CONTENT_SECURITY_POLICY)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(csp.contains("script-src 'self'"), "csp: {csp}");
+    assert!(csp.contains("object-src 'none'"), "csp: {csp}");
     let (status, body) = read_text(resp).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert!(body.contains("Unauthorized"), "body: {body}");
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("kiliax-web"), "body: {body}");
 
     let resp = app
         .clone()
         .oneshot(req_empty(Method::GET, "/?token=secret"))
         .await
         .expect("oneshot");
-    assert_eq!(resp.status(), StatusCode::FOUND);
-    let set_cookie = resp
-        .headers()
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    assert!(
-        set_cookie.contains("kiliax_token=secret"),
-        "set-cookie missing token: {set_cookie}"
-    );
-    let location = resp
-        .headers()
-        .get(header::LOCATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    assert_eq!(location, "/");
-
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/")
-        .header(header::COOKIE, "kiliax_token=secret")
-        .body(Body::empty())
-        .expect("request");
-    let resp = app.clone().oneshot(req).await.expect("oneshot");
-    let (status, body) = read_text(resp).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("kiliax-web"), "body: {body}");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get(header::SET_COOKIE).is_none());
 }
 
 #[tokio::test]
@@ -260,30 +256,17 @@ async fn openapi_and_docs_are_served() {
     assert!(body.contains("openapi: 3.1.0"), "body: {body}");
     assert!(body.contains("/v1/sessions"), "body: {body}");
 
-    // /docs requires cookie auth (web UI flow).
     let resp = app
         .clone()
-        .oneshot(req_empty(Method::GET, "/docs?token=secret"))
+        .oneshot(req_empty(Method::GET, "/docs"))
         .await
         .expect("oneshot");
-    assert_eq!(resp.status(), StatusCode::FOUND);
-    let set_cookie = resp
-        .headers()
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    assert!(
-        set_cookie.contains("kiliax_token=secret"),
-        "set-cookie missing token: {set_cookie}"
-    );
+    assert!(resp.status().is_redirection());
+    assert!(resp.headers().get(header::SET_COOKIE).is_none());
 
     let resp = app
         .clone()
-        .oneshot(req_empty_with_headers(
-            Method::GET,
-            "/docs/",
-            &[("Cookie", "kiliax_token=secret")],
-        ))
+        .oneshot(req_empty(Method::GET, "/docs/"))
         .await
         .expect("oneshot");
     let (status, body) = read_text(resp).await;
@@ -1632,23 +1615,6 @@ async fn auth_middleware_enforces_bearer_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
     assert_error_code(&body, "unauthorized");
 
-    // Query token is only used for web handshake.
-    let resp = app
-        .clone()
-        .oneshot(req_empty(Method::GET, "/?token=secret"))
-        .await
-        .expect("oneshot");
-    assert_eq!(resp.status(), StatusCode::FOUND);
-    let set_cookie = resp
-        .headers()
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    assert!(
-        set_cookie.contains("kiliax_token=secret"),
-        "set-cookie missing token: {set_cookie}"
-    );
-
     let req = Request::builder()
         .method(Method::GET)
         .uri("/v1/capabilities")
@@ -1656,8 +1622,9 @@ async fn auth_middleware_enforces_bearer_token() {
         .body(Body::empty())
         .expect("request");
     let resp = app.clone().oneshot(req).await.expect("oneshot");
-    let (status, _body) = read_json(resp).await;
-    assert_eq!(status, StatusCode::OK);
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_error_code(&body, "unauthorized");
 
     let req = Request::builder()
         .method(Method::GET)
