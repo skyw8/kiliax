@@ -74,7 +74,7 @@ minimal
 ### crates/kiliax-server (HTTP control plane)
 
 - Runner (`ki server run` when installed): `crates/kiliax-server/src/runner.rs`
-- HTTP router/handlers/Bearer-only API auth + first-message WebSocket auth/local access logs/WS/SSE/OpenAPI/public web asset selection + CSP/security headers/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments: `crates/kiliax-server/src/http/`
+- HTTP router/handlers/Bearer-only API auth + first-message WebSocket auth/local access logs/WS/SSE/OpenAPI/public web asset selection + CSP/security headers/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments (architecture: `docs/web-auth-security.md`): `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers + client-safe path display normalization: `crates/kiliax-server/src/http/mapper.rs`
 - State (config/session lifecycle/run queue with per-run model/agent/MCP/skills/custom-tools overrides + pre-run and mid-run auto-compaction through model-context checkpoints that preserve visible transcript history + goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
