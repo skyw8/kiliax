@@ -61,6 +61,31 @@ test("renders sessions, selected history, workspace controls, and single-line st
     .toMatchObject({ whiteSpace: "nowrap" });
 });
 
+test("renders persisted assistant thinking and tool calls before the answer", async ({ page }) => {
+  const mock = await installMockKiliax(page);
+  mock.messages.set("s-work", [
+    {
+      role: "assistant",
+      id: "1",
+      created_at: "2026-05-30T09:00:00.000Z",
+      reasoning_content: "Inspect the repository first.",
+      tool_calls: [{ id: "call-1", name: "read_file", arguments: "{\"filePath\":\"AGENTS.md\"}" }],
+      content: "Final answer.",
+    },
+  ]);
+  await page.goto("/sessions/s-work");
+
+  const bubble = page.locator("div.rounded-2xl").filter({ hasText: "Final answer." }).filter({
+    hasText: "tool_call: read_file",
+  }).first();
+  await expect(bubble).toBeVisible();
+  await expect(bubble.locator("summary, p")).toHaveText([
+    "thinking",
+    "tool_call: read_file",
+    "Final answer.",
+  ]);
+});
+
 test("creates a session from the empty composer and renders live run output", async ({ page }) => {
   const mock = await installMockKiliax(page);
   await page.goto("/");

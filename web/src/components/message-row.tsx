@@ -252,16 +252,12 @@ export const MessageRow = React.memo(function MessageRow({
     const bubbleWidth = wide ? WIDE_MESSAGE_COLUMN_WIDTH : MESSAGE_COLUMN_WIDTH;
     const usageText = fmtTokenUsage(msg.usage);
     const canRegenerate = Boolean(historyMutable && onRegenerateAssistant);
+    const hasThinkingOrTools = Boolean(msg.reasoning_content || msg.tool_calls?.length);
     return (
       <div className="flex justify-start">
         <div className={`${bubbleWidth} min-w-0 rounded-2xl bg-zinc-50 px-4 py-2 text-sm text-zinc-900`}>
-          {msg.content ? (
-            <Markdown text={msg.content} messageId={msg.id} onMermaidError={onMermaidError} />
-          ) : (
-            <div className="text-zinc-500">…</div>
-          )}
           {msg.reasoning_content ? (
-            <details className="relative mt-2 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+            <details className="relative w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
               <button
                 type="button"
                 className="absolute right-1 top-1 rounded-md p-1 text-zinc-500 hover:bg-zinc-100"
@@ -285,6 +281,13 @@ export const MessageRow = React.memo(function MessageRow({
             </details>
           ) : null}
           {renderToolCalls(msg.tool_calls ?? [], toolDurationsMs)}
+          {msg.content ? (
+            <div className={hasThinkingOrTools ? "mt-2" : undefined}>
+              <Markdown text={msg.content} messageId={msg.id} onMermaidError={onMermaidError} />
+            </div>
+          ) : hasThinkingOrTools ? null : (
+            <div className="text-zinc-500">…</div>
+          )}
           {usageText ? (
             <div className="mt-2 truncate text-xs text-zinc-500" title={usageText}>
               {usageText}

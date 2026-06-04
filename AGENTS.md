@@ -91,7 +91,7 @@ minimal
 ### web (React UI)
 
 - Main UI (responsive layout + virtualized/paged session history + centered composer dock/attached workspace launchers + WS streaming with buffered live snapshot restore/active tool-call reconciliation/persisted user-message reconciliation/retry alerts/session actions/goal controls with live time/token updates + workspace folders list + tools catalog entry + server-side folder picker dialogs + composer image/PDF attachment selection, preview, and base64 run submission): `web/src/app.tsx`
-- Message rendering + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
+- Message rendering with persisted assistant thinking/tool calls before answer content + user input collapse controls + queued user bubble styling + user attachment previews/chips + consistent thinking/tool call/result panel sizing: `web/src/components/message-row.tsx`
 - Virtualized chat list + paged history windowing + pinned-bottom follow state for streaming row height changes: `web/src/components/virtualized-list.tsx`
 - Dialog components including server-side folder picker path normalization and provider/model settings for per-model compact/temperature/reasoning controls: `web/src/components/*-dialog.tsx`, `web/src/components/folder-picker.tsx`
 - Action sheet/menu components: `web/src/components/*-actions.tsx`
@@ -122,6 +122,7 @@ minimal
 ### Web
 
 - The session status badge (e.g. `step 1`) in the left sidebar must display in a single line and must not wrap to two lines
+- Assistant output must always render in generation order: `thinking` → `tool call` → answer body. This order applies consistently to both live streaming output and persisted message history.
 
 ### Remote Connection
 
