@@ -71,6 +71,75 @@ curl http://127.0.0.1:8123/v1/openapi.yaml > openapi.yaml
 
 ```
 
+## Nonfunctional Testing
+
+Kiliax includes security checks, unit-level benchmarks, and server API load testing.
+
+### Security
+
+Run dependency and secret checks locally:
+
+```bash
+cargo audit
+(cd web && bun audit)
+gitleaks detect --source . --redact
+```
+
+The nonfunctional CI workflow also runs these checks and the server security boundary tests:
+
+```bash
+cargo test -p kiliax-server
+```
+
+### Benchmarks
+
+Run unit-level hot-path benchmarks for core prompt, history, compaction, and session paging code:
+
+```bash
+cargo bench -p kiliax-core --bench core_hot_paths
+```
+
+### Server API Load Test
+
+Install `oha` once:
+
+```bash
+cargo install oha --locked
+```
+
+Run the local authenticated server API load test:
+
+```bash
+REQUESTS=100 CONCURRENCY=10 scripts/perf/server-api-load.sh
+```
+
+The script builds or finds the `kiliax` binary, starts a temporary local server, then exercises:
+
+- `GET /v1/capabilities`
+- `POST /v1/sessions`
+- `GET /v1/sessions`
+- `GET /v1/sessions/{id}/messages`
+- `POST /v1/sessions/{id}/runs`
+
+Useful overrides:
+
+```bash
+KILIAX_BIN=/path/to/kiliax \
+KILIAX_LOAD_HOST=127.0.0.1 \
+KILIAX_LOAD_PORT=18123 \
+KILIAX_LOAD_TOKEN=load-test-token \
+REQUESTS=1000 \
+CONCURRENCY=20 \
+scripts/perf/server-api-load.sh
+```
+
+Write a full run log under `/tmp` when comparing results:
+
+```bash
+REQUESTS=100 CONCURRENCY=10 scripts/perf/server-api-load.sh \
+  | tee /tmp/kiliax-server-api-load-results.txt
+```
+
 ## observability (OpenTelemetry / Langfuse)
 
 Kiliax exports OTEL logs/traces/metrics via OTLP (HTTP/gRPC). Configure it in `kiliax.yaml`:

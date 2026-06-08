@@ -108,6 +108,7 @@ run_oha "GET /v1/sessions" -H "$AUTH_HEADER" "$BASE/v1/sessions"
 run_oha "GET /v1/sessions/{id}/messages" -H "$AUTH_HEADER" "$BASE/v1/sessions/$SESSION_ID/messages?limit=50"
 
 RUN_URLS="$TMP/run-urls.txt"
+RUN_STATUS="$TMP/run-status.txt"
 echo "preparing $REQUESTS sessions for run creation load test..." >&2
 for _ in $(seq 1 "$REQUESTS"); do
   run_session_json="$(curl -fsS -X POST -H "$AUTH_HEADER" "$BASE/v1/sessions")"
@@ -119,7 +120,36 @@ for _ in $(seq 1 "$REQUESTS"); do
   echo "$BASE/v1/sessions/$run_session_id/runs" >> "$RUN_URLS"
 done
 
-run_oha "POST /v1/sessions/{id}/runs" --urls-from-file -m POST -H "$AUTH_HEADER" -H "Content-Type: application/json" -D "$RUN_BODY" "$RUN_URLS"
+echo
+echo "== POST /v1/sessions/{id}/runs =="
+export AUTH_HEADER RUN_BODY
+start_ns="$(date +%s%N)"
+xargs -r -n 1 -P "$CONCURRENCY" sh -c '
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+    -X POST \
+    -H "$AUTH_HEADER" \
+    -H "Content-Type: application/json" \
+    --data-binary "@$RUN_BODY" \
+    "$1"
+' _ < "$RUN_URLS" > "$RUN_STATUS"
+end_ns="$(date +%s%N)"
+awk -v start="$start_ns" -v end="$end_ns" '
+  {
+    count[$1] += 1
+    total += 1
+    if ($1 != 201) unexpected += 1
+  }
+  END {
+    elapsed = (end - start) / 1000000000
+    printf "Summary:\n"
+    printf "  Total requests:\t%d\n", total
+    printf "  Total:\t%.4f sec\n", elapsed
+    if (elapsed > 0) printf "  Requests/sec:\t%.4f\n", total / elapsed
+    printf "\nStatus code distribution:\n"
+    for (code in count) printf "  [%s] %d responses\n", code, count[code]
+    exit unexpected ? 1 : 0
+  }
+' "$RUN_STATUS"
 
 echo
 echo "load test completed"
