@@ -33,6 +33,7 @@ minimal
 - MCP enablement overrides (shared semantics): `crates/kiliax-core/src/mcp_overrides.rs`
 - LLM compatibility re-exports + structured core telemetry hook forwarding: `crates/kiliax-core/src/llm.rs`
 - Provider-neutral message history sanitization + request-safety helpers: `crates/kiliax-core/src/history.rs`
+- Unit-level hot-path benchmarks for prompt/history/compaction/session paging: `crates/kiliax-core/benches/core_hot_paths.rs`
 - Built-in and auto-discovered custom agent profiles (global `~/.kiliax/agents/*/AGENT.yaml` + `PROMPT.md`): `crates/kiliax-core/src/agents/`
 - Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + available subagent descriptions + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + LLM retry/backoff event emission + tool scheduling barriers + per-step auto-compact hook + thinking/body normalization + diagnostic empty assistant guard: `crates/kiliax-core/src/runtime.rs`
@@ -87,6 +88,11 @@ minimal
 ### crates/kiliax-otel (OpenTelemetry)
 
 - OTLP exporters/providers + tracing/metrics/logs wiring: `crates/kiliax-otel/src/lib.rs`
+
+### nonfunctional tests
+
+- Security CI (cargo audit + bun audit + gitleaks + server security boundary tests): `.github/workflows/nonfunctional.yml`
+- Manual server API load testing via temporary authenticated local server + oha scenarios: `scripts/perf/server-api-load.sh`
 
 ### web (React UI)
 

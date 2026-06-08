@@ -30,4 +30,9 @@ uuid = { version = "1", features = ["v7"] }
 portable-pty = "0.9"
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
 tempfile.workspace = true
+
+[[bench]]
+name = "core_hot_paths"
+harness = false

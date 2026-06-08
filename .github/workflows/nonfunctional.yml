@@ -1,0 +1,79 @@
+name: nonfunctional
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_performance:
+        description: Run benchmark and server API load test jobs
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: security checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Bun audit
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun audit
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Server security boundary tests
+        run: cargo test -p kiliax-server
+
+  performance:
+    name: manual performance checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_performance == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install oha
+        run: cargo install oha --locked
+
+      - name: Core benchmarks
+        run: cargo bench -p kiliax-core --bench core_hot_paths
+
+      - name: Server API load test
+        run: scripts/perf/server-api-load.sh

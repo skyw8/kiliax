@@ -1638,6 +1638,82 @@ async fn auth_middleware_enforces_bearer_token() {
 }
 
 #[tokio::test]
+async fn api_requests_over_body_limit_are_rejected_before_run_parsing() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, Some("secret".to_string())).await;
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty_with_headers(
+            Method::POST,
+            "/v1/sessions",
+            &[("Authorization", "Bearer secret")],
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap();
+
+    let oversized_data = "A".repeat(72 * 1024 * 1024);
+    let resp = app
+        .clone()
+        .oneshot(req_json_with_headers(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/runs"),
+            serde_json::json!({
+                "input": {
+                    "type": "text",
+                    "text": "large attachment",
+                    "attachments": [{
+                        "filename": "large.txt",
+                        "media_type": "text/plain",
+                        "data": oversized_data
+                    }]
+                },
+                "auto_resume": false
+            }),
+            &[("Authorization", "Bearer secret")],
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn fs_list_rejects_relative_and_parent_paths() {
+    let dir = TempDir::new().expect("tempdir");
+    let app = build_test_app(&dir, Some("secret".to_string())).await;
+    let auth = ("Authorization", "Bearer secret");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty_with_headers(
+            Method::GET,
+            "/v1/fs/list?path=relative",
+            &[auth],
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert_error_code(&body, "invalid_argument");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty_with_headers(
+            Method::GET,
+            "/v1/fs/list?path=/tmp/../tmp",
+            &[auth],
+        ))
+        .await
+        .expect("oneshot");
+    let (status, body) = read_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert_error_code(&body, "invalid_argument");
+}
+
+#[tokio::test]
 async fn create_session_sets_workspace_root_and_updated_at() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, None).await;
