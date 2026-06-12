@@ -221,15 +221,9 @@ async fn openapi_and_docs_are_served() {
     let dir = TempDir::new().expect("tempdir");
     let app = build_test_app(&dir, Some("secret".to_string())).await;
 
-    let auth = ("Authorization", "Bearer secret");
-
     let resp = app
         .clone()
-        .oneshot(req_empty_with_headers(
-            Method::GET,
-            "/v1/openapi.json",
-            &[auth],
-        ))
+        .oneshot(req_empty(Method::GET, "/v1/openapi.json"))
         .await
         .expect("oneshot");
     let (status, body) = read_json(resp).await;
@@ -244,11 +238,7 @@ async fn openapi_and_docs_are_served() {
 
     let resp = app
         .clone()
-        .oneshot(req_empty_with_headers(
-            Method::GET,
-            "/v1/openapi.yaml",
-            &[auth],
-        ))
+        .oneshot(req_empty(Method::GET, "/v1/openapi.yaml"))
         .await
         .expect("oneshot");
     let (status, body) = read_text(resp).await;

@@ -67,8 +67,9 @@ pub(crate) async fn auth_middleware(
     let path = req.uri().path();
     let is_api = path == "/v1" || path.starts_with("/v1/");
     let is_events_ws = path.starts_with("/v1/sessions/") && path.ends_with("/events/ws");
+    let is_openapi_spec = path == "/v1/openapi.json" || path == "/v1/openapi.yaml";
 
-    if !is_api || is_events_ws {
+    if !is_api || is_events_ws || is_openapi_spec {
         return Ok(next.run(req).await);
     }
 
