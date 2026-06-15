@@ -32,10 +32,18 @@ fn test_config() -> Config {
 }
 
 async fn build_test_app(dir: &TempDir, token: Option<String>) -> axum::Router {
+    build_test_app_with_config(dir, token, test_config()).await
+}
+
+async fn build_test_app_with_config(
+    dir: &TempDir,
+    token: Option<String>,
+    config: Config,
+) -> axum::Router {
     let workspace_root = dir.path().to_path_buf();
     let config_path = workspace_root.join("kiliax.yaml");
     let state = Arc::new(
-        ServerState::new_for_tests(workspace_root, config_path, test_config(), token)
+        ServerState::new_for_tests(workspace_root, config_path, config, token)
             .await
             .expect("new_for_tests"),
     );
@@ -879,6 +887,63 @@ async fn create_run_auto_resume_false_requires_live_session() {
     let (status, body) = read_json(resp).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_error_code(&body, "session_not_live");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_run_enqueue_with_live_eviction_does_not_500() {
+    let dir = TempDir::new().expect("tempdir");
+    let mut config = test_config();
+    config.server.max_live_sessions = 8;
+    config.server.live_session_idle_ttl_secs = 0;
+    let app = build_test_app_with_config(&dir, None, config).await;
+
+    let mut session_ids = Vec::new();
+    for _ in 0..40 {
+        let resp = app
+            .clone()
+            .oneshot(req_empty(Method::POST, "/v1/sessions"))
+            .await
+            .expect("oneshot");
+        let (status, body) = read_json(resp).await;
+        assert_eq!(status, StatusCode::CREATED);
+        session_ids.push(
+            body.get("id")
+                .and_then(|v| v.as_str())
+                .expect("session id")
+                .to_string(),
+        );
+    }
+
+    let mut tasks = Vec::new();
+    for session_id in session_ids {
+        for _ in 0..2 {
+            let app = app.clone();
+            let uri = format!("/v1/sessions/{session_id}/runs");
+            tasks.push(tokio::spawn(async move {
+                let resp = app
+                    .oneshot(req_json(
+                        Method::POST,
+                        &uri,
+                        serde_json::json!({
+                            "input": { "type": "text", "text": "pressure" }
+                        }),
+                    ))
+                    .await
+                    .expect("oneshot");
+                read_json(resp).await
+            }));
+        }
+    }
+
+    for task in tasks {
+        let (status, body) = task.await.expect("join");
+        assert_ne!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "unexpected internal error body: {body}"
+        );
+        assert_eq!(status, StatusCode::CREATED, "unexpected body: {body}");
+    }
 }
 
 #[tokio::test]

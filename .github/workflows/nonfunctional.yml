@@ -77,3 +77,6 @@ jobs:
 
       - name: Server API load test
         run: scripts/perf/server-api-load.sh
+
+      - name: Server memory pressure test
+        run: SESSION_COUNT=100 RUNS_PER_SESSION=1 PAGE_PASSES=1 CONCURRENCY=10 scripts/perf/server-memory-pressure.sh

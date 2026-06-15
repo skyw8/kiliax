@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ use crate::protocol::Message;
 const SESSION_SCHEMA_VERSION: u32 = 4;
 const DEFAULT_CHECKPOINT_EVERY: u64 = 32;
 const REVERSE_READ_BLOCK_BYTES: usize = 64 * 1024;
+static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const SESSION_ID_FORMAT: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
     "[year][month][day]T[hour][minute][second]Z_[subsecond digits:3]"
@@ -299,6 +301,13 @@ pub enum SessionError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("{op} {path} failed: {source}", path = path.display())]
+    IoPath {
+        op: &'static str,
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1166,24 +1175,53 @@ fn project_prompt_from_messages(messages: &[Message]) -> Option<String> {
 
 async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), SessionError> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    tokio::fs::create_dir_all(dir).await?;
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|source| session_io_path_error("create dir for", dir.to_path_buf(), source))?;
 
-    let tmp = path.with_extension("tmp");
+    let tmp = unique_atomic_tmp_path(path);
     let text = serde_json::to_string_pretty(value).map_err(SessionError::Serialize)?;
-    tokio::fs::write(&tmp, text).await?;
+    tokio::fs::write(&tmp, text)
+        .await
+        .map_err(|source| session_io_path_error("write temp", tmp.clone(), source))?;
 
     match tokio::fs::rename(&tmp, path).await {
         Ok(()) => Ok(()),
-        Err(err) => {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                let _ = tokio::fs::remove_file(path).await;
-                tokio::fs::rename(&tmp, path).await?;
-                Ok(())
-            } else {
-                Err(err.into())
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = tokio::fs::remove_file(path).await;
+            if let Err(err) = tokio::fs::rename(&tmp, path).await {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(session_io_path_error(
+                    "rename temp to",
+                    path.to_path_buf(),
+                    err,
+                ));
             }
+            Ok(())
+        }
+        Err(err) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(session_io_path_error(
+                "rename temp to",
+                path.to_path_buf(),
+                err,
+            ))
         }
     }
+}
+
+fn session_io_path_error(op: &'static str, path: PathBuf, source: std::io::Error) -> SessionError {
+    SessionError::IoPath { op, path, source }
+}
+
+fn unique_atomic_tmp_path(path: &Path) -> PathBuf {
+    let seq = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("atomic");
+    path.with_file_name(format!("{name}.tmp.{pid}.{seq}"))
 }
 
 fn now_ms() -> u64 {
@@ -1207,6 +1245,7 @@ fn new_prompt_cache_key() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn truncate_title_does_not_panic_on_utf8_boundary() {
@@ -1268,6 +1307,53 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, state.meta.id);
         assert_eq!(list[0].title.as_deref(), Some("hello"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_checkpoints_use_unique_temp_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(FileSessionStore::new(tmp.path()).with_checkpoint_every(1000));
+        let state = store
+            .create(
+                "general",
+                Some("p/m".to_string()),
+                None,
+                None,
+                Vec::new(),
+                vec![Message::User {
+                    content: crate::protocol::UserMessageContent::Text("hello".to_string()),
+                    hidden: false,
+                }],
+            )
+            .await
+            .unwrap();
+        let id = state.id().clone();
+
+        let mut tasks = Vec::new();
+        for i in 0..64 {
+            let store = store.clone();
+            let mut state = state.clone();
+            tasks.push(tokio::spawn(async move {
+                state.meta.title = Some(format!("title {i}"));
+                store.checkpoint(&mut state).await
+            }));
+        }
+
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+
+        let loaded = store.load(&id).await.unwrap();
+        assert_eq!(loaded.meta.id, id);
+
+        let mut rd = tokio::fs::read_dir(store.session_dir(&id)).await.unwrap();
+        while let Some(entry) = rd.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !name.contains(".tmp."),
+                "atomic temp file leaked after concurrent checkpoint: {name}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

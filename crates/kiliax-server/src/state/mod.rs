@@ -10,6 +10,7 @@ pub use server_state::ServerState;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::http::StatusCode;
 use kiliax_core::agents::AgentProfile;
@@ -22,6 +23,8 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::error::{ApiError, ApiErrorCode};
 use crate::infra::validate_client_workspace_root;
+
+static SERVER_ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn map_session_err(err: SessionError) -> ApiError {
     match err {
@@ -842,39 +845,34 @@ async fn write_text_atomic(path: &Path, text: &str) -> Result<(), ApiError> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     tokio::fs::create_dir_all(dir)
         .await
-        .map_err(ApiError::internal_error)?;
+        .map_err(|err| io_path_error("create dir for text file", dir, err))?;
 
-    let tmp = path.with_extension("tmp");
+    let tmp = unique_atomic_tmp_path(path);
     tokio::fs::write(&tmp, text)
         .await
-        .map_err(ApiError::internal_error)?;
+        .map_err(|err| io_path_error("write temp text file", &tmp, err))?;
 
     match tokio::fs::rename(&tmp, path).await {
         Ok(()) => Ok(()),
-        Err(err) => {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                let _ = tokio::fs::remove_file(path).await;
-                tokio::fs::rename(&tmp, path)
-                    .await
-                    .map_err(ApiError::internal_error)?;
-                Ok(())
-            } else {
-                Err(ApiError::internal_error(err))
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = tokio::fs::remove_file(path).await;
+            if let Err(err) = tokio::fs::rename(&tmp, path).await {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(io_path_error("rename temp text file", path, err));
             }
+            Ok(())
+        }
+        Err(err) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(io_path_error("rename temp text file", path, err))
         }
     }
 }
 
 async fn write_run_file(dir: &Path, run: &domain::Run) -> Result<(), ApiError> {
-    tokio::fs::create_dir_all(dir)
-        .await
-        .map_err(ApiError::internal_error)?;
     let path = dir.join(format!("{}.json", run.id));
     let text = serde_json::to_string_pretty(run).map_err(ApiError::internal_error)?;
-    tokio::fs::write(&path, text)
-        .await
-        .map_err(ApiError::internal_error)?;
-    Ok(())
+    write_text_atomic(&path, &text).await
 }
 
 async fn read_run_file(dir: &Path, run_id: &str) -> Result<domain::Run, ApiError> {
@@ -883,10 +881,24 @@ async fn read_run_file(dir: &Path, run_id: &str) -> Result<domain::Run, ApiError
         if e.kind() == std::io::ErrorKind::NotFound {
             ApiError::not_found("run not found")
         } else {
-            ApiError::internal_error(e)
+            io_path_error("read run file", &path, e)
         }
     })?;
     serde_json::from_str(&text).map_err(ApiError::internal_error)
+}
+
+fn unique_atomic_tmp_path(path: &Path) -> PathBuf {
+    let seq = SERVER_ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("atomic");
+    path.with_file_name(format!("{name}.tmp.{pid}.{seq}"))
+}
+
+fn io_path_error(op: &'static str, path: &Path, err: std::io::Error) -> ApiError {
+    ApiError::internal(format!("{op} {} failed: {err}", path.display())).with_error_chain(&err)
 }
 
 fn new_run_id() -> String {

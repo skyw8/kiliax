@@ -38,7 +38,7 @@ minimal
 - Prompt assembly + single-system preamble for provider compatibility + nested project instruction scoping + multi-agent capability hint + available subagent descriptions + project prompts last in preamble (stable during normal turns, refreshed after compaction): `crates/kiliax-core/src/prompt.rs`
 - Agent runtime loop + LLM retry/backoff event emission + tool scheduling barriers + per-step auto-compact hook + thinking/body normalization + diagnostic empty assistant guard: `crates/kiliax-core/src/runtime.rs`
 - Streaming step assembly (thinking/body/tool calls + empty-output diagnostics): `crates/kiliax-core/src/runtime/streaming.rs`
-- Session store + snapshots + append-only events + context checkpoint persistence for compacted model context + reverse paged visible-message reads + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
+- Session store + snapshots + append-only events + unique-temp atomic metadata writes + context checkpoint persistence for compacted model context + reverse paged visible-message reads + frozen project prompt metadata + multi-agent parent/path metadata + session-scoped MCP/skills/custom-tools overrides + persistent session goal state/accounting: `crates/kiliax-core/src/session.rs`
 - Telemetry capture + span attributes/naming + metrics: `crates/kiliax-core/src/telemetry.rs`
 - Tools (builtin registry/patch application/MCP dispatch + Cargo-version client identity/skills discovery/custom tool discovery from `~/.kiliax/tools` + JSON-RPC process runtime/goal toolset backend dispatch + multi-agent backend dispatch + tool telemetry categories/outcomes/failed-call output capture): `crates/kiliax-core/src/tools/`
 - Project skill for external agents to drive Kiliax through the installed `ki` CLI plus authenticated HTTP control plane: `skills/kiliax-cli/SKILL.md`
@@ -77,7 +77,7 @@ minimal
 - Runner (`ki server run` when installed): `crates/kiliax-server/src/runner.rs`
 - HTTP router/handlers/Bearer-only API auth with public OpenAPI specs + first-message WebSocket auth/local access logs/WS/SSE/OpenAPI/public web asset selection + CSP/security headers/server-side folder listing/session actions/session goal APIs + JSON body limits for base64 attachments (architecture: `docs/web-auth-security.md`): `crates/kiliax-server/src/http/`
 - HTTP <-> state domain mappers + client-safe path display normalization: `crates/kiliax-server/src/http/mapper.rs`
-- State (config/session lifecycle/run queue with per-run model/agent/MCP/skills/custom-tools overrides + pre-run and mid-run auto-compaction through model-context checkpoints that preserve visible transcript history + goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
+- State (config/session lifecycle/run queue with per-session live owner guards + per-run model/agent/MCP/skills/custom-tools overrides + pre-run and mid-run auto-compaction through model-context checkpoints that preserve visible transcript history + goal continuation loop/retrying status + multi-agent registry and mailbox/goal usage events with output-token accounting/durable-vs-ephemeral events including persisted `user_message` acks + paged message history API + live stream snapshots with settled tool-call pruning/tmp workspace cleanup/default persistence): `crates/kiliax-server/src/state/`
 - Multi-agent control plane (root-scoped agent registry, task paths, mailbox updates, close semantics, tool backend): `crates/kiliax-server/src/state/multi_agent.rs`
 - Live session runtime integration (compacted model-context assembly, spawned child sessions, tool backend wiring, forked context, mailbox delivery, parent notifications, persisted user-message event emission): `crates/kiliax-server/src/state/live_session.rs`
 - State domain types (events/status including active run start/snapshots/live stream snapshots/runs/messages/session goals + attachment metadata/image preview data/base64 run input/client message ids): `crates/kiliax-server/src/state/domain.rs`
@@ -92,7 +92,7 @@ minimal
 ### nonfunctional tests
 
 - Security CI (cargo audit + bun audit + gitleaks + server security boundary tests): `.github/workflows/nonfunctional.yml`
-- Manual server API load testing via temporary authenticated local server + oha scenarios: `scripts/perf/server-api-load.sh`
+- Manual server API load and memory pressure testing via temporary authenticated local server, oha scenarios, bulk session/run/message paging, and RSS/HWM sampling: `scripts/perf/server-api-load.sh`, `scripts/perf/server-memory-pressure.sh`
 
 ### web (React UI)
 

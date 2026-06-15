@@ -856,6 +856,10 @@ impl LiveSession {
         }
     }
 
+    pub fn is_closing(&self) -> bool {
+        self.closing.load(Ordering::SeqCst)
+    }
+
     pub async fn is_idle_for_eviction(&self) -> bool {
         let q = self.queue.lock().await;
         let st = self.status.lock().await;
@@ -1317,6 +1321,10 @@ impl LiveSession {
         runs_dir: &Path,
         req: domain::RunCreateRequest,
     ) -> Result<domain::Run, ApiError> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(ApiError::session_not_live("session is closing"));
+        }
+
         match &req.input {
             domain::RunInput::Text { text, attachments } => {
                 run_text_content(text, attachments)?;

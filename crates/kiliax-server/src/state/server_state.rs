@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
@@ -41,6 +41,7 @@ pub struct ServerState {
     pub shutdown: Arc<Notify>,
     runner_enabled: bool,
     sessions: Mutex<HashMap<String, LiveSessionEntry>>,
+    session_lifecycle_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     idempotency: Mutex<HashMap<String, (String, u64)>>,
 }
 
@@ -191,6 +192,7 @@ impl ServerState {
             shutdown: Arc::new(Notify::new()),
             runner_enabled,
             sessions: Mutex::new(HashMap::new()),
+            session_lifecycle_locks: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(HashMap::new()),
         })
     }
@@ -201,6 +203,19 @@ impl ServerState {
 
     pub(super) fn runner_enabled(&self) -> bool {
         self.runner_enabled
+    }
+
+    async fn session_lifecycle_lock(&self, session_id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.session_lifecycle_locks.lock().await;
+        if locks.len() > 4096 {
+            locks.retain(|_, lock| lock.strong_count() > 0);
+        }
+        if let Some(lock) = locks.get(session_id).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(session_id.to_string(), Arc::downgrade(&lock));
+        lock
     }
 
     fn default_tmp_workspace_root(&self) -> Result<PathBuf, ApiError> {
@@ -309,11 +324,14 @@ impl ServerState {
             return;
         }
 
-        let mut to_shutdown: Vec<Arc<LiveSession>> = Vec::new();
         for (id, live, last_access_ms) in items {
             if !candidates.contains(&id) {
                 continue;
             }
+
+            let lifecycle = self.session_lifecycle_lock(&id).await;
+            let _guard = lifecycle.lock().await;
+
             if !live.is_idle_for_eviction().await {
                 continue;
             }
@@ -332,12 +350,8 @@ impl ServerState {
             };
 
             if removed.is_some() {
-                to_shutdown.push(live);
+                live.shutdown().await;
             }
-        }
-
-        for live in to_shutdown {
-            live.shutdown().await;
         }
     }
 
@@ -910,24 +924,27 @@ impl ServerState {
         open_external(&root, target).await
     }
 
-    pub async fn get_live(&self, session_id: &str) -> Option<Arc<LiveSession>> {
+    async fn get_live_locked(&self, session_id: &str) -> Option<Arc<LiveSession>> {
         let now = now_ms();
-        let live = {
-            let mut guard = self.sessions.lock().await;
-            match guard.get_mut(session_id) {
-                Some(entry) => {
-                    entry.last_access_ms = now;
-                    Some(entry.live.clone())
-                }
-                None => None,
+        let mut guard = self.sessions.lock().await;
+        match guard.get_mut(session_id) {
+            Some(entry) if entry.live.is_closing() => {
+                guard.remove(session_id);
+                None
             }
-        };
-        self.enforce_live_session_limits().await;
-        live
+            Some(entry) => {
+                entry.last_access_ms = now;
+                Some(entry.live.clone())
+            }
+            None => None,
+        }
     }
 
-    pub async fn ensure_live(&self, session_id: &SessionId) -> Result<Arc<LiveSession>, ApiError> {
-        if let Some(live) = self.get_live(session_id.as_str()).await {
+    async fn ensure_live_locked(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Arc<LiveSession>, ApiError> {
+        if let Some(live) = self.get_live_locked(session_id.as_str()).await {
             return Ok(live);
         }
         let live = LiveSession::resume(self, session_id).await?;
@@ -938,6 +955,23 @@ impl ServerState {
                 last_access_ms: now_ms(),
             },
         );
+        Ok(live)
+    }
+
+    pub async fn get_live(&self, session_id: &str) -> Option<Arc<LiveSession>> {
+        let lifecycle = self.session_lifecycle_lock(session_id).await;
+        let _guard = lifecycle.lock().await;
+        let live = self.get_live_locked(session_id).await;
+        drop(_guard);
+        self.enforce_live_session_limits().await;
+        live
+    }
+
+    pub async fn ensure_live(&self, session_id: &SessionId) -> Result<Arc<LiveSession>, ApiError> {
+        let lifecycle = self.session_lifecycle_lock(session_id.as_str()).await;
+        let _guard = lifecycle.lock().await;
+        let live = self.ensure_live_locked(session_id).await?;
+        drop(_guard);
         self.enforce_live_session_limits().await;
         Ok(live)
     }
@@ -1316,27 +1350,6 @@ impl ServerState {
         })
     }
 
-    async fn session_workspace_root(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Option<PathBuf>, ApiError> {
-        if let Some(live) = self.get_live(session_id.as_str()).await {
-            let root = live.workspace_root().await;
-            if !root.as_os_str().is_empty() {
-                return Ok(Some(root));
-            }
-        }
-
-        let state = self.store.load(session_id).await.map_err(map_session_err)?;
-        let root = state.meta.workspace_root.unwrap_or_default();
-        let root = root.trim().to_string();
-        if root.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(PathBuf::from(root)))
-        }
-    }
-
     async fn workspace_root_in_use(&self, root: &Path) -> Result<bool, ApiError> {
         let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         for meta in self.store.list().await.map_err(map_session_err)? {
@@ -1380,8 +1393,21 @@ impl ServerState {
         session_id: &SessionId,
         delete_workspace_root: bool,
     ) -> Result<(), ApiError> {
+        let lifecycle = self.session_lifecycle_lock(session_id.as_str()).await;
+        let _guard = lifecycle.lock().await;
         let workspace_root = if delete_workspace_root {
-            self.session_workspace_root(session_id).await?
+            if let Some(live) = self.get_live_locked(session_id.as_str()).await {
+                Some(live.workspace_root().await)
+            } else {
+                let state = self.store.load(session_id).await.map_err(map_session_err)?;
+                let root = state.meta.workspace_root.unwrap_or_default();
+                let root = root.trim().to_string();
+                if root.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(root))
+                }
+            }
         } else {
             None
         };
@@ -1520,10 +1546,12 @@ impl ServerState {
         session_id: &SessionId,
         req: domain::RunCreateRequest,
     ) -> Result<domain::Run, ApiError> {
+        let lifecycle = self.session_lifecycle_lock(session_id.as_str()).await;
+        let _guard = lifecycle.lock().await;
         let live = if req.auto_resume {
-            self.ensure_live(session_id).await?
+            self.ensure_live_locked(session_id).await?
         } else {
-            match self.get_live(session_id.as_str()).await {
+            match self.get_live_locked(session_id.as_str()).await {
                 Some(live) => live,
                 None => {
                     self.ensure_on_disk_session_exists(session_id).await?;
@@ -1531,7 +1559,10 @@ impl ServerState {
                 }
             }
         };
-        live.enqueue_run(&self.runs_dir, req).await
+        let run = live.enqueue_run(&self.runs_dir, req).await?;
+        drop(_guard);
+        self.enforce_live_session_limits().await;
+        Ok(run)
     }
 
     pub async fn get_run(&self, run_id: &str) -> Result<domain::Run, ApiError> {
@@ -1542,12 +1573,15 @@ impl ServerState {
         let run = read_run_file(&self.runs_dir, run_id).await?;
         let session_id = SessionId::parse(&run.session_id)
             .map_err(|e| ApiError::invalid_argument(e.to_string()))?;
+        let lifecycle = self.session_lifecycle_lock(session_id.as_str()).await;
+        let _guard = lifecycle.lock().await;
         let live = self
-            .get_live(session_id.as_str())
+            .get_live_locked(session_id.as_str())
             .await
             .ok_or_else(|| ApiError::session_not_live("session is not live"))?;
 
         live.cancel_run(&self.runs_dir, run_id).await?;
+        drop(_guard);
         self.get_run(run_id).await
     }
     pub async fn get_messages(

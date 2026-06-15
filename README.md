@@ -140,6 +140,39 @@ REQUESTS=100 CONCURRENCY=10 scripts/perf/server-api-load.sh \
   | tee /tmp/kiliax-server-api-load-results.txt
 ```
 
+### Server Memory Pressure Test
+
+Run the local authenticated server memory pressure test:
+
+```bash
+SESSION_COUNT=500 RUNS_PER_SESSION=2 CONCURRENCY=20 scripts/perf/server-memory-pressure.sh
+```
+
+The script builds or finds the `kiliax` binary, starts a temporary local server, samples server RSS/HWM memory, then exercises:
+
+- bulk `POST /v1/sessions`
+- concurrent `POST /v1/sessions/{id}/runs`
+- concurrent `GET /v1/sessions/{id}/messages`
+
+By default the script sets the temporary server `max_live_sessions` to `SESSION_COUNT + 16` so the run measures live-session memory capacity without also forcing eviction churn. Set `EVICTION_TEST=true` to keep the config default and stress live-session eviction/resume behavior.
+
+Useful overrides:
+
+```bash
+KILIAX_BIN=/path/to/kiliax \
+KILIAX_MEMORY_HOST=127.0.0.1 \
+KILIAX_MEMORY_PORT=18124 \
+SESSION_COUNT=1000 \
+RUNS_PER_SESSION=3 \
+MESSAGE_SIZE=2048 \
+MEMORY_SAMPLE_INTERVAL=1 \
+MEMORY_MAX_RSS_KB=300000 \
+LIVE_SESSION_LIMIT=1200 \
+EVICTION_TEST=false \
+KEEP_MEMORY_LOG=true \
+scripts/perf/server-memory-pressure.sh
+```
+
 ## observability (OpenTelemetry / Langfuse)
 
 Kiliax exports OTEL logs/traces/metrics via OTLP (HTTP/gRPC). Configure it in `kiliax.yaml`:
