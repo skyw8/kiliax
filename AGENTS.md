@@ -47,7 +47,7 @@ minimal
   - `list_dir`: list directory entries under the workspace, optional recursive/depth/hidden/limit
   - `grep_files`: search files for a regex pattern (ripgrep semantics; respects `.gitignore`/`.ignore` by default)
   - `view_image`: attach a local image from the filesystem (png/jpg/jpeg/gif/webp/bmp/tif/tiff/avif)
-  - `shell_command`: run a command string in the workspace through the user's default or requested shell, inheriting the full process environment and using login/profile semantics by default; supports timeout, long-running `session_id` polling, bounded/truncated output, Unix PTY via `tty=true`, Windows default-shell fallback that ignores nonexistent POSIX `SHELL` values, and Codex/opencode argument aliases (`command`/`workdir`/`timeout`/`description`)
+  - `shell_command`: run a command string in the workspace through the user's default or requested shell, inheriting the full process environment and using login/profile semantics by default; supports timeout, long-running `session_id` polling, interactive stdin coverage, bounded/truncated output, Unix PTY via `tty=true`, Windows default-shell fallback that ignores nonexistent POSIX `SHELL` values, and Codex/opencode argument aliases (`command`/`workdir`/`timeout`/`description`)
   - `write_stdin`: write to stdin of a running shell session, or poll its output; reports timeout/truncation/status metadata consistently with `shell_command`
   - `write_file`: write/overwrite a UTF-8 text file using `filePath` and `content`, creating parent directories and preserving UTF-8 BOM
   - `edit_file`: perform opencode-style text edits using `filePath`, `oldString`, `newString`, and `replaceAll`, preserving BOM/line endings and allowing empty `oldString` for whole-file create/overwrite
@@ -69,7 +69,7 @@ minimal
 ### crates/kiliax-cli (CLI)
 
 - CLI command routing + installed `ki` entrypoint (source package remains `kiliax`) => ensure server is running and open Web UI (silent first-run config init) + local session goal commands: `crates/kiliax-cli/src/main.rs`
-- Server daemon control + idempotent start via bearer API/admin identity checks: `crates/kiliax-cli/src/daemon.rs`
+- Server daemon control + idempotent start via bearer API/admin identity checks + stale state/token-mismatch recovery for cross-environment launches: `crates/kiliax-cli/src/daemon.rs`
 - Foreground server run argument parsing: `crates/kiliax-cli/src/server_run_args.rs`
 
 ### crates/kiliax-server (HTTP control plane)

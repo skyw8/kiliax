@@ -196,20 +196,15 @@ pub async fn ensure_running(
             ..parsed.clone()
         };
         let mut should_start_new = false;
+        let mut stale_state = false;
 
         if ping(&parsed).await {
             let api_ok = ping(&check).await;
             let token_required = token_is_required(&check).await;
 
-            let mut identity_ok = true;
-            if api_ok && token_required {
-                if let Some(info) = fetch_admin_info(&check).await {
-                    let desired_root = workspace_root.display().to_string();
-                    let desired_config_path = config_path.display().to_string();
-                    identity_ok = info.workspace_root == desired_root
-                        && info.config_path == desired_config_path;
-                }
-            }
+            let identity_ok = api_ok
+                && token_required
+                && server_identity_matches(&check, workspace_root, config_path).await;
 
             if api_ok
                 && token_required
@@ -244,9 +239,17 @@ pub async fn ensure_running(
                     parsed.port
                 );
             }
+        } else if token_is_required(&parsed).await {
+            let _ = tokio::fs::remove_file(&state_file).await;
+            stale_state = true;
+        } else if !port_is_free(&desired_bind_host, parsed.port) {
+            let _ = tokio::fs::remove_file(&state_file).await;
+            stale_state = true;
         }
 
-        if !should_start_new
+        if should_start_new {
+            let _ = tokio::fs::remove_file(&state_file).await;
+        } else if !stale_state
             && parsed.started_at_ms.is_some_and(|ms| {
                 now_ms().saturating_sub(ms) < STARTUP_GRACE_PERIOD.as_millis() as u64
             })
@@ -254,8 +257,6 @@ pub async fn ensure_running(
             parsed.token = token.clone();
             return Ok(parsed);
         }
-
-        let _ = tokio::fs::remove_file(&state_file).await;
     }
 
     let kiliax_dir = home_kiliax_dir()?;
@@ -274,16 +275,8 @@ pub async fn ensure_running(
         };
         if ping(&candidate).await {
             let token_required = token_is_required(&candidate).await;
-
-            let mut identity_ok = true;
-            if token_required {
-                if let Some(info) = fetch_admin_info(&candidate).await {
-                    let desired_root = workspace_root.display().to_string();
-                    let desired_config_path = config_path.display().to_string();
-                    identity_ok = info.workspace_root == desired_root
-                        && info.config_path == desired_config_path;
-                }
-            }
+            let identity_ok = token_required
+                && server_identity_matches(&candidate, workspace_root, config_path).await;
 
             if token_required && identity_ok {
                 let text = serde_json::to_string_pretty(&candidate)
@@ -400,6 +393,19 @@ pub async fn ensure_running(
     })?;
 
     Ok(state)
+}
+
+async fn server_identity_matches(
+    state: &DaemonState,
+    workspace_root: &Path,
+    config_path: &Path,
+) -> bool {
+    let Some(info) = fetch_admin_info(state).await else {
+        return false;
+    };
+    let desired_root = workspace_root.display().to_string();
+    let desired_config_path = config_path.display().to_string();
+    info.workspace_root == desired_root && info.config_path == desired_config_path
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
