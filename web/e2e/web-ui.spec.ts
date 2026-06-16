@@ -341,6 +341,7 @@ test("shows unauthorized state and removes bootstrap token from the URL", async 
   await expect(page.getByText("Unauthorized", { exact: true })).toBeVisible();
   await expect(page).toHaveURL((url) => !url.searchParams.has("token"));
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem("kiliax_token"))).toBeNull();
+  await expect.poll(() => page.evaluate(() => document.cookie.includes("kiliax_token="))).toBe(false);
 });
 
 test("uses session token for HTTP and WebSocket authentication", async ({ page }) => {
@@ -361,6 +362,19 @@ test("uses session token for HTTP and WebSocket authentication", async ({ page }
       ),
     )
     .toBe(true);
+});
+
+test("restores auth from bootstrap cookie when URL token is gone", async ({ page }) => {
+  const mock = await installMockKiliax(page, { initialToken: null });
+  await page.addInitScript(() => {
+    document.cookie = "kiliax_token=cookie-token; Path=/; SameSite=Lax";
+  });
+  await page.goto("/");
+
+  await expect
+    .poll(() => page.evaluate(() => sessionStorage.getItem("kiliax_token")))
+    .toBe("cookie-token");
+  await expect.poll(() => mock.requests.some((r) => r.authorization === "Bearer cookie-token")).toBe(true);
 });
 
 test("sanitizes rendered Mermaid SVG", async ({ page }) => {

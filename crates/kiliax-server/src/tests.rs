@@ -167,6 +167,23 @@ async fn web_is_public_and_sets_security_headers() {
         .await
         .expect("oneshot");
     assert_eq!(resp.status(), StatusCode::OK);
+    let cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        cookie.contains("kiliax_token=secret"),
+        "set-cookie: {cookie}"
+    );
+    assert!(cookie.contains("SameSite=Lax"), "set-cookie: {cookie}");
+
+    let resp = app
+        .clone()
+        .oneshot(req_empty(Method::GET, "/?token=wrong"))
+        .await
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
     assert!(resp.headers().get(header::SET_COOKIE).is_none());
 }
 

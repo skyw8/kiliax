@@ -158,11 +158,35 @@ async fn ensure_server_and_open(workspace_root: &std::path::Path) -> Result<()> 
     let state = daemon::ensure_running(workspace_root, &loaded.path, &loaded.config.server).await?;
     let url = format!(
         "http://{}:{}/?token={}",
-        state.host, state.port, state.token
+        state.host,
+        state.port,
+        url_query_encode(&state.token)
     );
     println!("{url}");
     try_open_browser(&url);
     Ok(())
+}
+
+fn url_query_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(hex_digit(b >> 4));
+            out.push(hex_digit(b & 0x0f));
+        }
+    }
+    out
+}
+
+fn hex_digit(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'A' + (n - 10)) as char,
+        _ => '?',
+    }
 }
 
 #[tokio::main]

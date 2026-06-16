@@ -9,6 +9,9 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::state::ServerState;
 
+const TOKEN_COOKIE_NAME: &str = "kiliax_token";
+const TOKEN_COOKIE_MAX_AGE_SECONDS: u64 = 60 * 60 * 24 * 30;
+
 pub(crate) async fn serve_web(
     State(state): State<Arc<ServerState>>,
     req: axum::extract::Request,
@@ -17,6 +20,7 @@ pub(crate) async fn serve_web(
         return StatusCode::NOT_FOUND.into_response();
     }
 
+    let bootstrap_token = token_query_value(req.uri().query());
     if let Some(dist_dir) = find_web_dist_dir(&state.workspace_root) {
         let index = dist_dir.join("index.html");
 
@@ -42,6 +46,7 @@ pub(crate) async fn serve_web(
                         HeaderValue::from_static("no-cache"),
                     );
                 }
+                set_bootstrap_cookie(&state, bootstrap_token.as_deref(), &mut resp);
 
                 resp
             }
@@ -50,7 +55,9 @@ pub(crate) async fn serve_web(
     }
 
     if crate::web::embedded::ENABLED {
-        return serve_web_embedded(req.uri().path());
+        let mut resp = serve_web_embedded(req.uri().path());
+        set_bootstrap_cookie(&state, bootstrap_token.as_deref(), &mut resp);
+        return resp;
     }
 
     {
@@ -81,6 +88,7 @@ bun run build</pre>
             axum::http::header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         );
+        set_bootstrap_cookie(&state, bootstrap_token.as_deref(), &mut resp);
         resp
     }
 }
@@ -164,4 +172,81 @@ fn find_web_dist_dir(workspace_root: &FsPath) -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|dir| dir.join("index.html").is_file())
+}
+
+fn set_bootstrap_cookie(state: &ServerState, token: Option<&str>, resp: &mut Response) {
+    let Some(expected) = state.token.as_deref() else {
+        return;
+    };
+    if token != Some(expected) {
+        return;
+    }
+
+    let cookie = format!(
+        "{TOKEN_COOKIE_NAME}={}; Path=/; SameSite=Lax; Max-Age={TOKEN_COOKIE_MAX_AGE_SECONDS}",
+        cookie_encode(expected)
+    );
+    if let Ok(value) = HeaderValue::from_str(&cookie) {
+        resp.headers_mut()
+            .insert(axum::http::header::SET_COOKIE, value);
+    }
+}
+
+fn token_query_value(query: Option<&str>) -> Option<String> {
+    for part in query?.split('&') {
+        let (key, value) = part.split_once('=').unwrap_or((part, ""));
+        if key == "token" {
+            return percent_decode(value);
+        }
+    }
+    None
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = hex_value(*bytes.get(i + 1)?)?;
+            let lo = hex_value(*bytes.get(i + 2)?)?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn cookie_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(hex_digit(b >> 4));
+            out.push(hex_digit(b & 0x0f));
+        }
+    }
+    out
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn hex_digit(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'A' + (n - 10)) as char,
+        _ => '?',
+    }
 }

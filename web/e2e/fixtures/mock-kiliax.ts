@@ -57,6 +57,7 @@ type Provider = {
 
 type MockOptions = {
   unauthorized?: boolean;
+  initialToken?: string | null;
 };
 
 const now = "2026-05-30T09:00:00.000Z";
@@ -122,8 +123,9 @@ async function body(route: Route) {
 }
 
 export async function installMockKiliax(page: Page, options: MockOptions = {}) {
-  if (!options.unauthorized) {
-    await page.addInitScript(() => sessionStorage.setItem("kiliax_token", "secret-token"));
+  if (!options.unauthorized && options.initialToken !== null) {
+    const token = options.initialToken ?? "secret-token";
+    await page.addInitScript((value) => sessionStorage.setItem("kiliax_token", value), token);
   }
   const sessions = new Map<string, SessionSummary>([
     ["s-work", summary("s-work", "Workspace thread", "D:\\github_code\\kiliax", 12)],
