@@ -6,7 +6,7 @@ use crate::protocol::{ToolCall, ToolDefinition};
 use crate::tools::{Permissions, ToolError};
 
 use super::common::{parse_args, resolve_workspace_path};
-use super::{FileAccessTracker, TOOL_EDIT_FILE};
+use super::TOOL_EDIT_FILE;
 
 const DESCRIPTION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -49,7 +49,6 @@ pub(super) async fn execute(
     workspace_root: &Path,
     extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
-    file_tracker: &FileAccessTracker,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
     if !perms.file_write {
@@ -80,7 +79,6 @@ pub(super) async fn execute(
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&abs, join_bom(&next.text, desired_bom)).await?;
-        file_tracker.record_read(&abs).await?;
         return Ok("Edit applied successfully.".to_string());
     }
 
@@ -107,7 +105,6 @@ pub(super) async fn execute(
     let desired_bom = source.bom || next.bom;
 
     tokio::fs::write(&abs, join_bom(&content_new, desired_bom)).await?;
-    file_tracker.record_read(&abs).await?;
 
     Ok("Edit applied successfully.".to_string())
 }
@@ -618,7 +615,6 @@ mod tests {
             root,
             &[],
             &permissions(),
-            &FileAccessTracker::new(),
             &call(args),
         )
         .await

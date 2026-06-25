@@ -7,7 +7,7 @@ use crate::protocol::{ToolCall, ToolDefinition};
 use crate::tools::{Permissions, ToolError};
 
 use super::common::{parse_args, resolve_workspace_path};
-use super::{FileAccessTracker, TOOL_WRITE_FILE};
+use super::TOOL_WRITE_FILE;
 
 const DESCRIPTION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -43,7 +43,6 @@ pub(super) async fn execute(
     workspace_root: &Path,
     extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
-    file_tracker: &FileAccessTracker,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
     if !perms.file_write {
@@ -72,7 +71,6 @@ pub(super) async fn execute(
     }
     let (content_had_bom, content) = split_bom(&args.content);
     tokio::fs::write(&abs, join_bom(content, source_had_bom || content_had_bom)).await?;
-    file_tracker.record_read(&abs).await?;
 
     Ok("Wrote file successfully.".to_string())
 }
@@ -124,7 +122,6 @@ mod tests {
             root,
             &[],
             &permissions(),
-            &FileAccessTracker::new(),
             &call(args),
         )
         .await

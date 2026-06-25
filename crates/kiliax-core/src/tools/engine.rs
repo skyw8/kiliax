@@ -46,7 +46,6 @@ pub struct ToolEngine {
     workspace_root: PathBuf,
     extra_workspace_roots: Arc<RwLock<Arc<Vec<PathBuf>>>>,
     shell_sessions: Arc<builtin::ShellSessions>,
-    file_tracker: Arc<builtin::FileAccessTracker>,
     custom_tools: crate::tools::custom::CustomToolRuntime,
     config: Arc<RwLock<Arc<crate::config::Config>>>,
     goal_backend: Arc<RwLock<Option<Arc<dyn builtin::GoalBackend>>>>,
@@ -62,7 +61,6 @@ impl ToolEngine {
             workspace_root: workspace_root.into(),
             extra_workspace_roots: Arc::new(RwLock::new(Arc::new(Vec::new()))),
             shell_sessions: Arc::new(builtin::ShellSessions::new()),
-            file_tracker: Arc::new(builtin::FileAccessTracker::new()),
             custom_tools: crate::tools::custom::CustomToolRuntime::default(),
             config: Arc::new(RwLock::new(Arc::new(config))),
             goal_backend: Arc::new(RwLock::new(None)),
@@ -373,7 +371,6 @@ impl ToolEngine {
                 extra.as_slice(),
                 perms,
                 self.shell_sessions.as_ref(),
-                self.file_tracker.as_ref(),
                 cfg.as_ref(),
                 call,
             )

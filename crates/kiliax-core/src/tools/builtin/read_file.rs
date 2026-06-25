@@ -48,7 +48,6 @@ pub(super) async fn execute(
     workspace_root: &Path,
     extra_workspace_roots: &[PathBuf],
     perms: &Permissions,
-    file_tracker: &super::FileAccessTracker,
     call: &ToolCall,
 ) -> Result<String, ToolError> {
     if !perms.file_read {
@@ -57,8 +56,6 @@ pub(super) async fn execute(
     let args: ReadFileArgs = parse_args(call, TOOL_READ_FILE)?;
     let path = resolve_read_path(workspace_root, extra_workspace_roots, &args.file_path)?;
     let text = tokio::fs::read_to_string(&path).await?;
-
-    file_tracker.record_read(&path).await?;
 
     Ok(format_read_file_output(
         &path,
@@ -152,7 +149,6 @@ mod tests {
             root,
             &[],
             &permissions(),
-            &super::super::FileAccessTracker::new(),
             &call(args),
         )
         .await
