@@ -1391,6 +1391,7 @@ mod tests {
         let command = "$line = [Console]::In.ReadLine(); Write-Output ('got:' + $line)";
         #[cfg(not(windows))]
         let command = "read line; echo got:$line";
+        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut first_args = serde_json::json!({
             "cmd": command,
             "login": false,
