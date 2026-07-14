@@ -2632,6 +2632,11 @@ impl LiveSession {
             AgentEvent::LlmRetry(retry) => {
                 let event_id = self.alloc_event_id();
                 let ts = now_rfc3339();
+                let tokens_used = retry
+                    .usage
+                    .as_ref()
+                    .map(|usage| usage.completion_tokens as u64)
+                    .unwrap_or(0);
                 let retry_status = domain::RetryStatus {
                     kind: retry.kind.as_str().to_string(),
                     attempt: retry.attempt,
@@ -2647,6 +2652,7 @@ impl LiveSession {
                     st.active_tool = None;
                     st.retry_status = Some(retry_status.clone());
                 }
+                *self.stream_snapshot.lock().await = None;
                 self.emit_ephemeral_event(domain::Event {
                     event_id,
                     ts,
@@ -2656,6 +2662,9 @@ impl LiveSession {
                     data: serde_json::json!({ "retry_status": retry_status }),
                 })
                 .await?;
+                if tokens_used > 0 {
+                    let _ = self.add_goal_usage_and_emit(0, tokens_used).await;
+                }
             }
             AgentEvent::StepEnd { step } => {
                 let event_id = self.alloc_event_id();
@@ -3347,6 +3356,31 @@ mod tests {
 
         live.handle_agent_event(
             &run,
+            AgentEvent::LlmRetry(kiliax_core::runtime::LlmRetryEvent {
+                kind: kiliax_core::llm::LlmRetryKind::EmptyResponse,
+                attempt: 1,
+                max_attempts: Some(5),
+                delay_ms: 637,
+                message: "empty response".to_string(),
+                usage: None,
+            }),
+        )
+        .await
+        .expect("retry");
+
+        let retry_snapshot = live.snapshot().await.expect("retry snapshot");
+        assert!(retry_snapshot.stream.is_none());
+        assert_eq!(
+            retry_snapshot.summary.status.run_state,
+            domain::SessionRunState::Retrying
+        );
+        assert_eq!(
+            retry_snapshot.summary.status.retry_status.unwrap().kind,
+            "empty_response"
+        );
+
+        live.handle_agent_event(
+            &run,
             AgentEvent::AssistantMessage {
                 message: CoreMessage::Assistant {
                     content: Some("Hello".to_string()),
@@ -3425,6 +3459,25 @@ mod tests {
 
         live.handle_agent_event(
             &run,
+            AgentEvent::LlmRetry(kiliax_core::runtime::LlmRetryEvent {
+                kind: kiliax_core::llm::LlmRetryKind::EmptyResponse,
+                attempt: 1,
+                max_attempts: Some(5),
+                delay_ms: 637,
+                message: "empty response".to_string(),
+                usage: Some(TokenUsage {
+                    prompt_tokens: 100,
+                    completion_tokens: 3,
+                    total_tokens: 103,
+                    cached_tokens: None,
+                }),
+            }),
+        )
+        .await
+        .expect("retry usage");
+
+        live.handle_agent_event(
+            &run,
             AgentEvent::AssistantMessage {
                 message: CoreMessage::Assistant {
                     content: Some("Hello".to_string()),
@@ -3443,7 +3496,7 @@ mod tests {
         .await
         .expect("assistant message");
 
-        assert_eq!(live.goal().await.unwrap().tokens_used, 7);
+        assert_eq!(live.goal().await.unwrap().tokens_used, 10);
     }
 
     #[tokio::test]

@@ -14,6 +14,7 @@ import type {
   Capabilities,
   Message,
   MessageAttachment,
+  RetryStatus,
   RunAttachment,
   Session,
   SessionGoal,
@@ -734,6 +735,31 @@ export default function App() {
     );
   }
 
+  function showRunRetryAlert(runId: string, retry: RetryStatus | null | undefined) {
+    const attempt = typeof retry?.attempt === "number" ? retry.attempt : 1;
+    const maxAttempts =
+      typeof retry?.max_attempts === "number" ? String(retry.max_attempts) : "∞";
+    const delayMs = typeof retry?.delay_ms === "number" ? retry.delay_ms : 0;
+    const kindValue = String(retry?.kind ?? "retry");
+    const kind = kindValue.replaceAll("_", " ");
+    pushAlert({
+      id: runId ? `run-retry-${runId}` : "run-retry",
+      level: "error",
+      title:
+        kindValue === "empty_response"
+          ? "Model returned an empty response, retrying"
+          : "LLM request failed, retrying",
+      subtitle: `${kind} • attempt ${attempt}/${maxAttempts} • next in ${fmtDurationCompact(delayMs)}`,
+      message: String(retry?.message ?? "The provider request failed and will be retried."),
+      traceId: retry?.trace_id ?? undefined,
+      details: { retry_status: retry, run_id: runId },
+    });
+  }
+
+  function closeRunRetryAlert(runId: string) {
+    if (runId) closeAlert(`run-retry-${runId}`);
+  }
+
   function reconcilePersistedUserMessage(
     runId: string,
     msg: Message,
@@ -810,6 +836,13 @@ export default function App() {
           ? Math.max(0, assistantStartedAt - thinkingStartedAt)
           : null;
 
+      const activeRunId = s.status.active_run_id ?? "";
+      if (s.status.run_state === "retrying" && s.status.retry_status) {
+        showRunRetryAlert(activeRunId, s.status.retry_status);
+      } else {
+        closeRunRetryAlert(activeRunId);
+      }
+
       lastEventIdRef.current = liveStream?.last_event_id ?? s.status.last_event_id ?? 0;
       wsEvents.resetReconnectAttempt();
       wsEvents.connect(sessionId, lastEventIdRef.current);
@@ -869,23 +902,13 @@ export default function App() {
 
     if (type === "run_retry") {
       markPendingRunSent(runId);
-      const retry = ev?.data?.retry_status ?? null;
-      const attempt = typeof retry?.attempt === "number" ? retry.attempt : 1;
-      const maxAttempts =
-        typeof retry?.max_attempts === "number" ? String(retry.max_attempts) : "∞";
-      const delayMs = typeof retry?.delay_ms === "number" ? retry.delay_ms : 0;
-      const delay = fmtDurationCompact(delayMs);
-      const kind = String(retry?.kind ?? "retry").replaceAll("_", " ");
-      const traceId = retry?.trace_id ?? undefined;
-      pushAlert({
-        id: runId ? `run-retry-${runId}` : "run-retry",
-        level: "error",
-        title: "LLM request failed, retrying",
-        subtitle: `${kind} • attempt ${attempt}/${maxAttempts} • next in ${delay}`,
-        message: String(retry?.message ?? "The provider request failed and will be retried."),
-        traceId,
-        details: { retry_status: retry, run_id: runId },
-      });
+      clearStreamFlushTimer();
+      streamBufferRef.current = { thinking: "", assistant: "" };
+      setStream({ thinking: "", assistant: "", assistantStarted: false, toolCalls: [] });
+      thinkingStartedAtRef.current = null;
+      assistantStartedAtRef.current = null;
+      nextThinkingDurationMsRef.current = null;
+      showRunRetryAlert(runId, ev?.data?.retry_status ?? null);
       if (selectedIdRef.current) {
         void fetchSession(selectedIdRef.current);
       }
@@ -895,6 +918,7 @@ export default function App() {
 
     if (type === "assistant_thinking_delta") {
       markPendingRunSent(runId);
+      closeRunRetryAlert(runId);
       const delta = ev?.data?.delta ?? "";
       if (!delta) return;
       if (thinkingStartedAtRef.current == null && assistantStartedAtRef.current == null) {
@@ -907,6 +931,7 @@ export default function App() {
 
     if (type === "assistant_delta") {
       markPendingRunSent(runId);
+      closeRunRetryAlert(runId);
       const delta = ev?.data?.delta ?? "";
       if (!delta) return;
       if (assistantStartedAtRef.current == null) {
@@ -922,6 +947,7 @@ export default function App() {
 
     if (type === "tool_call") {
       markPendingRunSent(runId);
+      closeRunRetryAlert(runId);
       flushStreamBuffers();
       const call = ev?.data?.call;
       if (!call?.name) return;
@@ -966,6 +992,7 @@ export default function App() {
 
     if (type === "assistant_message") {
       markPendingRunSent(runId);
+      closeRunRetryAlert(runId);
       flushStreamBuffers();
       const msg = ev?.data?.message;
       if (!msg?.role) return;

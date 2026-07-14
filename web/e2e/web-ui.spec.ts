@@ -158,6 +158,15 @@ test("handles run retry, failure alerts, and interrupt cancellation", async ({ p
   expect(lastRequest(mock.requests, (r) => r.method === "POST" && r.path === "/v1/runs/run-active/cancel"))
     .toBeTruthy();
 
+  work.status.run_state = "retrying";
+  work.status.retry_status = {
+    kind: "rate_limit",
+    attempt: 1,
+    max_attempts: 3,
+    next_attempt_at: "2026-05-30T09:00:01.000Z",
+    delay_ms: 1000,
+    message: "Provider throttled the request.",
+  };
   await mock.emitWs({
     type: "run_retry",
     event_id: 13,
@@ -175,9 +184,35 @@ test("handles run retry, failure alerts, and interrupt cancellation", async ({ p
   });
   await expect(page.getByText("LLM request failed, retrying")).toBeVisible();
 
+  work.status.retry_status = {
+    kind: "empty_response",
+    attempt: 2,
+    max_attempts: 5,
+    next_attempt_at: "2026-05-30T09:00:02.000Z",
+    delay_ms: 2000,
+    message: "The model returned no assistant content or tool calls.",
+  };
+  await mock.emitWs({
+    type: "run_retry",
+    event_id: 14,
+    run_id: "run-active",
+    data: {
+      retry_status: {
+        kind: "empty_response",
+        attempt: 2,
+        max_attempts: 5,
+        next_attempt_at: "2026-05-30T09:00:02.000Z",
+        delay_ms: 2000,
+        message: "The model returned no assistant content or tool calls.",
+      },
+    },
+  });
+  await expect(page.getByText("Model returned an empty response, retrying")).toBeVisible();
+  await expect(page.getByText(/empty response • attempt 2\/5/)).toBeVisible();
+
   await mock.emitWs({
     type: "run_error",
-    event_id: 14,
+    event_id: 15,
     run_id: "run-active",
     data: {
       run: { id: "run-active", error: { code: "provider_error", message: "Provider failed." } },

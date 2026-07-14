@@ -4,9 +4,13 @@ use crate::agents::{AgentKind, AgentProfile};
 
 use crate::compact::{self, AutoCompactTokenCount};
 use crate::history::{assistant_message_is_empty, sanitize_history_for_next_request};
-use crate::llm::{llm_retry_decision, LlmClient, LlmError, LlmRetryKind, LlmRetryMode};
+use crate::llm::{
+    empty_response_retry_decision, llm_retry_decision, LlmClient, LlmError, LlmRetryKind,
+    LlmRetryMode,
+};
 use crate::protocol::{
-    ChatRequest, FinishReason, Message, ReasoningEffort, ToolCall, ToolChoice, ToolDefinition,
+    ChatRequest, FinishReason, Message, ReasoningEffort, TokenUsage, ToolCall, ToolChoice,
+    ToolDefinition,
 };
 use crate::telemetry;
 use crate::tools::{policy, ToolEngine, ToolError};
@@ -1026,6 +1030,7 @@ pub struct LlmRetryEvent {
     pub max_attempts: Option<u32>,
     pub delay_ms: u64,
     pub message: String,
+    pub usage: Option<TokenUsage>,
 }
 
 async fn drive_step_with_retry(
@@ -1049,6 +1054,25 @@ async fn drive_step_with_retry(
         };
 
         match drive_stream_step(step, stream, tx).await {
+            Ok(out) if should_retry_empty_response(&out) => {
+                let decision = empty_response_retry_decision(
+                    mode,
+                    attempt,
+                    format!(
+                        "The model returned no assistant content or tool calls: {}",
+                        out.diagnostics
+                    ),
+                );
+                if !decision.retryable {
+                    return Ok(out);
+                }
+                let usage = match &out.assistant {
+                    Message::Assistant { usage, .. } => usage.clone(),
+                    _ => None,
+                };
+                send_retry_and_wait(decision, attempt, usage, cancel_rx.as_mut(), tx).await?;
+                attempt = attempt.saturating_add(1);
+            }
             Ok(out) => return Ok(out),
             Err(AgentRuntimeError::LlmBeforeOutput(err)) => {
                 let decision = llm_retry_decision(&err, mode, attempt);
@@ -1058,6 +1082,10 @@ async fn drive_step_with_retry(
             Err(err) => return Err(err),
         }
     }
+}
+
+fn should_retry_empty_response(out: &streaming::StreamStepOutput) -> bool {
+    assistant_message_is_empty(&out.assistant) && out.finish_reason == Some(FinishReason::Stop)
 }
 
 async fn retry_or_return(
@@ -1070,15 +1098,26 @@ async fn retry_or_return(
     if !decision.retryable {
         return Err(err.into());
     }
+    send_retry_and_wait(decision, attempt, None, cancel_rx, tx).await
+}
+
+async fn send_retry_and_wait(
+    decision: crate::llm::LlmRetryDecision,
+    attempt: u32,
+    usage: Option<TokenUsage>,
+    cancel_rx: Option<&mut tokio::sync::watch::Receiver<bool>>,
+    tx: &tokio::sync::mpsc::Sender<Result<AgentEvent, AgentRuntimeError>>,
+) -> Result<(), AgentRuntimeError> {
     let event = AgentEvent::LlmRetry(LlmRetryEvent {
         kind: decision.kind,
         attempt,
         max_attempts: decision.max_attempts,
         delay_ms: decision.delay.as_millis().min(u128::from(u64::MAX)) as u64,
         message: decision.message,
+        usage,
     });
     if tx.send(Ok(event)).await.is_err() {
-        return Err(err.into());
+        return Err(AgentRuntimeError::Cancelled);
     }
 
     if let Some(rx) = cancel_rx {
@@ -1636,6 +1675,7 @@ agents:
             AgentEvent::AssistantThinkingDelta { delta } if delta == "thinking only"
         ));
         assert!(crate::history::assistant_message_is_empty(&out.assistant));
+        assert!(should_retry_empty_response(&out));
         assert_eq!(out.diagnostics.source, AssistantOutputSource::Stream);
         assert_eq!(out.diagnostics.finish_reason, Some(FinishReason::Stop));
         assert!(out.diagnostics.saw_stream_chunk);
@@ -1658,6 +1698,29 @@ agents:
         assert!(content.is_none());
         assert_eq!(reasoning_content.as_deref(), Some("thinking only"));
         assert!(tool_calls.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drive_stream_step_does_not_retry_empty_length_response() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, AgentRuntimeError>>(16);
+        let chunks = vec![Ok(ChatStreamChunk {
+            id: "chat_1".to_string(),
+            created: 0,
+            model: "m".to_string(),
+            content_delta: None,
+            thinking_delta: None,
+            tool_calls: Vec::new(),
+            finish_reason: Some(FinishReason::Length),
+            usage: None,
+            provider_metadata: None,
+        })];
+
+        let out = drive_stream_step(0, tokio_stream::iter(chunks), &tx)
+            .await
+            .unwrap();
+
+        assert!(crate::history::assistant_message_is_empty(&out.assistant));
+        assert!(!should_retry_empty_response(&out));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -79,6 +79,7 @@ pub enum LlmRetryKind {
     NetworkTransient,
     ServerTransient,
     RateLimited,
+    EmptyResponse,
     ClientError,
     NonRetryable,
 }
@@ -89,6 +90,7 @@ impl LlmRetryKind {
             Self::NetworkTransient => "network_transient",
             Self::ServerTransient => "server_transient",
             Self::RateLimited => "rate_limited",
+            Self::EmptyResponse => "empty_response",
             Self::ClientError => "client_error",
             Self::NonRetryable => "non_retryable",
         }
@@ -192,12 +194,37 @@ pub fn classify_llm_error(err: &LlmError) -> LlmRetryKind {
 
 pub fn llm_retry_decision(err: &LlmError, mode: LlmRetryMode, attempt: u32) -> LlmRetryDecision {
     let kind = classify_llm_error(err);
+    retry_decision(kind, mode, attempt, err.to_string())
+}
+
+pub fn empty_response_retry_decision(
+    mode: LlmRetryMode,
+    attempt: u32,
+    message: String,
+) -> LlmRetryDecision {
+    retry_decision(LlmRetryKind::EmptyResponse, mode, attempt, message)
+}
+
+fn retry_decision(
+    kind: LlmRetryKind,
+    mode: LlmRetryMode,
+    attempt: u32,
+    message: String,
+) -> LlmRetryDecision {
     let max_attempts = match (mode, kind) {
-        (LlmRetryMode::Goal, LlmRetryKind::NetworkTransient | LlmRetryKind::ServerTransient) => {
-            None
-        }
+        (
+            LlmRetryMode::Goal,
+            LlmRetryKind::NetworkTransient
+            | LlmRetryKind::ServerTransient
+            | LlmRetryKind::EmptyResponse,
+        ) => None,
         (LlmRetryMode::Goal, LlmRetryKind::RateLimited) => Some(5),
-        (_, LlmRetryKind::NetworkTransient | LlmRetryKind::ServerTransient) => Some(5),
+        (
+            _,
+            LlmRetryKind::NetworkTransient
+            | LlmRetryKind::ServerTransient
+            | LlmRetryKind::EmptyResponse,
+        ) => Some(5),
         (_, LlmRetryKind::RateLimited) => Some(3),
         _ => Some(0),
     };
@@ -210,7 +237,7 @@ pub fn llm_retry_decision(err: &LlmError, mode: LlmRetryMode, attempt: u32) -> L
         retryable,
         max_attempts,
         delay: llm_retry_backoff(kind, attempt),
-        message: err.to_string(),
+        message,
     }
 }
 
@@ -1543,7 +1570,7 @@ mod tests {
     }
 
     #[test]
-    fn goal_retries_network_and_server_without_attempt_limit_but_limits_429() {
+    fn goal_retries_transient_and_empty_without_attempt_limit_but_limits_429() {
         let network = LlmError::Stream("dns error: Try again".to_string());
         let server = LlmError::Api {
             status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
@@ -1558,6 +1585,12 @@ mod tests {
         let server_decision = llm_retry_decision(&server, LlmRetryMode::Goal, 42);
         let rate_limited_first = llm_retry_decision(&rate_limited, LlmRetryMode::Goal, 1);
         let rate_limited_late = llm_retry_decision(&rate_limited, LlmRetryMode::Goal, 5);
+        let empty_goal =
+            empty_response_retry_decision(LlmRetryMode::Goal, 42, "empty response".to_string());
+        let empty_run_first =
+            empty_response_retry_decision(LlmRetryMode::Run, 1, "empty response".to_string());
+        let empty_run_last =
+            empty_response_retry_decision(LlmRetryMode::Run, 5, "empty response".to_string());
 
         assert!(network_decision.retryable);
         assert_eq!(network_decision.max_attempts, None);
@@ -1566,6 +1599,12 @@ mod tests {
         assert!(rate_limited_first.retryable);
         assert_eq!(rate_limited_first.max_attempts, Some(5));
         assert!(!rate_limited_late.retryable);
+        assert!(empty_goal.retryable);
+        assert_eq!(empty_goal.max_attempts, None);
+        assert_eq!(empty_goal.kind, LlmRetryKind::EmptyResponse);
+        assert!(empty_run_first.retryable);
+        assert_eq!(empty_run_first.max_attempts, Some(5));
+        assert!(!empty_run_last.retryable);
     }
 
     #[test]
