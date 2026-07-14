@@ -249,7 +249,9 @@ fn render_environment_prompt(
         lines.push(format!("Model ID: {model_id}"));
     }
 
-    lines.push(format!("Date: {}", today_ymd()));
+    let (date, timezone) = current_date_and_timezone();
+    lines.push(format!("Date: {date}"));
+    lines.push(format!("Timezone: {timezone}"));
     lines.push(
         if subagents_supported {
             SUBAGENTS_SUPPORTED_LINE
@@ -263,12 +265,37 @@ fn render_environment_prompt(
     format!("{ENV_OPEN_TAG}\n{body}\n{ENV_CLOSE_TAG}")
 }
 
-fn today_ymd() -> String {
-    use time::{macros::format_description, OffsetDateTime};
+fn current_date_and_timezone() -> (String, String) {
+    use time::{macros::format_description, OffsetDateTime, UtcOffset};
 
-    let date = OffsetDateTime::now_utc().date();
-    date.format(format_description!("[year]-[month]-[day]"))
-        .unwrap_or_else(|_| date.to_string())
+    let now = OffsetDateTime::now_utc();
+    let (date, timezone) = match UtcOffset::local_offset_at(now) {
+        Ok(offset) => {
+            let timezone = iana_time_zone::get_timezone()
+                .ok()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+                .map(|name| format!("{name} ({})", format_utc_offset(offset)))
+                .unwrap_or_else(|| format_utc_offset(offset));
+            (now.to_offset(offset).date(), timezone)
+        }
+        Err(_) => (now.date(), "UTC".to_string()),
+    };
+    let date = date
+        .format(format_description!("[year]-[month]-[day]"))
+        .unwrap_or_else(|_| date.to_string());
+    (date, timezone)
+}
+
+fn format_utc_offset(offset: time::UtcOffset) -> String {
+    let seconds = offset.whole_seconds();
+    let sign = if seconds < 0 { '-' } else { '+' };
+    let absolute = seconds.unsigned_abs();
+    format!(
+        "UTC{sign}{:02}:{:02}",
+        absolute / 3_600,
+        absolute % 3_600 / 60
+    )
 }
 
 pub fn capture_project_prompt(workspace_root: Option<&Path>) -> Option<String> {
@@ -459,10 +486,46 @@ mod tests {
 
         assert_eq!(msgs.len(), 2);
         assert!(
-            matches!(&msgs[0], Message::System { content } if content.contains("Codex CLI") && content.contains("agent") && content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG))
+            matches!(&msgs[0], Message::System { content } if content.contains("Codex CLI") && content.contains("agent") && content.contains(ENV_OPEN_TAG) && content.contains("PWD:") && content.contains("Platform:") && content.contains("Date:") && content.contains("Timezone:") && content.contains("Subagents:") && content.contains(ENV_CLOSE_TAG))
         );
         assert!(
             matches!(&msgs[1], Message::User { content: UserMessageContent::Text(content), .. } if content == "hi")
+        );
+    }
+
+    #[test]
+    fn environment_uses_full_local_calendar_date_and_timezone() {
+        let prompt = render_environment_prompt(None, None, false);
+        let date = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("Date: "))
+            .expect("date line");
+        let parts = date.split('-').collect::<Vec<_>>();
+
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].len(), 4);
+        assert_eq!(parts[1].len(), 2);
+        assert_eq!(parts[2].len(), 2);
+        assert!(parts
+            .iter()
+            .all(|part| part.chars().all(|ch| ch.is_ascii_digit())));
+        let timezone = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("Timezone: "))
+            .expect("timezone line");
+        assert!(!timezone.trim().is_empty());
+    }
+
+    #[test]
+    fn formats_utc_offsets_explicitly() {
+        assert_eq!(format_utc_offset(time::UtcOffset::UTC), "UTC+00:00");
+        assert_eq!(
+            format_utc_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap()),
+            "UTC+08:00"
+        );
+        assert_eq!(
+            format_utc_offset(time::UtcOffset::from_hms(-5, -30, 0).unwrap()),
+            "UTC-05:30"
         );
     }
 
